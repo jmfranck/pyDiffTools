@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='pyDiffTools',
-    version='0.1',
+    version='0.1.2',
     author="J M Franck",
     packages=['pydifftools',],
     license=open('LICENSE.md').read(),
