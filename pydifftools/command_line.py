@@ -17,4 +17,6 @@ def main():
         match_spaces.run(arguments)
     elif command == 'sc':
         split_conflict.run(arguments)
+    else:
+        errmsg()
     return
