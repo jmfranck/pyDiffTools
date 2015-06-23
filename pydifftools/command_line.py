@@ -30,6 +30,9 @@ def main():
                     cmd += ['--reference-docx='+arguments[2]]
                 else:
                     raise RuntimeError("if you pass three arguments to wd, then the third must be a template for the word document")
+            elif os.path.isfile("template.docx"):
+                # by default, use template.docx in the current directory
+                cmd += ['--reference-docx=template.docx']
             cmd += ['-o']
             cmd += [word_files[j]]
             print "about to run",' '.join(cmd)
