@@ -1,6 +1,4 @@
-<<<<<<< HEAD
 # In addition to the package file, various *.sh files are included -- these will eventually be converted to python
-=======
 include README.rst
 include LICENSE.md
->>>>>>> c600fae83b1e7911c76be995619e6ea1e45fe5a0
+include diff-doc.js
