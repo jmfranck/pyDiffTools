@@ -1,19 +1,8 @@
-<<<<<<< HEAD
-=============================================
- pyDiffTools
-=============================================
-
-:Info: See <https://github.com/jmfranck/pyDiffTools>
-:Author: J. M. Franck <https://github.com/jmfranck>
-
-Purpose
-=======================
-.. _vim: http://www.vim.org/
-These are a set of tools that I use (largely in combination with `vim`_) to resolve conflicts, compare versions that might have different whitespace, etc.
-=======
 ==================================================
         pydifftools
 ==================================================
+:Info: See <https://github.com/jmfranck/pyDiffTools>
+:Author: J. M. Franck <https://github.com/jmfranck>
 .. _vim: http://www.vim.org
 
 this is a set of tools to help with merging, mostly for use with vim_.
@@ -44,5 +33,3 @@ Future versions will include:
 - Scripts for converting word html comments to latex commands.
 
 - converting one word per line (for doing things like wdiff, but with more control)
->>>>>>> c600fae83b1e7911c76be995619e6ea1e45fe5a0
-
