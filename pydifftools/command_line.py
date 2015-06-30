@@ -39,7 +39,11 @@ def main():
             os.system(' '.join(cmd))
         cmd = ['start']
         cmd += [os.path.expanduser('~/diff-doc.js')]
-        cmd += [os.getcwd() + os.path.sep + word_files[0]]
+        print "word files are",word_files
+        if word_files[0].find("C:") > -1:
+            cmd += [word_files[0]]
+        else:
+            cmd += [os.getcwd() + os.path.sep + word_files[0]]
         cmd += [os.getcwd() + os.path.sep + word_files[1]]
         print "about to run",' '.join(cmd)
         os.system(' '.join(cmd))
