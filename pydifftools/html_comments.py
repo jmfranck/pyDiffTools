@@ -1,8 +1,8 @@
 #again rerun
 from lxml import html,etree
 import os
-from fornotebook import *
-from matlablike import *
+from pyspecdata.fornotebook import *
+from pyspecdata import *
 import re
 fp = open(sys.argv[1],'r')
 content = fp.read()

@@ -1,7 +1,7 @@
 #again rerun
 from lxml import html,etree
 import os
-from matlablike import *
+from pyspecdata import *
 from unidecode import unidecode
 import re
 import sys
@@ -159,46 +159,46 @@ for thiscommentreference in doc.find_class('msocomanchor'):
     comref_text = thiscommentreference.text
     if comref_text is not None:
         m = commentlabel_re.match(comref_text)
+        if m:
+            initials,number = m.groups()
+            try:
+                print "I found comment %s by %s"%(number,initial_translation_dict[initials])
+            except KeyError:
+                raise ValueError("I don't know who %s is -- add to initial_translation_dict"%initials)
+            thiscommentreference.text = ''
+            thiscommentreference.drop_tag()
+            prevcomrefsrepd = numcomrefsrepd
+            for k in doc.xpath('descendant-or-self::*[contains(@style,"mso-comment-reference:%s_%s;")]'%(initials,number)):
+                print "\nThis reference has the text:",html.tostring(k)
+                if k.text is None:
+                    k.text = ''
+                empty_tag = False
+                if k.text == '': empty_tag = True
+                if number not in comment_dict.keys():
+                    raise KeyError(repr(number)+'is not in comment_dict keys: '+repr(comment_dict.keys()))
+                if (len(comment_dict[number])>13) and (comment_dict[number][:14] == '(need to do:) ') and (initial_translation_dict[initials]=='john'):#if it's a "need to do"
+                    #k.text = r'\%s['%('ntd')+k.text_content().replace('[',' ').replace(']',' ')+']{'+comment_dict[number][14:]+'}'
+                    k.text = r'\%s%s{'%('ntd',generate_alphabetnumber(current_comment_number))+k.text_content().replace('[',' ').replace(']',' ')+'}'
+                    comment_file_text += comment_definition('ntd'+generate_alphabetnumber(current_comment_number),'ntd',comment_dict[number][14:])
+                    current_comment_number += 1
+                else:
+                    k.text = r'\%s%s{'%(initial_translation_dict[initials],generate_alphabetnumber(current_comment_number))+k.text_content().replace('[',' ').replace(']',' ')+'}'
+                    comment_file_text += comment_definition(initial_translation_dict[initials]+generate_alphabetnumber(current_comment_number),
+                            initial_translation_dict[initials],
+                            comment_dict[number])
+                    current_comment_number += 1
+                k.drop_tag()
+                print "I convert it to this:",html.tostring(k)
+                numcomrefsrepd += 1
+            #if numcomrefsrepd > prevcomrefsrepd+1:
+            #    if not empty_tag: raise RuntimeError("Warning: For some reason this comment is referenced twice!!:\n\n"+html.tostring(thiscommentreference))
+            if prevcomrefsrepd==numcomrefsrepd:
+                print "Warning: I can't find the highlighted text for the comment:\n\n"+html.tostring(thiscommentreference)+"so I'm dropping it"
+        else:
+            raise RuntimeError("Warning, I couldn't parse this!!")
+        numcomrefs += 1
     else:
         print "Warning, found a comment with no text"
-    if m:
-        initials,number = m.groups()
-        try:
-            print "I found comment %s by %s"%(number,initial_translation_dict[initials])
-        except KeyError:
-            raise ValueError("I don't know who %s is -- add to initial_translation_dict"%initials)
-        thiscommentreference.text = ''
-        thiscommentreference.drop_tag()
-        prevcomrefsrepd = numcomrefsrepd
-        for k in doc.xpath('descendant-or-self::*[contains(@style,"mso-comment-reference:%s_%s;")]'%(initials,number)):
-            print "\nThis reference has the text:",html.tostring(k)
-            if k.text is None:
-                k.text = ''
-            empty_tag = False
-            if k.text == '': empty_tag = True
-            if number not in comment_dict.keys():
-                raise KeyError(repr(number)+'is not in comment_dict keys: '+repr(comment_dict.keys()))
-            if (len(comment_dict[number])>13) and (comment_dict[number][:14] == '(need to do:) ') and (initial_translation_dict[initials]=='john'):#if it's a "need to do"
-                #k.text = r'\%s['%('ntd')+k.text_content().replace('[',' ').replace(']',' ')+']{'+comment_dict[number][14:]+'}'
-                k.text = r'\%s%s{'%('ntd',generate_alphabetnumber(current_comment_number))+k.text_content().replace('[',' ').replace(']',' ')+'}'
-                comment_file_text += comment_definition('ntd'+generate_alphabetnumber(current_comment_number),'ntd',comment_dict[number][14:])
-                current_comment_number += 1
-            else:
-                k.text = r'\%s%s{'%(initial_translation_dict[initials],generate_alphabetnumber(current_comment_number))+k.text_content().replace('[',' ').replace(']',' ')+'}'
-                comment_file_text += comment_definition(initial_translation_dict[initials]+generate_alphabetnumber(current_comment_number),
-                        initial_translation_dict[initials],
-                        comment_dict[number])
-                current_comment_number += 1
-            k.drop_tag()
-            print "I convert it to this:",html.tostring(k)
-            numcomrefsrepd += 1
-        #if numcomrefsrepd > prevcomrefsrepd+1:
-        #    if not empty_tag: raise RuntimeError("Warning: For some reason this comment is referenced twice!!:\n\n"+html.tostring(thiscommentreference))
-        if prevcomrefsrepd==numcomrefsrepd:
-            print "Warning: I can't find the highlighted text for the comment:\n\n"+html.tostring(thiscommentreference)+"so I'm dropping it"
-    else:
-        raise RuntimeError("Warning, I couldn't parse this!!")
-    numcomrefs += 1
 print "I found %d comment references and replaced %d"%(numcomrefs,numcomrefsrepd)
 for j in doc.xpath('//sub'):
     thistext = str(unidecode(j.text_content()))
