@@ -25,7 +25,9 @@ def main():
             cmd = ['pandoc']
             cmd += [arguments[j]]
             cmd += ['-s --smart']
-            if not arguments[0][-5:] == '.docx': # so that I can pass docx arguments
+            if not arguments[0][-5:] == '.docx':
+                print "the first argument has a docx extension, so I'm bypassing the pandoc step"
+            else:
                 if len(arguments) > 2:
                     if arguments[2][-5:] == '.docx':
                         cmd += ['--reference-docx='+arguments[2]]
