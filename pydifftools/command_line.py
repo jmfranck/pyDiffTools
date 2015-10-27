@@ -25,7 +25,7 @@ def main():
             cmd = ['pandoc']
             cmd += [arguments[j]]
             cmd += ['-s --smart']
-            if not arguments[0][-5:] == '.docx':
+            if arguments[0][-5:] == '.docx':
                 print "the first argument has a docx extension, so I'm bypassing the pandoc step"
             else:
                 if len(arguments) > 2:
