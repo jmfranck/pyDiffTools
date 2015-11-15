@@ -1,12 +1,13 @@
 import sys
-from . import check_numbers,match_spaces,split_conflict
+from . import check_numbers,match_spaces,split_conflict,wrap_sentences
 import os
 def errmsg():
     print """arguments are:
     num    (check numbers)
     wmatch (match whitespace)
     sc     (split conflict)
-    wd     (word diff)"""
+    wd     (word diff)
+    wr     (wrap -- with indented sentence format (for markdown or latex))"""
     return
 def main():
     if len(sys.argv) == 1:
@@ -15,6 +16,8 @@ def main():
     arguments = sys.argv[2:]
     if command == 'num':
         check_numbers.run(arguments)
+    elif command == 'wr':
+        wrap_sentences.run(arguments)
     elif command == 'wmatch':
         match_spaces.run(arguments)
     elif command == 'sc':

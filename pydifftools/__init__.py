@@ -4,4 +4,5 @@ __all__ = [
         'command_line',
         'match_spaces',
         'split_conflict',
+        'wrap_sentences',
         ]
