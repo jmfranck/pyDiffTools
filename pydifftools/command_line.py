@@ -23,22 +23,36 @@ def main():
     elif command == 'sc':
         split_conflict.run(arguments)
     elif command == 'wd':
+        if arguments[0].find('Temp') > 0:
+            #{{{ if it's a temporary file, I need to make a real copy to run pandoc on
+            fp = open(arguments[0])
+            contents = fp.read()
+            fp.close()
+            fp = open(arguments[1].replace('.md','_old.md'),'w')
+            fp.write(contents)
+            fp.close()
+            arguments[0] = arguments[1].replace('.md','_old.md')
+            #}}}
         word_files = [x.replace('.md','.docx') for x in arguments[:2]]
+        local_dir = os.path.dirname(arguments[1])
+        print "local directory:",local_dir
         for j in range(2):
-            cmd = ['pandoc']
-            cmd += [arguments[j]]
-            cmd += ['-s --smart']
             if arguments[0][-5:] == '.docx':
                 print "the first argument has a docx extension, so I'm bypassing the pandoc step"
             else:
+                cmd = ['pandoc']
+                cmd += [arguments[j]]
+                cmd += ['--csl=edited-pmid-format.csl']
+                cmd += ['--bibliography library_abbrev_utf8.bib']
+                cmd += ['-s --smart']
                 if len(arguments) > 2:
                     if arguments[2][-5:] == '.docx':
                         cmd += ['--reference-docx='+arguments[2]]
                     else:
                         raise RuntimeError("if you pass three arguments to wd, then the third must be a template for the word document")
-                elif os.path.isfile("template.docx"):
+                elif os.path.isfile(local_dir + os.path.sep + "template.docx"):
                     # by default, use template.docx in the current directory
-                    cmd += ['--reference-docx=template.docx']
+                    cmd += ['--reference-docx=' + local_dir + os.path.sep + "template.docx"]
                 cmd += ['-o']
                 cmd += [word_files[j]]
                 print "about to run",' '.join(cmd)
