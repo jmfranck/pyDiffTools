@@ -1,13 +1,15 @@
 import sys
 from . import check_numbers,match_spaces,split_conflict,wrap_sentences
 import os
+import gzip
 def errmsg():
     print """arguments are:
-    num    (check numbers)
-    wmatch (match whitespace)
-    sc     (split conflict)
-    wd     (word diff)
-    wr     (wrap -- with indented sentence format (for markdown or latex))"""
+    num     (check numbers)
+    gensync (use a compiled latex original (first arg) to generate a synctex file for a scanned document (second arg), e.g. with handwritten markup)
+    wmatch  (match whitespace)
+    sc      (split conflict)
+    wd      (word diff)
+    wr      (wrap -- with indented sentence format (for markdown or latex))"""
     return
 def main():
     if len(sys.argv) == 1:
@@ -16,6 +18,26 @@ def main():
     arguments = sys.argv[2:]
     if command == 'num':
         check_numbers.run(arguments)
+    elif command == 'gensync':
+        with gzip.open(arguments[0].replace(
+            '.pdf','.synctek.gz')) as fp:
+            orig_synctex = fp.read()
+            fp.close()
+        # since the new synctex is in a new place, I need to tell it
+        # how to get back to the original place
+        relative_path = os.path.relpath(
+                os.path.dir(arguments[0]),
+                os.path.dir(arguments[1]))
+        base_fname = arguments[0].replace('.pdf','')
+        new_synctex = orig_synctex.replace(
+                base_fname,
+                relative_path + base_fname)
+        new_synctex = orig_synctex
+        with gzip.open(arguments[1].replace(
+            '.pdf','.synctek.gz')) as fp:
+            fp.write(new_synctex)
+            fp.write(argument[1].replace())
+            fp.close()
     elif command == 'wr':
         wrap_sentences.run(arguments)
     elif command == 'wmatch':

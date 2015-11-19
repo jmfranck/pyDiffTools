@@ -6,6 +6,7 @@ from unidecode import unidecode
 import re
 import sys
 from comment_functions import generate_alphabetnumber,matchingbrackets,comment_definition
+manual_math_conversion = False # this hacks some stuff that pandoc does much better
 fp = open(sys.argv[1],'r')
 content = fp.read()
 fp.close()
@@ -26,57 +27,58 @@ content = newcontent
 content = content.replace(r'\%',r"%EXPLICITPAREN%")
 content = content.replace(r'%',r"%EXPLICITPAREN%")
 content = content.replace(r'%EXPLICITPAREN%',r"\%")
-content = content.replace('&#916;',r'%ENTERMATHMODE%\Delta%LEAVEMATHMODE%')
-content = content.replace('\xb0C',r'\degC ')
-content = content.replace(' \xb5M',r'\uM ')
-content = content.replace('\xb5M',r'\uM ')
-content = content.replace('&#945;',r'%ENTERMATHMODE%\alpha%LEAVEMATHMODE%')
-content = content.replace('&#946;',r'%ENTERMATHMODE%\beta%LEAVEMATHMODE%')
-content = content.replace('&#947;',r'%ENTERMATHMODE%\gamma%LEAVEMATHMODE%')
-content = content.replace('&#948;',r'%ENTERMATHMODE%\delta%LEAVEMATHMODE%')
-content = content.replace('&#949;',r'%ENTERMATHMODE%\varepsilon%LEAVEMATHMODE%')
-content = content.replace('&#950;',r'%ENTERMATHMODE%\zeta%LEAVEMATHMODE%')
-content = content.replace('&#951;',r'%ENTERMATHMODE%\eta%LEAVEMATHMODE%')
-content = content.replace('&#952;',r'%ENTERMATHMODE%\theta%LEAVEMATHMODE%')
-content = content.replace('&#953;',r'%ENTERMATHMODE%\iota%LEAVEMATHMODE%')
-content = content.replace('&#954;',r'%ENTERMATHMODE%\kappa%LEAVEMATHMODE%')
-content = content.replace('&#955;',r'%ENTERMATHMODE%\lambda%LEAVEMATHMODE%')
-content = content.replace('&#956;',r'%ENTERMATHMODE%\mu%LEAVEMATHMODE%')
-content = content.replace('&#957;',r'%ENTERMATHMODE%\nu%LEAVEMATHMODE%')
-content = content.replace('&#958;',r'%ENTERMATHMODE%\xi%LEAVEMATHMODE%')
-content = content.replace('&#959;',r'%ENTERMATHMODE%\omicron%LEAVEMATHMODE%')
-content = content.replace('&#960;',r'%ENTERMATHMODE%\pi%LEAVEMATHMODE%')
-content = content.replace('&#961;',r'%ENTERMATHMODE%\rho%LEAVEMATHMODE%')
-content = content.replace('&#963;',r'%ENTERMATHMODE%\sigma%LEAVEMATHMODE%')
-content = content.replace('&#964;',r'%ENTERMATHMODE%\tau%LEAVEMATHMODE%')
-content = content.replace('&#966;',r'%ENTERMATHMODE%\varphi%LEAVEMATHMODE%')
-content = content.replace('&#967;',r'%ENTERMATHMODE%\chi%LEAVEMATHMODE%')
-content = content.replace('&#968;',r'%ENTERMATHMODE%\psi%LEAVEMATHMODE%')
-content = content.replace('&#969;',r'%ENTERMATHMODE%\omega%LEAVEMATHMODE%')
-content = content.replace('&#8242;',r'%ENTERMATHMODE%\'%LEAVEMATHMODE%')
-content = content.replace('&#8212;',r"--")
-content = content.replace('&#8217;',r"'")
-content = content.replace('&#8220;',r'``')
-content = content.replace('&#8221;',r"''")
-content = content.replace('&#8476;',r"%ENTERMATHMODE%\Re%LEAVEMATHMODE%")
-content = content.replace('&#8658;',r"%ENTERMATHMODE%\Rightarrow%LEAVEMATHMODE%")
-content = content.replace('&#8656;',r"%ENTERMATHMODE%\Leftarrow%LEAVEMATHMODE%")
-content = content.replace('&#8721;',r"%ENTERMATHMODE%\Sum%LEAVEMATHMODE%")
-content = content.replace('&#8722;',r'--')
-content = content.replace('&#8725;',r"/")
-content = content.replace('&#8727;',r"%ENTERMATHMODE%^*%LEAVEMATHMODE%")
-content = content.replace('&#8764;',r'%ENTERMATHMODE%\sim%LEAVEMATHMODE%')
-content = content.replace('&#8733;',r'%ENTERMATHMODE%\propto%LEAVEMATHMODE%')
-content = content.replace('&#8734;',r'%ENTERMATHMODE%\infty%LEAVEMATHMODE%')
-content = content.replace('&#8776;',r'%ENTERMATHMODE%\approx%LEAVEMATHMODE%')
-content = content.replace('&#8801;',r'%ENTERMATHMODE%\equiv%LEAVEMATHMODE%')
-content = content.replace('&#8804;',r'%ENTERMATHMODE%\le%LEAVEMATHMODE%')
-content = content.replace('&#8805;',r'%ENTERMATHMODE%\ge%LEAVEMATHMODE%')
-content = content.replace('&#8810;',r'%ENTERMATHMODE%\ll%LEAVEMATHMODE%')
-content = content.replace('&#8811;',r'%ENTERMATHMODE%\gg%LEAVEMATHMODE%')
-content = content.replace('&#8901;',r'%ENTERMATHMODE%\cdot%LEAVEMATHMODE%')
-content = content.replace('&#120098;',r"%ENTERMATHMODE%\mathfrak{e}%LEAVEMATHMODE%")
-content = content.replace('$$','') # math symbols doubled back on each other
+if manual_math_conversion:
+    content = content.replace('&#916;',r'%ENTERMATHMODE%\Delta%LEAVEMATHMODE%')
+    content = content.replace('\xb0C',r'\degC ')
+    content = content.replace(' \xb5M',r'\uM ')
+    content = content.replace('\xb5M',r'\uM ')
+    content = content.replace('&#945;',r'%ENTERMATHMODE%\alpha%LEAVEMATHMODE%')
+    content = content.replace('&#946;',r'%ENTERMATHMODE%\beta%LEAVEMATHMODE%')
+    content = content.replace('&#947;',r'%ENTERMATHMODE%\gamma%LEAVEMATHMODE%')
+    content = content.replace('&#948;',r'%ENTERMATHMODE%\delta%LEAVEMATHMODE%')
+    content = content.replace('&#949;',r'%ENTERMATHMODE%\varepsilon%LEAVEMATHMODE%')
+    content = content.replace('&#950;',r'%ENTERMATHMODE%\zeta%LEAVEMATHMODE%')
+    content = content.replace('&#951;',r'%ENTERMATHMODE%\eta%LEAVEMATHMODE%')
+    content = content.replace('&#952;',r'%ENTERMATHMODE%\theta%LEAVEMATHMODE%')
+    content = content.replace('&#953;',r'%ENTERMATHMODE%\iota%LEAVEMATHMODE%')
+    content = content.replace('&#954;',r'%ENTERMATHMODE%\kappa%LEAVEMATHMODE%')
+    content = content.replace('&#955;',r'%ENTERMATHMODE%\lambda%LEAVEMATHMODE%')
+    content = content.replace('&#956;',r'%ENTERMATHMODE%\mu%LEAVEMATHMODE%')
+    content = content.replace('&#957;',r'%ENTERMATHMODE%\nu%LEAVEMATHMODE%')
+    content = content.replace('&#958;',r'%ENTERMATHMODE%\xi%LEAVEMATHMODE%')
+    content = content.replace('&#959;',r'%ENTERMATHMODE%\omicron%LEAVEMATHMODE%')
+    content = content.replace('&#960;',r'%ENTERMATHMODE%\pi%LEAVEMATHMODE%')
+    content = content.replace('&#961;',r'%ENTERMATHMODE%\rho%LEAVEMATHMODE%')
+    content = content.replace('&#963;',r'%ENTERMATHMODE%\sigma%LEAVEMATHMODE%')
+    content = content.replace('&#964;',r'%ENTERMATHMODE%\tau%LEAVEMATHMODE%')
+    content = content.replace('&#966;',r'%ENTERMATHMODE%\varphi%LEAVEMATHMODE%')
+    content = content.replace('&#967;',r'%ENTERMATHMODE%\chi%LEAVEMATHMODE%')
+    content = content.replace('&#968;',r'%ENTERMATHMODE%\psi%LEAVEMATHMODE%')
+    content = content.replace('&#969;',r'%ENTERMATHMODE%\omega%LEAVEMATHMODE%')
+    content = content.replace('&#8242;',r'%ENTERMATHMODE%\'%LEAVEMATHMODE%')
+    content = content.replace('&#8212;',r"--")
+    content = content.replace('&#8217;',r"'")
+    content = content.replace('&#8220;',r'``')
+    content = content.replace('&#8221;',r"''")
+    content = content.replace('&#8476;',r"%ENTERMATHMODE%\Re%LEAVEMATHMODE%")
+    content = content.replace('&#8658;',r"%ENTERMATHMODE%\Rightarrow%LEAVEMATHMODE%")
+    content = content.replace('&#8656;',r"%ENTERMATHMODE%\Leftarrow%LEAVEMATHMODE%")
+    content = content.replace('&#8721;',r"%ENTERMATHMODE%\Sum%LEAVEMATHMODE%")
+    content = content.replace('&#8722;',r'--')
+    content = content.replace('&#8725;',r"/")
+    content = content.replace('&#8727;',r"%ENTERMATHMODE%^*%LEAVEMATHMODE%")
+    content = content.replace('&#8764;',r'%ENTERMATHMODE%\sim%LEAVEMATHMODE%')
+    content = content.replace('&#8733;',r'%ENTERMATHMODE%\propto%LEAVEMATHMODE%')
+    content = content.replace('&#8734;',r'%ENTERMATHMODE%\infty%LEAVEMATHMODE%')
+    content = content.replace('&#8776;',r'%ENTERMATHMODE%\approx%LEAVEMATHMODE%')
+    content = content.replace('&#8801;',r'%ENTERMATHMODE%\equiv%LEAVEMATHMODE%')
+    content = content.replace('&#8804;',r'%ENTERMATHMODE%\le%LEAVEMATHMODE%')
+    content = content.replace('&#8805;',r'%ENTERMATHMODE%\ge%LEAVEMATHMODE%')
+    content = content.replace('&#8810;',r'%ENTERMATHMODE%\ll%LEAVEMATHMODE%')
+    content = content.replace('&#8811;',r'%ENTERMATHMODE%\gg%LEAVEMATHMODE%')
+    content = content.replace('&#8901;',r'%ENTERMATHMODE%\cdot%LEAVEMATHMODE%')
+    content = content.replace('&#120098;',r"%ENTERMATHMODE%\mathfrak{e}%LEAVEMATHMODE%")
+    content = content.replace('$$','') # math symbols doubled back on each other
 #}}}
 #content = re.sub(r'mso-comment-reference:([a-zA-Z_0-9]+)&amp;([a-zA-Z_0-9]+)',r'mso-comment-reference:\1AMPERSAND\2',content)
 #content = re.sub(r'mso-comment-reference:[\n ]*([a-zA-Z0-9]+)',r'narg!mso-comment-reference:\1',content)
@@ -146,7 +148,7 @@ for j in doc.xpath('//div[@style="mso-element:comment-list"]'):
     #j.append("a comment found here")
     #commentlist.append(j)
 print "I found %d comment lists and %d comments"%(num,numcomments)
-initial_translation_dict = {'JF':'john','y':'yuan','CoLA&S':'peter','SH':'songi',"PQ":"peter"}
+initial_translation_dict = {'JF':'john','y':'yuan','CoLA&S':'peter','SH':'songi',"PQ":"peter",'KE':"keith"}
 commentlabel_re = re.compile(r'\[([A-Za-z&]+)([0-9]+)\]')
 commentid_re = re.compile(r'_anchor_([0-9]+)')
 numcomrefs = 0
@@ -200,49 +202,50 @@ for thiscommentreference in doc.find_class('msocomanchor'):
     else:
         print "Warning, found a comment with no text"
 print "I found %d comment references and replaced %d"%(numcomrefs,numcomrefsrepd)
-for j in doc.xpath('//sub'):
-    thistext = str(unidecode(j.text_content()))
-    #{{{ remove children
-    for l in j.getchildren():
-        l.drop_tree()
-    #}}}
-    if len(thistext)>0:
-        if j.tail is None: j.tail = ''
-        thistail = str(j.tail)
-        j.tail = ''
-        j.text = '%%ENTERMATHMODE%%_{%s}%%LEAVEMATHMODE%%'%thistext + thistail
-        #j.text = '\\ensuremath{_{'+inlineequation_re.sub('\1',j.text)
-        #j.tail = inlineequation_re.sub('\1',j.tail)+'}}'
-    j.drop_tag()
-for j in doc.xpath('//sup'):
-    thistext = str(unidecode(j.text_content()))
-    #{{{ remove children
-    for l in j.getchildren():
-        l.drop_tree()
-    #}}}
-    if len(thistext)>0:
-        if j.tail is None: j.tail = ''
-        thistail = str(j.tail)
-        j.tail = ''
-        j.text = '%%ENTERMATHMODE%%^{%s}%%LEAVEMATHMODE%%'%thistext + thistail
-    j.drop_tag()
-#for j in doc.xpath('//*[contains(@class,"cmmi")]'):
-for mathmodefontsize in [7,8,12,81,121]:
-    for mathmodefonttype in ['cmmi','cmr','cmsy']:
-        for j in doc.find_class('%s-%d'%(mathmodefonttype,mathmodefontsize)):# find the math-mode stuff
-            thistext = str(unidecode(j.text_content()))
-            #{{{ remove children
-            for l in j.getchildren():
-                l.drop_tree()
-            #}}}
-            if len(thistext)>0:
-                if j.tail is None: j.tail = ''
-                thistail = unidecode(j.tail)
-                j.tail = ''
-                j.text = '%%ENTERMATHMODE%%%s%%LEAVEMATHMODE%%'%thistext + thistail
-                #j.text = '\\ensuremath{_{'+inlineequation_re.sub('\1',j.text)
-                #j.tail = inlineequation_re.sub('\1',j.tail)+'}}'
-            j.drop_tag()
+if manual_math_conversion:
+    for j in doc.xpath('//sub'):
+        thistext = j.text_content()
+        #{{{ remove children
+        for l in j.getchildren():
+            l.drop_tree()
+        #}}}
+        if len(thistext)>0:
+            if j.tail is None: j.tail = ''
+            thistail = j.tail
+            j.tail = ''
+            j.text = '%%ENTERMATHMODE%%_{%s}%%LEAVEMATHMODE%%'%thistext + thistail
+            #j.text = '\\ensuremath{_{'+inlineequation_re.sub('\1',j.text)
+            #j.tail = inlineequation_re.sub('\1',j.tail)+'}}'
+        j.drop_tag()
+    for j in doc.xpath('//sup'):
+        thistext = j.text_content().encode("utf-8")
+        #{{{ remove children
+        for l in j.getchildren():
+            l.drop_tree()
+        #}}}
+        if len(thistext)>0:
+            if j.tail is None: j.tail = ''
+            thistail = str(j.tail)
+            j.tail = ''
+            j.text = '%%ENTERMATHMODE%%^{%s}%%LEAVEMATHMODE%%'%thistext + thistail
+        j.drop_tag()
+    #for j in doc.xpath('//*[contains(@class,"cmmi")]'):
+    for mathmodefontsize in [7,8,12,81,121]:
+        for mathmodefonttype in ['cmmi','cmr','cmsy']:
+            for j in doc.find_class('%s-%d'%(mathmodefonttype,mathmodefontsize)):# find the math-mode stuff
+                thistext = str(unidecode(j.text_content()))
+                #{{{ remove children
+                for l in j.getchildren():
+                    l.drop_tree()
+                #}}}
+                if len(thistext)>0:
+                    if j.tail is None: j.tail = ''
+                    thistail = unidecode(j.tail)
+                    j.tail = ''
+                    j.text = '%%ENTERMATHMODE%%%s%%LEAVEMATHMODE%%'%thistext + thistail
+                    #j.text = '\\ensuremath{_{'+inlineequation_re.sub('\1',j.text)
+                    #j.tail = inlineequation_re.sub('\1',j.tail)+'}}'
+                j.drop_tag()
 symbol_lookup = {'x':'\\xi ',
     'p':'\\pi',
     'k':'\\kappa',
@@ -350,5 +353,5 @@ fp.write(unidecode(doc.text_content()))
 fp.close()
 textfile = re.sub(r"(.*)(\.htm.*)",r'\1_comments.tex',newfile)
 fp = open(textfile,'w')
-fp.write(unidecode(decodemathmode(comment_file_text)))
+fp.write(decodemathmode(comment_file_text).encode('utf-8'))
 fp.close()
