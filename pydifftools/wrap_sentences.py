@@ -13,7 +13,7 @@ def run(arguments,
         #{{{ here I need a trick to prevent including short abbreviations, etc
         tempsent = re.split('([^\.!?]{3}[\.!?])[ \n]',alltext[para])
         for j in tempsent:
-            print "--",j
+            print "--",j.encode('utf-8')
         #{{{ put the "separators together with the preceding
         alltext[para] = []
         for tempsent_num in range(0,len(tempsent),2):
@@ -23,7 +23,7 @@ def run(arguments,
                 alltext[para].append(tempsent[tempsent_num])
         print '-------------------'
         for j in alltext[para]:
-            print "--",j
+            print "--",j.encode('utf-8')
         #}}}
         #}}}
         for sent in range(len(alltext[para])):# sentences into words
