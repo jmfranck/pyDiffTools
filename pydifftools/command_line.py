@@ -9,7 +9,9 @@ def errmsg():
     wmatch  (match whitespace)
     sc      (split conflict)
     wd      (word diff)
-    wr      (wrap -- with indented sentence format (for markdown or latex))"""
+    wr      (wrap -- with indented sentence format (for markdown or
+             latex.  Optional flag --cleanoo cleans latex exported
+             from OpenOffice/LibreOffice))"""
     return
 def main():
     if len(sys.argv) == 1:
@@ -39,7 +41,14 @@ def main():
             fp.write(argument[1].replace())
             fp.close()
     elif command == 'wr':
-        wrap_sentences.run(arguments)
+        print "arguments are",arguments
+        if len(arguments) == 1:
+            wrap_sentences.run(arguments[0])
+        elif len(arguments) == 2 and arguments[0] == '--cleanoo':
+            wrap_sentences.run(arguments[1],stupid_strip = True)
+            print "stripped stupid markup from LibreOffice"
+        else:
+            raise ValueError("I don't understand your arguments:"+repr(arguments))
     elif command == 'wmatch':
         match_spaces.run(arguments)
     elif command == 'sc':
