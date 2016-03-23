@@ -14,7 +14,7 @@ if [ "$1" = "-l" ] ; then
         grep list* -rle "\<$2\>" | sed -n "/\.tex$/p" | xargs -i@ "$vimlocation" -c "$vimsearch" @ # apparently the quotes are required to expand the $vimsearch here -- this is equivalent to typing the lhs of the equation above here
     fi
 else
-    testresult=$(grep inprocess/ *.tex -rle "\\label{sec:task$1}" | sed -n '/\.tex\|\.txt/p')
+    testresult=$(grep inprocess/ *.tex -rle "\\label{sec:task$1}" | sed "/\.swp$/d" | sed -n '/\.tex\|\.txt/p')
     if [ "$testresult" ] ; then
         echo "$testresult" | xargs -i@ "$vimlocation" -c 'exec("normal /\\\\label{sec:task'$1'}\nzO")' @
     else
