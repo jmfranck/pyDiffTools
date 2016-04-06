@@ -3,16 +3,19 @@ from . import check_numbers,match_spaces,split_conflict,wrap_sentences
 import os
 import gzip
 def errmsg():
-    print """arguments are:
-    num     (check numbers)
-    gensync (use a compiled latex original (first arg) to generate a synctex file for a scanned document (second arg), e.g. with handwritten markup)
-    wmatch  (match whitespace)
-    sc      (split conflict)
-    wd      (word diff)
-    wr      (wrap -- with indented sentence format (for markdown or
-             latex.  Optional flag --cleanoo cleans latex exported
-             from OpenOffice/LibreOffice))"""
-    return
+    print r"""arguments are:
+    num     :   check numbers in a latex catalog (e.g. of numbered notebook)
+                of items of the form '\item[anything number.anything]'
+    gensync :   use a compiled latex original (first arg) to generate a synctex
+                file for a scanned document (second arg), e.g.  with
+                handwritten markup
+    wmatch  :   match whitespace
+    sc      :   split conflict
+    wd      :   word diff
+    wr      :   wrap with indented sentence format (for markdown or latex).
+                Optional flag --cleanoo cleans latex exported from
+                OpenOffice/LibreOffice"""
+    exit()
 def main():
     if len(sys.argv) == 1:
         errmsg()
