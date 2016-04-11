@@ -39,7 +39,7 @@ if [ "$find_mode" = "list" ] ; then
         grep list* -rile "\<$input_str\>" | sed -n "/\.tex$/p" | xargs -i@ "$vimlocation" -c "$vimsearch" @ # apparently the quotes are required to expand the $vimsearch here -- this is equivalent to typing the lhs of the equation above here
     fi
 else
-    testresult=$(grep inprocess/ *.tex -rle "\\label{sec:task$input_str}" | sed -n '/\.tex\|\.txt/p')
+    testresult=$(grep inprocess/ *.tex -rle "\\label{sec:task$input_str}" | sed "/\.swp$/d" | sed -n '/\.tex\|\.txt/p')
     if [ "$testresult" ] ; then
         if [ "$find_mode" = "vim" ]; then
             echo "$testresult" | xargs -i@ "$vimlocation" -c 'exec("normal /\\\\label{sec:task'$input_str'}\nzO")' @
