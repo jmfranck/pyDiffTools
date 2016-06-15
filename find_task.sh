@@ -5,7 +5,7 @@ cd ~/notebook
 
 # process arguments -- modified from http://stackoverflow.com/questions/192249/how-do-i-parse-command-line-arguments-in-bash
 find_mode="vim"
-while [[ $# > 1 ]]
+while [ $# -gt 1 ]
 do
 key="$1"
 
