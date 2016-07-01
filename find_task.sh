@@ -29,20 +29,20 @@ input_str="$1"
 if [ "$find_mode" = "list" ] ; then
     if [ `echo $input_str |sed -n '/^[0-9]\+$/p'` ] ; then
         echo "this is a number"
-        grep list* -rle "\\\\item\[.*\<$input_str\." | sed "/\.svn$/d" | sed "/\.swp$/d" | xargs -i@ "$vimlocation" -c 'exec("normal /\\\\item\\[.*\\<'$input_str'\\./e\nzO")' @
+        grep list* -rle "\\\\item\[.*\<$input_str\." | sed "/\.svn$/d" | sed "/\.swp$/d" | xargs -n 1 -P 5 -i@ "$vimlocation" -c 'exec("normal /\\\\item\\[.*\\<'$input_str'\\./e\nzO")' @
     else
         echo "this is not a number"
         vimsearch='exec("normal /\\c\\<'$input_str'\\>\nzO")'
         echo "I find the following files that match"
         echo `grep list* -rile "\<$input_str\>" | sed -n "/\.tex$/p"`
         echo "and I plan to run the following vim command $vimsearch"
-        grep list* -rile "\<$input_str\>" | sed -n "/\.tex$/p" | xargs -i@ "$vimlocation" -c "$vimsearch" @ # apparently the quotes are required to expand the $vimsearch here -- this is equivalent to typing the lhs of the equation above here
+        grep list* -rile "\<$input_str\>" | sed -n "/\.tex$/p" | xargs -n 1 -P 5 -i@ "$vimlocation" -c "$vimsearch" @ # apparently the quotes are required to expand the $vimsearch here -- this is equivalent to typing the lhs of the equation above here
     fi
 else
     testresult=$(grep inprocess/ *.tex -rle "\\label{sec:task$input_str}" | sed "/\.swp$/d" | sed -n '/\.tex\|\.txt/p')
     if [ "$testresult" ] ; then
         if [ "$find_mode" = "vim" ]; then
-            echo "$testresult" | xargs -i@ "$vimlocation" -c 'exec("normal /\\\\label{sec:task'$input_str'}\nzO")' @
+            echo "$testresult" | xargs -n 1 -P 5 -i@ "$vimlocation" -c 'exec("normal /\\\\label{sec:task'$input_str'}\nzO")' @
         elif [ "$find_mode" = "print" ]; then
             echo "$testresult"
         fi
