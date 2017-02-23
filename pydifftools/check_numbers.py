@@ -9,7 +9,7 @@ def run(arguments):
         if os.name == 'posix':
             result = Popen(['grep -Rice "%d\." ~/notebook/list*'%thisnumber],shell=True,stdout=PIPE)
         else:
-            result = Popen([r'C:\Program Files (x86)\Git\bin\bash.exe','-c',r'grep -rice "%d\." ~/notebook/list*'%thisnumber],stdout=PIPE)
+            result = Popen([r'C:\Program Files\Git\bin\bash.exe','-c',r'grep -rice "%d\." ~/notebook/list*'%thisnumber],stdout=PIPE)
         matched_already = False
         matched_multiple = False
         full_string = []
