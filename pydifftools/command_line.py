@@ -14,7 +14,8 @@ def errmsg():
     wd      :   word diff
     wr      :   wrap with indented sentence format (for markdown or latex).
                 Optional flag --cleanoo cleans latex exported from
-                OpenOffice/LibreOffice"""
+                OpenOffice/LibreOffice
+    xx      :   Convert xml to xlsx"""
     exit()
 def main():
     if len(sys.argv) == 1:
@@ -99,6 +100,20 @@ def main():
         else:
             cmd += [os.getcwd() + os.path.sep + word_files[0]]
         cmd += [os.getcwd() + os.path.sep + word_files[1]]
+        print "about to run",' '.join(cmd)
+        os.system(' '.join(cmd))
+    elif command == 'xx':
+        format_codes = {'csv':6, 'xlsx':51, 'xml':46} # determined by microsoft vbs
+        cmd = ['start']
+        cmd += [os.path.expanduser('~/xml2xlsx.vbs')]
+        first_ext = arguments[0].split('.')[-1]
+        second_ext = arguments[1].split('.')[-1]
+        for j in arguments[0:2]:
+            if j.find("C:") > -1:
+                cmd += [j]
+            else:
+                cmd += [os.getcwd() + os.path.sep + j]
+        cmd += [str(format_codes[j]) for j in [first_ext, second_ext]]
         print "about to run",' '.join(cmd)
         os.system(' '.join(cmd))
     else:
