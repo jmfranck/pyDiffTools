@@ -1,20 +1,23 @@
 #!/bin/bash
+# for sumatra, use:
+# "C:\Program Files (x86)\Vim\vim80\gvim.exe" --remote-wait-silent +%l %f 
+gvimloc="c:\\Program Files (x86)\\Vim\\vim80"
 if [ $# -gt 1 ]; then
-	"c:\\Program Files (x86)\\Vim\\vim80\\gvim.exe" $*
+	"$gvimloc" $*
 else
 	#filename=$(echo "$1" | sed 's/^\/\([a-z]\)\//\1:\//')
-        #"c:\\Program Files (x86)\\Vim\\vim80\\gvim.exe" -c ":RemoteOpen $filename|cd %:h" &
+    #"$gvimloc\\gvim.exe" -c ":RemoteOpen $filename|cd %:h" &
 	# works for one file, but still not for diff
-	servers=$("c:\\Program Files (x86)\\Vim\\vim80\\vim.exe" "--serverlist")
+	servers=$("$gvimloc\\vim.exe" "--serverlist")
 	echo "servers are $servers"
 	if [[ $servers == *"GVIM"* ]]; then
-		"c:\\Program Files (x86)\\Vim\\vim80\\gvim.exe" --remote $* &
+		"$gvimloc\\gvim.exe" --remote $* &
 	else
-		"c:\\Program Files (x86)\\Vim\\vim80\\gvim.exe" --servername gvim &
+		"$gvimloc\\gvim.exe" --servername gvim &
 		until [[ $servers == *"GVIM"* ]]; do
 			echo "server should be open"
-			servers=$("c:\\Program Files (x86)\\Vim\\vim80\\vim.exe" "--serverlist")
+			servers=$("$gvimloc\\vim.exe" "--serverlist")
 		done
-		"c:\\Program Files (x86)\\Vim\\vim80\\gvim.exe" --remote $* &
+		"$gvimloc\\gvim.exe" --remote $* &
 	fi
 fi
