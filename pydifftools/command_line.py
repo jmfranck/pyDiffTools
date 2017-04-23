@@ -69,6 +69,10 @@ def main():
         cmd = ['gvim']
         cmd.append('--remote-send')
         cmd.append('"zO"')
+        time.sleep(0.3)
+        cmd = ['gvim']
+        cmd.append('--remote-send')
+        cmd.append('":cd %:h\n"')
         subprocess.Popen(' '.join(cmd))
     elif command == 'wmatch':
         match_spaces.run(arguments)
