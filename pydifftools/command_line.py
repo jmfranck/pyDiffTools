@@ -2,6 +2,8 @@ import sys
 from . import check_numbers,match_spaces,split_conflict,wrap_sentences
 import os
 import gzip
+import time
+import subprocess
 def errmsg():
     print r"""arguments are:
     num     :   check numbers in a latex catalog (e.g. of numbered notebook)
@@ -10,6 +12,10 @@ def errmsg():
                 file for a scanned document (second arg), e.g.  with
                 handwritten markup
     wmatch  :   match whitespace
+    gvr     :   git forward search, with arguments
+
+                - file
+                - line
     sc      :   split conflict
     wd      :   word diff
     wr      :   wrap with indented sentence format (for markdown or latex).
@@ -53,6 +59,17 @@ def main():
             print "stripped stupid markup from LibreOffice"
         else:
             raise ValueError("I don't understand your arguments:"+repr(arguments))
+    elif command == 'gvr':
+        cmd = ['gvim']
+        cmd.append('--remote-wait-silent')
+        cmd.append('+'+arguments[1])
+        cmd.append(arguments[0])
+        subprocess.Popen(' '.join(cmd))# this is forked
+        time.sleep(0.3)
+        cmd = ['gvim']
+        cmd.append('--remote-send')
+        cmd.append('"zO"')
+        subprocess.Popen(' '.join(cmd))
     elif command == 'wmatch':
         match_spaces.run(arguments)
     elif command == 'sc':
