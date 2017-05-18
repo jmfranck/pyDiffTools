@@ -1,4 +1,5 @@
 # In addition to the package file, various *.sh files are included -- these will eventually be converted to python
 include README.rst
 include LICENSE.md
-include diff-doc.js
+include pydifftools/diff-doc.js
+include pydifftools/xml2xlsx.vbs

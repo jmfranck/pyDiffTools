@@ -23,6 +23,10 @@ def errmsg():
                 OpenOffice/LibreOffice
     xx      :   Convert xml to xlsx"""
     exit()
+_ROOT = os.path.abspath(os.path.dirname(__file__))
+def get_data(path):
+    "return vbs and js scripts saved as package data"
+    return os.path.join(_ROOT, path)
 def main():
     if len(sys.argv) == 1:
         errmsg()
@@ -114,7 +118,7 @@ def main():
                 print "about to run",' '.join(cmd)
                 os.system(' '.join(cmd))
         cmd = ['start']
-        cmd += [os.path.expanduser('~/diff-doc.js')]
+        cmd += [get_data('diff-doc.js')]
         print "word files are",word_files
         if word_files[0].find("C:") > -1:
             cmd += [word_files[0]]
@@ -126,7 +130,7 @@ def main():
     elif command == 'xx':
         format_codes = {'csv':6, 'xlsx':51, 'xml':46} # determined by microsoft vbs
         cmd = ['start']
-        cmd += [os.path.expanduser('~/xml2xlsx.vbs')]
+        cmd += [get_data('xml2xlsx.vbs')]
         first_ext = arguments[0].split('.')[-1]
         second_ext = arguments[1].split('.')[-1]
         for j in arguments[0:2]:
