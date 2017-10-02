@@ -5,11 +5,16 @@ cd ~/notebook
 
 # process arguments -- modified from http://stackoverflow.com/questions/192249/how-do-i-parse-command-line-arguments-in-bash
 find_mode="vim"
+use_tags=true
 while [ $# -gt 1 ]
 do
 key="$1"
 
     case $key in
+        -n|--notags)
+            use_tags=false
+            shift
+        ;;
         -l|--listnum)
             find_mode="list"
             shift # $2 --> $1, $3 --> $2, etc.
@@ -29,7 +34,11 @@ input_str="$1"
 if [ "$find_mode" = "list" ] ; then
     if [ `echo $input_str |sed -n '/^[0-9]\+$/p'` ] ; then
         echo "this is a number"
-        gvim -t "lst:$input_str" &
+        if [ "$use_tags" = false ] ; then
+            grep list* -rle "\\\\item\[.*\<$input_str\." | sed "/\.svn$/d" | sed "/\.swp$/d" | xargs -n 1 -P 5 -i@ "$vimlocation" -c 'exec("normal /\\\\item\\[.*\\<'$input_str'\\./e\nzO")' @
+        else
+            gvim -t "lst:$input_str" &
+        fi
     else
         echo "this is not a number"
         vimsearch='exec("normal /\\c\\<'$input_str'\\>\nzO")'
