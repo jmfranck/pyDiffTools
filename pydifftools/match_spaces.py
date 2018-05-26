@@ -3,9 +3,15 @@ def run(arguments):
     fp = open(arguments[0])
     text1 = fp.read()
     fp.close()
+    #text1 = text1.decode('utf-8')
     fp = open(arguments[1])
     text2 = fp.read()
     fp.close()
+    #text2 = text2.decode('utf-8')
+    utf_char = u'\u00a0'.encode('utf-8')# unicode no break space
+    text2 = text2.replace(utf_char,' ')# replace it
+    utf_char = u'\u2004'.encode('utf-8')# three-per-em space
+    text2 = text2.replace(utf_char,' ')# replace it
     def parse_whitespace(s):
         retval = []
         white_or_not = []
