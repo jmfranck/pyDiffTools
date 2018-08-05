@@ -6,6 +6,12 @@ import time
 import subprocess
 def errmsg():
     print r"""arguments are:
+    fs      :   smart latex forward-search
+                currently this works specifically for sumatra pdf located
+                at "C:\Program Files\SumatraPDF\SumatraPDF.exe",
+                but can easily be adapted based on os, etc.
+                Add the following line (or something like it) to your vimrc:
+                map <c-F>s :sil !pydifft fs %:p <c-r>=line(".")<cr><cr>
     num     :   check numbers in a latex catalog (e.g. of numbered notebook)
                 of items of the form '\item[anything number.anything]'
     gensync :   use a compiled latex original (first arg) to generate a synctex
@@ -126,6 +132,38 @@ def main():
             cmd += [os.getcwd() + os.path.sep + word_files[0]]
         cmd += [os.getcwd() + os.path.sep + word_files[1]]
         print "about to run",' '.join(cmd)
+        os.system(' '.join(cmd))
+    elif command == 'fs':
+        texfile,lineno = arguments
+        texfile = os.path.normpath(os.path.abspath(texfile))
+        directory, texfile = texfile.rsplit(os.path.sep,1)
+        assert texfile[-4:] == '.tex','needs to be called .tex'
+        origbasename = texfile[:-4]
+        cmd = ['"C:\\Program Files\\SumatraPDF\\SumatraPDF.exe" -reuse-instance']
+        if os.path.exists(os.path.join(directory,origbasename+'.pdf')):
+            cmd.append(os.path.join(directory,origbasename+'.pdf'))
+        else:
+            print "no pdf file for this guy, looking for one that has one"
+            found = False
+            for fname in os.listdir(directory):
+                if fname[-4:] == '.tex':
+                    basename = fname[:-4]
+                    print "found tex file",basename
+                    if os.path.exists(os.path.join(directory,basename + '.pdf')):
+                        print "found matching tex/pdf pair",basename
+                        with open(basename+'.tex','r') as fp:
+                            alltxt = fp.read()
+                            if '\input{'+origbasename+'}' in alltxt or '\include{'+origbasename+'}' in alltxt:
+                                print 'this guy calls the guy you want -- just stop here and display it'
+                                found = True
+                                cmd.append(os.path.join(directory,basename+'.pdf'))
+                                break
+            if not found:
+                raise IOError("This is not the PDF you are looking for!!!")
+        cmd.append('-forward-search')
+        cmd.append(origbasename+'.tex')
+        cmd.append('%s -fwdsearch-color ff0000'%lineno)
+        print "about to execute:\n\t",' '.join(cmd)
         os.system(' '.join(cmd))
     elif command == 'xx':
         format_codes = {'csv':6, 'xlsx':51, 'xml':46} # determined by microsoft vbs
