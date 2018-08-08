@@ -1,5 +1,7 @@
 import re
 from numpy import *
+import sys
+import logging
 def match_curly_bracket(alltext,pos):
     if pos == 0:
         raise RuntimeError("can't deal with babel string at the very beginning of the file")
@@ -24,9 +26,13 @@ def run(filename,
         punctuation_slop = 20,
         stupid_strip = False,
         ):
-    fp = open(filename)
-    alltext = fp.read()
-    fp.close()
+    if filename is not None:
+        fp = open(filename)
+        alltext = fp.read()
+        fp.close()
+    else:
+        fp = sys.stdin
+        alltext = fp.read()
     alltext = alltext.decode('utf-8')
     #{{{ strip stupid commands that appear in openoffice conversion
     if stupid_strip:
@@ -53,9 +59,9 @@ def run(filename,
         #{{{ remove mathit
         m = re.search(r'\\mathit{',alltext)
         while m:
-            print '-------------'
-            print alltext[m.start():m.end()]
-            print '-------------'
+            logging.debug('-------------')
+            logging.debug(alltext[m.start():m.end()])
+            logging.debug('-------------')
             stop_bracket = match_curly_bracket(alltext,m.end()-1)
             alltext = (alltext[:m.start()] + alltext[m.end():stop_bracket] +
                     alltext[stop_bracket+1:])# pos is the position of
@@ -68,7 +74,7 @@ def run(filename,
         #{{{ here I need a trick to prevent including short abbreviations, etc
         tempsent = re.split('([^\.!?]{3}[\.!?])[ \n]',alltext[para])
         for j in tempsent:
-            print "--",j.encode('utf-8')
+            logging.debug("--",j.encode('utf-8'))
         #{{{ put the "separators together with the preceding
         temp_paragraph = []
         for tempsent_num in range(0,len(tempsent),2):
@@ -76,13 +82,13 @@ def run(filename,
                 temp_paragraph.append(tempsent[tempsent_num] + tempsent[tempsent_num+1])
             else:
                 temp_paragraph.append(tempsent[tempsent_num])
-        print '-------------------'
+        logging.debug('-------------------')
         alltext[para] = []
         for this_sent in temp_paragraph:
             alltext[para].extend(
                     re.split(r'(\\(?:begin|end|usepackage|newcommand){[^}]*})',this_sent))
         for this_sent in alltext[para]:
-            print "--sentence: ",this_sent.encode('utf-8')
+            logging.debug("--sentence: ",this_sent.encode('utf-8'))
         #}}}
         #}}}
         for sent in range(len(alltext[para])):# sentences into words
@@ -115,6 +121,9 @@ def run(filename,
                 if indentation == 0:
                     indentation = 4
     #}}}
-    fp = open(filename,'w')
-    fp.write(('\n'.join(lines)).encode('utf-8'))
-    fp.close()
+    if filename is None:
+        print ('\n'.join(lines)).encode('utf-8')
+    else:
+        fp = open(filename,'w')
+        fp.write(('\n'.join(lines)).encode('utf-8'))
+        fp.close()

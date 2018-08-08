@@ -4,6 +4,7 @@ import os
 import gzip
 import time
 import subprocess
+import logging
 def errmsg():
     print r"""arguments are:
     fs      :   smart latex forward-search
@@ -61,12 +62,14 @@ def main():
             fp.write(argument[1].replace())
             fp.close()
     elif command == 'wr':
-        print "arguments are",arguments
+        logging.debug("arguments are",arguments)
         if len(arguments) == 1:
             wrap_sentences.run(arguments[0])
         elif len(arguments) == 2 and arguments[0] == '--cleanoo':
             wrap_sentences.run(arguments[1],stupid_strip = True)
-            print "stripped stupid markup from LibreOffice"
+            logging.debug("stripped stupid markup from LibreOffice")
+        elif len(arguments) == 0:
+            wrap_sentences.run(None) # assumes stdin
         else:
             raise ValueError("I don't understand your arguments:"+repr(arguments))
     elif command == 'gvr':
