@@ -5,6 +5,7 @@ import gzip
 import time
 import subprocess
 import logging
+import re
 def errmsg():
     print r"""arguments are:
     fs      :   smart latex forward-search
@@ -34,6 +35,44 @@ _ROOT = os.path.abspath(os.path.dirname(__file__))
 def get_data(path):
     "return vbs and js scripts saved as package data"
     return os.path.join(_ROOT, path)
+def recursive_include_search(basename, does_it_input):
+    with open(basename+'.tex','r') as fp:
+        alltxt = fp.read()
+    # we're only sensitive to the name of the file, not the directory that it's in
+    pattern = re.compile(r'\n[^%]*\\(?:input|include)[{]((?:[^}]*/)?'+does_it_input+')[}]')
+    for actual_name in pattern.findall(alltxt):
+        print basename+" directly includes "+does_it_input
+        return True,actual_name
+    print "file %s didn't directly include '%s' -- I'm going to look for the files that it includes"%(basename, does_it_input)
+    pattern = re.compile(r'\n[^%]*\\(?:input|include)[{]([^}]+)[}](.*)')
+    for inputname,extra in pattern.findall(alltxt):
+        if '\\input' in extra or '\\include' in extra:
+            raise IOError("Don't put multiple include or input statements on one lien --> are you trying to make my life difficult!!!??? ")
+        print "%s includes input file:"%basename,inputname
+        retval,actual_name = recursive_include_search(
+                os.path.normpath(inputname),
+                does_it_input)
+        if retval:
+            return True, actual_name
+    return False,''
+def look_for_pdf(directory,origbasename):
+    'look for pdf -- if found return tuple(True, the basename of the pdf, the basename of the tex) else return tuple(False, "", "")'
+    found = False
+    basename = ''
+    actual_name = ''
+    for fname in os.listdir(directory):
+        if fname[-4:] == '.tex':
+            basename = fname[:-4]
+            print "found tex file",basename
+            if os.path.exists(os.path.join(directory,basename + '.pdf')):
+                print "found matching tex/pdf pair",basename
+                retval, actual_name = recursive_include_search(basename, origbasename)
+                if retval:
+                    return True,basename,actual_name
+                if not found:
+                    print "but it doesn't seem to include",origbasename
+                    print "about to check for other inputs"
+    return found,basename,actual_name
 def main():
     if len(sys.argv) == 1:
         errmsg()
@@ -147,24 +186,16 @@ def main():
             cmd.append(os.path.join(directory,origbasename+'.pdf'))
         else:
             print "no pdf file for this guy, looking for one that has one"
-            found = False
-            for fname in os.listdir(directory):
-                if fname[-4:] == '.tex':
-                    basename = fname[:-4]
-                    print "found tex file",basename
-                    if os.path.exists(os.path.join(directory,basename + '.pdf')):
-                        print "found matching tex/pdf pair",basename
-                        with open(basename+'.tex','r') as fp:
-                            alltxt = fp.read()
-                            if '\input{'+origbasename+'}' in alltxt or '\include{'+origbasename+'}' in alltxt:
-                                print 'this guy calls the guy you want -- just stop here and display it'
-                                found = True
-                                cmd.append(os.path.join(directory,basename+'.pdf'))
-                                break
+            found,basename,tex_name = look_for_pdf(directory, origbasename)
             if not found:
-                raise IOError("This is not the PDF you are looking for!!!")
+                print "looking in the current directory"
+                directory = os.getcwd()
+                found,basename,tex_name = look_for_pdf(directory, origbasename)
+                if not found: raise IOError("This is not the PDF you are looking for!!!")
+            # file has been found, so add to the command
+            cmd.append(os.path.join(directory,basename+'.pdf'))
         cmd.append('-forward-search')
-        cmd.append(origbasename+'.tex')
+        cmd.append(tex_name+'.tex')
         cmd.append('%s -fwdsearch-color ff0000'%lineno)
         print "about to execute:\n\t",' '.join(cmd)
         os.system(' '.join(cmd))
