@@ -91,7 +91,6 @@ def main():
         assert arguments[0].endswith('.py'),"this is supposed to be called with a .py file argument! (arguments are %s)"%repr(arguments)
         with open(arguments[0]) as fpin:
             text = fpin.read().decode('utf8')
-
         text = text.split('\n')
         newtext = []
         last_had_hash = False
@@ -104,7 +103,6 @@ def main():
             elif thisline.startswith('# Out['):
                 pass
             elif thisline.startswith('# '):
-                print "hash, no in:",thisline
                 if not last_had_hash:
                     newtext.append('# <markdowncell>')
                 newtext.append(thisline)
