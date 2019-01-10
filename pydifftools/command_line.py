@@ -35,8 +35,8 @@ _ROOT = os.path.abspath(os.path.dirname(__file__))
 def get_data(path):
     "return vbs and js scripts saved as package data"
     return os.path.join(_ROOT, path)
-def recursive_include_search(basename, does_it_input):
-    with open(basename+'.tex','r') as fp:
+def recursive_include_search(directory, basename, does_it_input):
+    with open(os.path.join(directory,basename+'.tex'),'r') as fp:
         alltxt = fp.read()
     # we're only sensitive to the name of the file, not the directory that it's in
     pattern = re.compile(r'\n[^%]*\\(?:input|include)[{]((?:[^}]*/)?'+does_it_input+')[}]')
@@ -50,6 +50,7 @@ def recursive_include_search(basename, does_it_input):
             raise IOError("Don't put multiple include or input statements on one lien --> are you trying to make my life difficult!!!??? ")
         print "%s includes input file:"%basename,inputname
         retval,actual_name = recursive_include_search(
+                directory,
                 os.path.normpath(inputname),
                 does_it_input)
         if retval:
@@ -66,7 +67,7 @@ def look_for_pdf(directory,origbasename):
             print "found tex file",basename
             if os.path.exists(os.path.join(directory,basename + '.pdf')):
                 print "found matching tex/pdf pair",basename
-                retval, actual_name = recursive_include_search(basename, origbasename)
+                retval, actual_name = recursive_include_search(directory, basename, origbasename)
                 if retval:
                     return True,basename,actual_name
                 if not found:
@@ -187,16 +188,22 @@ def main():
         else:
             print "no pdf file for this guy, looking for one that has one"
             found,basename,tex_name = look_for_pdf(directory, origbasename)
+            orig_directory = directory
             if not found:
-                print "looking in the current directory"
-                directory = os.getcwd()
-                found,basename,tex_name = look_for_pdf(directory, origbasename)
-                if not found: raise IOError("This is not the PDF you are looking for!!!")
+                while os.path.sep in directory and directory.lower()[-1] != ':':
+                    directory, _ = directory.rsplit(os.path.sep,1)
+                    print "looking one directory up, in ",directory
+                    found,basename,tex_name = look_for_pdf(directory, origbasename)
+                    if found: break
+            if not found: raise IOError("This is not the PDF you are looking for!!!")
+            print "result:",directory,origbasename,found,basename,tex_name
             # file has been found, so add to the command
             cmd.append(os.path.join(directory,basename+'.pdf'))
         cmd.append('-forward-search')
         cmd.append(tex_name+'.tex')
         cmd.append('%s -fwdsearch-color ff0000'%lineno)
+        print "changing to directory",directory
+        os.chdir(directory)
         print "about to execute:\n\t",' '.join(cmd)
         os.system(' '.join(cmd))
     elif command == 'xx':
