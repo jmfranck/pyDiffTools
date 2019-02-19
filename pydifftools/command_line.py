@@ -185,6 +185,7 @@ def main():
         cmd = ['"C:\\Program Files\\SumatraPDF\\SumatraPDF.exe" -reuse-instance']
         if os.path.exists(os.path.join(directory,origbasename+'.pdf')):
             cmd.append(os.path.join(directory,origbasename+'.pdf'))
+            tex_name=origbasename
         else:
             print "no pdf file for this guy, looking for one that has one"
             found,basename,tex_name = look_for_pdf(directory, origbasename)
