@@ -6,6 +6,7 @@ import time
 import subprocess
 import logging
 import re
+from nbformat import v3, v4
 def errmsg():
     print r"""arguments are:
     fs      :   smart latex forward-search
@@ -14,6 +15,7 @@ def errmsg():
                 but can easily be adapted based on os, etc.
                 Add the following line (or something like it) to your vimrc:
                 map <c-F>s :sil !pydifft fs %:p <c-r>=line(".")<cr><cr>
+    mknb    :   Make a notebook file from a python script, following certain rules.
     num     :   check numbers in a latex catalog (e.g. of numbered notebook)
                 of items of the form '\item[anything number.anything]'
     gensync :   use a compiled latex original (first arg) to generate a synctex
@@ -81,6 +83,63 @@ def main():
     arguments = sys.argv[2:]
     if command == 'num':
         check_numbers.run(arguments)
+    elif command == 'mknb':
+        jupyter_magic_re = re.compile("^get_ipython\(\).magic\(u'(.*)'\)")
+        jupyter_cellmagic_re = re.compile("^get_ipython\(\).run_cell_magic\(u'(.*)'\)")
+        assert len(arguments) == 1,"mknb should only be called with one argument"
+        assert arguments[0].endswith('.py'),"this is supposed to be called with a .py file argument! (arguments are %s)"%repr(arguments)
+        with open(arguments[0]) as fpin:
+            text = fpin.read().decode('utf8')
+
+        text = text.split('\n')
+        newtext = []
+        last_had_hash = False
+        last_had_code = False
+        for thisline in text:
+            if thisline.startswith('# coding: utf-8'):
+                pass
+            elif thisline.startswith('# In['):
+                last_had_code = False
+            elif thisline.startswith('# Out['):
+                pass
+            elif thisline.startswith('# '):
+                print "hash, no in:",thisline
+                if not last_had_hash:
+                    newtext.append('# <markdowncell>')
+                newtext.append(thisline)
+                last_had_hash = True
+                last_had_code = False
+            else:
+                if not last_had_code:
+                    newtext.append('# <codecell>')
+                m = jupyter_magic_re.match(thisline)
+                if m:
+                    thisline = '%'+m.groups()[0]
+                else:
+                    m = jupyter_cellmagic_re.match(thisline)
+                    if m:
+                        thisline = '%%'+m.groups()[0]
+                newtext.append(thisline)
+                last_had_hash = False
+                last_had_code = True
+        text = '\n'.join(newtext)
+
+        text += """
+# <markdowncell>
+# If you can read this, reads_py() is no longer broken! 
+
+        """
+
+        nbook = v3.reads_py(text)
+
+        nbook = v4.upgrade(nbook)  # Upgrade v3 to v4
+        nbook.metadata.update({'kernelspec':{'name':"Python [Anaconda2]",
+            'display_name':'Python [Anaconda2]',
+            'language':'python'}})
+
+        jsonform = v4.writes(nbook) + "\n"
+        with open(arguments[0].replace('.py','.ipynb'), "w") as fpout:
+            fpout.write(jsonform.encode('utf8'))
     elif command == 'gensync':
         with gzip.open(arguments[0].replace(
             '.pdf','.synctek.gz')) as fp:
