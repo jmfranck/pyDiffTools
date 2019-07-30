@@ -14,7 +14,8 @@ def errmsg():
                 at "C:\Program Files\SumatraPDF\SumatraPDF.exe",
                 but can easily be adapted based on os, etc.
                 Add the following line (or something like it) to your vimrc:
-                map <c-F>s :sil !pydifft fs %:p <c-r>=line(".")<cr><cr>
+                map <c-F>s :cd %:h\|sil !pydifft fs %:p <c-r>=line(".")<cr><cr>
+                it will map Cntrl-F s to a forward search.
     mknb    :   Make a notebook file from a python script, following certain rules.
     num     :   check numbers in a latex catalog (e.g. of numbered notebook)
                 of items of the form '\item[anything number.anything]'
