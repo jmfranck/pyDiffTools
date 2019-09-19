@@ -8,7 +8,7 @@ import logging
 import re
 from nbformat import v3, v4
 def errmsg():
-    print r"""arguments are:
+    print(r"""arguments are:
     fs      :   smart latex forward-search
                 currently this works specifically for sumatra pdf located
                 at "C:\Program Files\SumatraPDF\SumatraPDF.exe",
@@ -32,7 +32,7 @@ def errmsg():
     wr      :   wrap with indented sentence format (for markdown or latex).
                 Optional flag --cleanoo cleans latex exported from
                 OpenOffice/LibreOffice
-    xx      :   Convert xml to xlsx"""
+    xx      :   Convert xml to xlsx""")
     exit()
 _ROOT = os.path.abspath(os.path.dirname(__file__))
 def get_data(path):
@@ -44,14 +44,14 @@ def recursive_include_search(directory, basename, does_it_input):
     # we're only sensitive to the name of the file, not the directory that it's in
     pattern = re.compile(r'\n[^%]*\\(?:input|include)[{]((?:[^}]*/)?'+does_it_input+')[}]')
     for actual_name in pattern.findall(alltxt):
-        print basename+" directly includes "+does_it_input
+        print(basename+" directly includes "+does_it_input)
         return True,actual_name
-    print "file %s didn't directly include '%s' -- I'm going to look for the files that it includes"%(basename, does_it_input)
+    print("file %s didn't directly include '%s' -- I'm going to look for the files that it includes"%(basename, does_it_input))
     pattern = re.compile(r'\n[^%]*\\(?:input|include)[{]([^}]+)[}](.*)')
     for inputname,extra in pattern.findall(alltxt):
         if '\\input' in extra or '\\include' in extra:
             raise IOError("Don't put multiple include or input statements on one lien --> are you trying to make my life difficult!!!??? ")
-        print "%s includes input file:"%basename,inputname
+        print("%s includes input file:"%basename,inputname)
         retval,actual_name = recursive_include_search(
                 directory,
                 os.path.normpath(inputname),
@@ -67,15 +67,15 @@ def look_for_pdf(directory,origbasename):
     for fname in os.listdir(directory):
         if fname[-4:] == '.tex':
             basename = fname[:-4]
-            print "found tex file",basename
+            print("found tex file",basename)
             if os.path.exists(os.path.join(directory,basename + '.pdf')):
-                print "found matching tex/pdf pair",basename
+                print("found matching tex/pdf pair",basename)
                 retval, actual_name = recursive_include_search(directory, basename, origbasename)
                 if retval:
                     return True,basename,actual_name
                 if not found:
-                    print "but it doesn't seem to include",origbasename
-                    print "about to check for other inputs"
+                    print("but it doesn't seem to include",origbasename)
+                    print("about to check for other inputs")
     return found,basename,actual_name
 def main():
     if len(sys.argv) == 1:
@@ -202,10 +202,10 @@ def main():
             #}}}
         word_files = [x.replace('.md','.docx') for x in arguments[:2]]
         local_dir = os.path.dirname(arguments[1])
-        print "local directory:",local_dir
+        print("local directory:",local_dir)
         for j in range(2):
             if arguments[0][-5:] == '.docx':
-                print "the first argument has a docx extension, so I'm bypassing the pandoc step"
+                print("the first argument has a docx extension, so I'm bypassing the pandoc step")
             else:
                 cmd = ['pandoc']
                 cmd += [arguments[j]]
@@ -222,17 +222,17 @@ def main():
                     cmd += ['--reference-docx=' + local_dir + os.path.sep + "template.docx"]
                 cmd += ['-o']
                 cmd += [word_files[j]]
-                print "about to run",' '.join(cmd)
+                print("about to run",' '.join(cmd))
                 os.system(' '.join(cmd))
         cmd = ['start']
         cmd += [get_data('diff-doc.js')]
-        print "word files are",word_files
+        print("word files are",word_files)
         if word_files[0].find("C:") > -1:
             cmd += [word_files[0]]
         else:
             cmd += [os.getcwd() + os.path.sep + word_files[0]]
         cmd += [os.getcwd() + os.path.sep + word_files[1]]
-        print "about to run",' '.join(cmd)
+        print("about to run",' '.join(cmd))
         os.system(' '.join(cmd))
     elif command == 'fs':
         texfile,lineno = arguments
@@ -245,25 +245,25 @@ def main():
             cmd.append(os.path.join(directory,origbasename+'.pdf'))
             tex_name=origbasename
         else:
-            print "no pdf file for this guy, looking for one that has one"
+            print("no pdf file for this guy, looking for one that has one")
             found,basename,tex_name = look_for_pdf(directory, origbasename)
             orig_directory = directory
             if not found:
                 while os.path.sep in directory and directory.lower()[-1] != ':':
                     directory, _ = directory.rsplit(os.path.sep,1)
-                    print "looking one directory up, in ",directory
+                    print("looking one directory up, in ",directory)
                     found,basename,tex_name = look_for_pdf(directory, origbasename)
                     if found: break
             if not found: raise IOError("This is not the PDF you are looking for!!!")
-            print "result:",directory,origbasename,found,basename,tex_name
+            print("result:",directory,origbasename,found,basename,tex_name)
             # file has been found, so add to the command
             cmd.append(os.path.join(directory,basename+'.pdf'))
         cmd.append('-forward-search')
         cmd.append(tex_name+'.tex')
         cmd.append('%s -fwdsearch-color ff0000'%lineno)
-        print "changing to directory",directory
+        print("changing to directory",directory)
         os.chdir(directory)
-        print "about to execute:\n\t",' '.join(cmd)
+        print("about to execute:\n\t",' '.join(cmd))
         os.system(' '.join(cmd))
     elif command == 'xx':
         format_codes = {'csv':6, 'xlsx':51, 'xml':46} # determined by microsoft vbs
@@ -277,7 +277,7 @@ def main():
             else:
                 cmd += [os.getcwd() + os.path.sep + j]
         cmd += [str(format_codes[j]) for j in [first_ext, second_ext]]
-        print "about to run",' '.join(cmd)
+        print("about to run",' '.join(cmd))
         os.system(' '.join(cmd))
     else:
         errmsg()

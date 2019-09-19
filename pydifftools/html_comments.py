@@ -13,13 +13,13 @@ comment_dict = {}
 #for j in doc.xpath('descendant::*[@style="mso-element:comment"]'):
 newlist = []
 thisbody = doc.find('body')
-print 'I found the body',lsafen(thisbody)
+print('I found the body',lsafen(thisbody))
 commentlist = etree.Element('div',style = 'mso-element:comment-list')
 for j in doc.xpath('//span[@style="mso-element:comment"]'):
     #for j in doc.xpath('//span[@style="mso-element:comment"]'):
     #print 'found span with style:\n\n',lsafen(html.tostring(j),wrap = 60)
     #if j.attrib['style'] == 'mso-element:comment':
-    print 'found span with style:\n\n',lsafen(j.attrib,wrap = 60)
+    print('found span with style:\n\n',lsafen(j.attrib,wrap = 60))
     newlist.append(j)
     j.drop_tree()
     commentlist.append(j)
