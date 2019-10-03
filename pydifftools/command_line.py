@@ -89,8 +89,8 @@ def main():
         jupyter_cellmagic_re = re.compile("^get_ipython\(\).run_cell_magic\(u'(.*)'\)")
         assert len(arguments) == 1,"mknb should only be called with one argument"
         assert arguments[0].endswith('.py'),"this is supposed to be called with a .py file argument! (arguments are %s)"%repr(arguments)
-        with open(arguments[0]) as fpin:
-            text = fpin.read().decode('utf8')
+        with open(arguments[0], encoding='utf-8') as fpin:
+            text = fpin.read()
         text = text.split('\n')
         newtext = []
         last_had_hash = False
@@ -137,8 +137,8 @@ def main():
             'language':'python'}})
 
         jsonform = v4.writes(nbook) + "\n"
-        with open(arguments[0].replace('.py','.ipynb'), "w") as fpout:
-            fpout.write(jsonform.encode('utf8'))
+        with open(arguments[0].replace('.py','.ipynb'), "w", encoding='utf-8') as fpout:
+            fpout.write(jsonform)
     elif command == 'gensync':
         with gzip.open(arguments[0].replace(
             '.pdf','.synctek.gz')) as fp:
