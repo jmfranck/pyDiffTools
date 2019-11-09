@@ -32,6 +32,9 @@ def errmsg():
     wr      :   wrap with indented sentence format (for markdown or latex).
                 Optional flag --cleanoo cleans latex exported from
                 OpenOffice/LibreOffice
+                Optional flag -i # specifies indentation level for subsequent
+                lines of a sentence (defaults to 4 -- e.g. for markdown you
+                will always want -i 0)
     xx      :   Convert xml to xlsx""")
     exit()
 _ROOT = os.path.abspath(os.path.dirname(__file__))
@@ -93,20 +96,30 @@ def main():
             text = fpin.read()
         text = text.split('\n')
         newtext = []
-        last_had_hash = False
+        last_had_markdown = False
         last_had_code = False
         for thisline in text:
-            if thisline.startswith('# coding: utf-8'):
-                pass
-            elif thisline.startswith('# In['):
-                last_had_code = False
-            elif thisline.startswith('# Out['):
-                pass
-            elif thisline.startswith('# '):
-                if not last_had_hash:
-                    newtext.append('# <markdowncell>')
-                newtext.append(thisline)
-                last_had_hash = True
+            if thisline.startswith('#'):
+                if thisline.startswith('#!') and 'python' in thisline:
+                    pass
+                elif thisline.startswith('# coding: utf-8'):
+                    pass
+                elif thisline.startswith('# In['):
+                    last_had_code = False
+                elif thisline.startswith('# Out['):
+                    pass
+                elif thisline.startswith('# '):
+                    # this is markdown unless the previous line was code
+                    if not last_had_markdown and not last_had_code:
+                        newtext.append('# <markdowncell>')
+                        last_had_markdown = True
+                        last_had_code = False
+                    else:
+                        last_had_markdown = False
+                        last_had_code = True
+                    newtext.append(thisline)
+            elif len(thisline) == 0:
+                last_had_markdown = False
                 last_had_code = False
             else:
                 if not last_had_code:
@@ -119,7 +132,7 @@ def main():
                     if m:
                         thisline = '%%'+m.groups()[0]
                 newtext.append(thisline)
-                last_had_hash = False
+                last_had_markdown = False
                 last_had_code = True
         text = '\n'.join(newtext)
 
@@ -161,10 +174,15 @@ def main():
             fp.close()
     elif command == 'wr':
         logging.debug("arguments are",arguments)
+        kwargs = {}
+        if '-i' in arguments:
+            idx = arguments.index('-i')
+            arguments.pop(idx)
+            kwargs['indent_amount'] = int(arguments.pop(idx))
         if len(arguments) == 1:
-            wrap_sentences.run(arguments[0])
+            wrap_sentences.run(arguments[0],**kwargs)
         elif len(arguments) == 2 and arguments[0] == '--cleanoo':
-            wrap_sentences.run(arguments[1],stupid_strip = True)
+            wrap_sentences.run(arguments[1],stupid_strip = True,**kwargs)
             logging.debug("stripped stupid markup from LibreOffice")
         elif len(arguments) == 0:
             wrap_sentences.run(None) # assumes stdin

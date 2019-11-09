@@ -25,15 +25,16 @@ def run(filename,
         wrapnumber = 45,
         punctuation_slop = 20,
         stupid_strip = False,
+        indent_amount = 4,
         ):
     if filename is not None:
-        fp = open(filename)
+        fp = open(filename, encoding='utf-8')
         alltext = fp.read()
         fp.close()
     else:
+        sys.stdin.reconfigure(encoding='utf-8')
         fp = sys.stdin
         alltext = fp.read()
-    alltext = alltext.decode('utf-8')
     #{{{ strip stupid commands that appear in openoffice conversion
     if stupid_strip:
         alltext = re.sub(r'\\bigskip\b\s*','',alltext)
@@ -74,7 +75,7 @@ def run(filename,
         #{{{ here I need a trick to prevent including short abbreviations, etc
         tempsent = re.split('([^\.!?]{3}[\.!?])[ \n]',alltext[para])
         for j in tempsent:
-            logging.debug("--",j.encode('utf-8'))
+            logging.debug("--",j)
         #{{{ put the "separators together with the preceding
         temp_paragraph = []
         for tempsent_num in range(0,len(tempsent),2):
@@ -88,7 +89,7 @@ def run(filename,
             alltext[para].extend(
                     re.split(r'(\\(?:begin|end|usepackage|newcommand){[^}]*})',this_sent))
         for this_sent in alltext[para]:
-            logging.debug("--sentence: ",this_sent.encode('utf-8'))
+            logging.debug("--sentence: ",this_sent)
         #}}}
         #}}}
         for sent in range(len(alltext[para])):# sentences into words
@@ -119,11 +120,11 @@ def run(filename,
                 lines.append(' '*indentation + ' '.join(residual_sentence[:nextline_upto+1]))
                 residual_sentence = residual_sentence[nextline_upto+1:]
                 if indentation == 0:
-                    indentation = 4
+                    indentation = indent_amount
     #}}}
     if filename is None:
-        print(('\n'.join(lines)).encode('utf-8'))
+        print(('\n'.join(lines)))
     else:
-        fp = open(filename,'w')
-        fp.write(('\n'.join(lines)).encode('utf-8'))
+        fp = open(filename,'w',encoding='utf-8')
+        fp.write(('\n'.join(lines)))
         fp.close()
