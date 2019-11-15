@@ -6,7 +6,7 @@ import time
 import subprocess
 import logging
 import re
-from nbformat import v3, v4
+import nbformat
 def errmsg():
     print r"""arguments are:
     fs      :   smart latex forward-search
@@ -16,7 +16,8 @@ def errmsg():
                 Add the following line (or something like it) to your vimrc:
                 map <c-F>s :cd %:h\|sil !pydifft fs %:p <c-r>=line(".")<cr><cr>
                 it will map Cntrl-F s to a forward search.
-    mknb    :   Make a notebook file from a python script, following certain rules.
+    nb2py   :   Make a notebook file from a python script, following certain rules.
+    py2nb   :   Make a python script from a python file, following certain rules.
     num     :   check numbers in a latex catalog (e.g. of numbered notebook)
                 of items of the form '\item[anything number.anything]'
     gensync :   use a compiled latex original (first arg) to generate a synctex
@@ -84,10 +85,42 @@ def main():
     arguments = sys.argv[2:]
     if command == 'num':
         check_numbers.run(arguments)
-    elif command == 'mknb':
+    elif command == 'nb2scr':
+        assert arguments[0].endswith('.ipynb'),"this is supposed to be called with a .ipynb file argument! (arguments are %s)"%repr(arguments)
+        nb = nbformat.read(arguments[0],nbformat.NO_CONVERT)
+        last_was_markdown = False
+        jupyter_magic_re = re.compile(r"%(.*)")
+        with open(arguments[0].replace('.ipynb','.py'),'w') as fpout:
+            for j in nb.cells:
+                lines = j['source'].split('\n')
+                if j['cell_type'] == 'markdown':
+                    for line in lines:
+                        fpout.write('# '+line+'\n')
+                    if len(lines[-1])>0:
+                        #print "markdown, last is",repr(j['source'][-1])
+                        fpout.write('\n')
+                    last_was_markdown = True
+                elif j['cell_type'] == 'code':
+                    #fpout.write("start code\n")
+                    if not last_was_markdown:
+                        fpout.write('# \n\n')
+                    for line in lines:
+                        m = jupyter_magic_re.match(line)
+                        if m:
+                            fpout.write("get_ipython().magic(u'%s')\n"%m.groups()[0])
+                        else:
+                            fpout.write(line+'\n')
+                    if len(lines[-1])>0:
+                        #print "code, last is",repr(j['source'][-1])
+                        fpout.write('\n')
+                    last_was_markdown = False
+                    #fpout.write("end code\n")
+                else:
+                    raise ValueError('Unknown cell type')
+    elif command == 'nb2py':
         jupyter_magic_re = re.compile("^get_ipython\(\).magic\(u'(.*)'\)")
         jupyter_cellmagic_re = re.compile("^get_ipython\(\).run_cell_magic\(u'(.*)'\)")
-        assert len(arguments) == 1,"mknb should only be called with one argument"
+        assert len(arguments) == 1,"nb2py should only be called with one argument"
         assert arguments[0].endswith('.py'),"this is supposed to be called with a .py file argument! (arguments are %s)"%repr(arguments)
         with open(arguments[0]) as fpin:
             text = fpin.read().decode('utf8')
@@ -129,14 +162,14 @@ def main():
 
         """
 
-        nbook = v3.reads_py(text)
+        nbook = nbformat.v3.reads_py(text)
 
-        nbook = v4.upgrade(nbook)  # Upgrade v3 to v4
+        nbook = nbformat.v4.upgrade(nbook)  # Upgrade nbformat.v3 to nbformat.v4
         nbook.metadata.update({'kernelspec':{'name':"Python [Anaconda2]",
             'display_name':'Python [Anaconda2]',
             'language':'python'}})
 
-        jsonform = v4.writes(nbook) + "\n"
+        jsonform = nbformat.v4.writes(nbook) + "\n"
         with open(arguments[0].replace('.py','.ipynb'), "w") as fpout:
             fpout.write(jsonform.encode('utf8'))
     elif command == 'gensync':
