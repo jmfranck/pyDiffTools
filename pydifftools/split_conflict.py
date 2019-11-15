@@ -10,24 +10,24 @@ def run(arguments):
         if match:
             textone,typeofmarker,texttwo = match.groups()
             if typeofmarker == 'NEW]':
-                print "found a matching line, current status is (",log_in_orig,',',log_in_new,")"
+                print("found a matching line, current status is (",log_in_orig,',',log_in_new,")")
                 if log_in_new and not log_in_orig:
                     switchto = (True,True)# log in orig, log in new
-                    print "in text:\n",text_to_parse,"\n--> encountered an end marker, switching to",switchto
+                    print("in text:\n",text_to_parse,"\n--> encountered an end marker, switching to",switchto)
                 else:
                     raise ValueError("I encountered an %NEW]% marker, but I was not leaving orig along and logging only in new (False,True), but rather "+repr(log_in_orig)+','+repr(log_in_new)+":\n"+text_to_parse)
             elif typeofmarker == 'ORIG][NEW':
-                print "found a matching line, current status is (",log_in_orig,',',log_in_new,")"
+                print("found a matching line, current status is (",log_in_orig,',',log_in_new,")")
                 if log_in_orig and not log_in_new:
                     switchto = (False,True)# log in orig, log in new
-                    print "in text:\n",text_to_parse,"\n--> encountered a middle marker, switching to",switchto
+                    print("in text:\n",text_to_parse,"\n--> encountered a middle marker, switching to",switchto)
                 else:
                     raise ValueError("I encountered an %ORIG][NEW% marker, but I was not logging in orig but not in new, but rather "+repr(log_in_orig)+','+repr(log_in_new),":\n",text_to_parse)
             elif typeofmarker == '[ORIG':
-                print "found a matching line, current status is (",log_in_orig,',',log_in_new,")"
+                print("found a matching line, current status is (",log_in_orig,',',log_in_new,")")
                 if log_in_new and log_in_orig:
                     switchto = (True,False)# log in orig, log in new
-                    print "in text:\n",text_to_parse,"\n--> encountered an %[ORIG% marker, switching to",switchto
+                    print("in text:\n",text_to_parse,"\n--> encountered an %[ORIG% marker, switching to",switchto)
                 else:
                     raise ValueError("I encountered an %[ORIG% marker, but I was not logging in both orig and new, but rather"+repr(log_in_orig)+','+repr(log_in_new)+":\n"+text_to_parse)
         else:
@@ -41,15 +41,15 @@ def run(arguments):
             new_log_text += textone
         if match:
             log_in_orig,log_in_new = switchto
-            print "yes, I am actually switching the binning"
-            print "so that status is (",log_in_orig,',',log_in_new,")"
+            print("yes, I am actually switching the binning")
+            print("so that status is (",log_in_orig,',',log_in_new,")")
         # if there is a second group (if I have a separator), change which bin I'm in, and add to the end of the current line!
         if texttwo is not None:
             orig_log_text,new_log_text,log_in_orig,log_in_new = parse_line(orig_log_text,new_log_text,log_in_orig,log_in_new,texttwo)
         return orig_log_text,new_log_text,log_in_orig,log_in_new
     fp = open(arguments[0],'r')
     text_list = []
-    print 'opened',arguments[0]
+    print('opened',arguments[0])
     log_in_orig = True
     log_in_new = True
     head_title = None
@@ -61,17 +61,17 @@ def run(arguments):
     for thisline in fp:
         if j == 0:
             if thisline[:12] == '%ONEWORDDIFF':
-                print "found %ONEWORDDIFF marker, title is:"
+                print("found %ONEWORDDIFF marker, title is:")
                 head_title = 'HEAD\n'
                 new_title = thisline[14:]
-                print new_title
+                print(new_title)
                 this_is_a_onewordfile = True
             else:
                 this_is_a_onewordfile = False
             if this_is_a_onewordfile:
-                print "I found this to be a oneword format file"
+                print("I found this to be a oneword format file")
             else:
-                print "I did not find this to be a oneword format file"
+                print("I did not find this to be a oneword format file")
         if this_is_a_onewordfile:# this is only stored if it's a onewordfile
             #new processing for oneworddiff
             #{{{ check to see if I have a separator, and set switchto, to show where I switch
@@ -116,9 +116,9 @@ def run(arguments):
                         new_textlist.append(thisline)
         j+=1
     if this_is_a_onewordfile:
-        print "I found this to be a oneword format file"
+        print("I found this to be a oneword format file")
     else:
-        print "I did not find this to be a oneword format file"
+        print("I did not find this to be a oneword format file")
     fp.close()
     #{{{ write out the result
     newfile = re.sub(r"(.*)",r'\1.merge_new',arguments[0]) 

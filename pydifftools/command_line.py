@@ -8,7 +8,7 @@ import logging
 import re
 import nbformat
 def errmsg():
-    print r"""arguments are:
+    print(r"""arguments are:
     fs      :   smart latex forward-search
                 currently this works specifically for sumatra pdf located
                 at "C:\Program Files\SumatraPDF\SumatraPDF.exe",
@@ -16,8 +16,8 @@ def errmsg():
                 Add the following line (or something like it) to your vimrc:
                 map <c-F>s :cd %:h\|sil !pydifft fs %:p <c-r>=line(".")<cr><cr>
                 it will map Cntrl-F s to a forward search.
-    nb2py   :   Make a notebook file from a python script, following certain rules.
-    py2nb   :   Make a python script from a python file, following certain rules.
+    py2nb   :   Make a notebook file from a python script, following certain rules.
+    nb2py   :   Make a python script from a notebook file, following certain rules.
     num     :   check numbers in a latex catalog (e.g. of numbered notebook)
                 of items of the form '\item[anything number.anything]'
     gensync :   use a compiled latex original (first arg) to generate a synctex
@@ -33,7 +33,10 @@ def errmsg():
     wr      :   wrap with indented sentence format (for markdown or latex).
                 Optional flag --cleanoo cleans latex exported from
                 OpenOffice/LibreOffice
-    xx      :   Convert xml to xlsx"""
+                Optional flag -i # specifies indentation level for subsequent
+                lines of a sentence (defaults to 4 -- e.g. for markdown you
+                will always want -i 0)
+    xx      :   Convert xml to xlsx""")
     exit()
 _ROOT = os.path.abspath(os.path.dirname(__file__))
 def get_data(path):
@@ -45,14 +48,14 @@ def recursive_include_search(directory, basename, does_it_input):
     # we're only sensitive to the name of the file, not the directory that it's in
     pattern = re.compile(r'\n[^%]*\\(?:input|include)[{]((?:[^}]*/)?'+does_it_input+')[}]')
     for actual_name in pattern.findall(alltxt):
-        print basename+" directly includes "+does_it_input
+        print(basename+" directly includes "+does_it_input)
         return True,actual_name
-    print "file %s didn't directly include '%s' -- I'm going to look for the files that it includes"%(basename, does_it_input)
+    print("file %s didn't directly include '%s' -- I'm going to look for the files that it includes"%(basename, does_it_input))
     pattern = re.compile(r'\n[^%]*\\(?:input|include)[{]([^}]+)[}](.*)')
     for inputname,extra in pattern.findall(alltxt):
         if '\\input' in extra or '\\include' in extra:
             raise IOError("Don't put multiple include or input statements on one lien --> are you trying to make my life difficult!!!??? ")
-        print "%s includes input file:"%basename,inputname
+        print("%s includes input file:"%basename,inputname)
         retval,actual_name = recursive_include_search(
                 directory,
                 os.path.normpath(inputname),
@@ -68,15 +71,15 @@ def look_for_pdf(directory,origbasename):
     for fname in os.listdir(directory):
         if fname[-4:] == '.tex':
             basename = fname[:-4]
-            print "found tex file",basename
+            print("found tex file",basename)
             if os.path.exists(os.path.join(directory,basename + '.pdf')):
-                print "found matching tex/pdf pair",basename
+                print("found matching tex/pdf pair",basename)
                 retval, actual_name = recursive_include_search(directory, basename, origbasename)
                 if retval:
                     return True,basename,actual_name
                 if not found:
-                    print "but it doesn't seem to include",origbasename
-                    print "about to check for other inputs"
+                    print("but it doesn't seem to include",origbasename)
+                    print("about to check for other inputs")
     return found,basename,actual_name
 def main():
     if len(sys.argv) == 1:
@@ -85,7 +88,7 @@ def main():
     arguments = sys.argv[2:]
     if command == 'num':
         check_numbers.run(arguments)
-    elif command == 'nb2scr':
+    elif command == 'nb2py':
         assert arguments[0].endswith('.ipynb'),"this is supposed to be called with a .ipynb file argument! (arguments are %s)"%repr(arguments)
         nb = nbformat.read(arguments[0],nbformat.NO_CONVERT)
         last_was_markdown = False
@@ -117,29 +120,39 @@ def main():
                     #fpout.write("end code\n")
                 else:
                     raise ValueError('Unknown cell type')
-    elif command == 'nb2py':
+    elif command == 'py2nb':
         jupyter_magic_re = re.compile("^get_ipython\(\).magic\(u'(.*)'\)")
         jupyter_cellmagic_re = re.compile("^get_ipython\(\).run_cell_magic\(u'(.*)'\)")
-        assert len(arguments) == 1,"nb2py should only be called with one argument"
+        assert len(arguments) == 1,"py2nb should only be called with one argument"
         assert arguments[0].endswith('.py'),"this is supposed to be called with a .py file argument! (arguments are %s)"%repr(arguments)
-        with open(arguments[0]) as fpin:
-            text = fpin.read().decode('utf8')
+        with open(arguments[0], encoding='utf-8') as fpin:
+            text = fpin.read()
         text = text.split('\n')
         newtext = []
-        last_had_hash = False
+        last_had_markdown = False
         last_had_code = False
         for thisline in text:
-            if thisline.startswith('# coding: utf-8'):
-                pass
-            elif thisline.startswith('# In['):
-                last_had_code = False
-            elif thisline.startswith('# Out['):
-                pass
-            elif thisline.startswith('# '):
-                if not last_had_hash:
-                    newtext.append('# <markdowncell>')
-                newtext.append(thisline)
-                last_had_hash = True
+            if thisline.startswith('#'):
+                if thisline.startswith('#!') and 'python' in thisline:
+                    pass
+                elif thisline.startswith('# coding: utf-8'):
+                    pass
+                elif thisline.startswith('# In['):
+                    last_had_code = False
+                elif thisline.startswith('# Out['):
+                    pass
+                elif thisline.startswith('# '):
+                    # this is markdown unless the previous line was code
+                    if not last_had_markdown and not last_had_code:
+                        newtext.append('# <markdowncell>')
+                        last_had_markdown = True
+                        last_had_code = False
+                    else:
+                        last_had_markdown = False
+                        last_had_code = True
+                    newtext.append(thisline)
+            elif len(thisline) == 0:
+                last_had_markdown = False
                 last_had_code = False
             else:
                 if not last_had_code:
@@ -152,7 +165,7 @@ def main():
                     if m:
                         thisline = '%%'+m.groups()[0]
                 newtext.append(thisline)
-                last_had_hash = False
+                last_had_markdown = False
                 last_had_code = True
         text = '\n'.join(newtext)
 
@@ -170,8 +183,8 @@ def main():
             'language':'python'}})
 
         jsonform = nbformat.v4.writes(nbook) + "\n"
-        with open(arguments[0].replace('.py','.ipynb'), "w") as fpout:
-            fpout.write(jsonform.encode('utf8'))
+        with open(arguments[0].replace('.py','.ipynb'), "w", encoding='utf-8') as fpout:
+            fpout.write(jsonform)
     elif command == 'gensync':
         with gzip.open(arguments[0].replace(
             '.pdf','.synctek.gz')) as fp:
@@ -194,10 +207,15 @@ def main():
             fp.close()
     elif command == 'wr':
         logging.debug("arguments are",arguments)
+        kwargs = {}
+        if '-i' in arguments:
+            idx = arguments.index('-i')
+            arguments.pop(idx)
+            kwargs['indent_amount'] = int(arguments.pop(idx))
         if len(arguments) == 1:
-            wrap_sentences.run(arguments[0])
+            wrap_sentences.run(arguments[0],**kwargs)
         elif len(arguments) == 2 and arguments[0] == '--cleanoo':
-            wrap_sentences.run(arguments[1],stupid_strip = True)
+            wrap_sentences.run(arguments[1],stupid_strip = True,**kwargs)
             logging.debug("stripped stupid markup from LibreOffice")
         elif len(arguments) == 0:
             wrap_sentences.run(None) # assumes stdin
@@ -235,10 +253,10 @@ def main():
             #}}}
         word_files = [x.replace('.md','.docx') for x in arguments[:2]]
         local_dir = os.path.dirname(arguments[1])
-        print "local directory:",local_dir
+        print("local directory:",local_dir)
         for j in range(2):
             if arguments[0][-5:] == '.docx':
-                print "the first argument has a docx extension, so I'm bypassing the pandoc step"
+                print("the first argument has a docx extension, so I'm bypassing the pandoc step")
             else:
                 cmd = ['pandoc']
                 cmd += [arguments[j]]
@@ -255,17 +273,17 @@ def main():
                     cmd += ['--reference-docx=' + local_dir + os.path.sep + "template.docx"]
                 cmd += ['-o']
                 cmd += [word_files[j]]
-                print "about to run",' '.join(cmd)
+                print("about to run",' '.join(cmd))
                 os.system(' '.join(cmd))
         cmd = ['start']
         cmd += [get_data('diff-doc.js')]
-        print "word files are",word_files
+        print("word files are",word_files)
         if word_files[0].find("C:") > -1:
             cmd += [word_files[0]]
         else:
             cmd += [os.getcwd() + os.path.sep + word_files[0]]
         cmd += [os.getcwd() + os.path.sep + word_files[1]]
-        print "about to run",' '.join(cmd)
+        print("about to run",' '.join(cmd))
         os.system(' '.join(cmd))
     elif command == 'fs':
         texfile,lineno = arguments
@@ -278,25 +296,25 @@ def main():
             cmd.append(os.path.join(directory,origbasename+'.pdf'))
             tex_name=origbasename
         else:
-            print "no pdf file for this guy, looking for one that has one"
+            print("no pdf file for this guy, looking for one that has one")
             found,basename,tex_name = look_for_pdf(directory, origbasename)
             orig_directory = directory
             if not found:
                 while os.path.sep in directory and directory.lower()[-1] != ':':
                     directory, _ = directory.rsplit(os.path.sep,1)
-                    print "looking one directory up, in ",directory
+                    print("looking one directory up, in ",directory)
                     found,basename,tex_name = look_for_pdf(directory, origbasename)
                     if found: break
             if not found: raise IOError("This is not the PDF you are looking for!!!")
-            print "result:",directory,origbasename,found,basename,tex_name
+            print("result:",directory,origbasename,found,basename,tex_name)
             # file has been found, so add to the command
             cmd.append(os.path.join(directory,basename+'.pdf'))
         cmd.append('-forward-search')
         cmd.append(tex_name+'.tex')
         cmd.append('%s -fwdsearch-color ff0000'%lineno)
-        print "changing to directory",directory
+        print("changing to directory",directory)
         os.chdir(directory)
-        print "about to execute:\n\t",' '.join(cmd)
+        print("about to execute:\n\t",' '.join(cmd))
         os.system(' '.join(cmd))
     elif command == 'xx':
         format_codes = {'csv':6, 'xlsx':51, 'xml':46} # determined by microsoft vbs
@@ -310,7 +328,7 @@ def main():
             else:
                 cmd += [os.getcwd() + os.path.sep + j]
         cmd += [str(format_codes[j]) for j in [first_ext, second_ext]]
-        print "about to run",' '.join(cmd)
+        print("about to run",' '.join(cmd))
         os.system(' '.join(cmd))
     else:
         errmsg()

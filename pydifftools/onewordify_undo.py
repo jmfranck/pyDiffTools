@@ -13,7 +13,7 @@ normalline_re = re.compile(r'^\(%SPACE%\)\|\(%NEWLINE%\)')
 notweird_re = re.compile(r'^(%SPACE%)|(%\[ORIG%)|(%ORIG\]\[NEW%)|(%NEW\]%)')
 text_list = []
 found_beginning = False
-print 'opened',sys.argv[1]
+print('opened',sys.argv[1])
 #{{{ pull out just the part between the document text
 for thisline in fp:
     if (thisline[:7] == '<<<<<<<') or (thisline[:7] == '=======') or (thisline[:7] == '>>>>>>>'):
@@ -21,12 +21,12 @@ for thisline in fp:
     else:
         text_list.append(thisline.rstrip())
 fp.close()
-text_list = map(lambda x: x.replace('%NEWLINE%','\n'),text_list)
+text_list = [x.replace('%NEWLINE%','\n') for x in text_list]
 #{{{ don't mess with the "special" lines
 for j,thisline in enumerate(text_list):
     if not notweird_re.match(thisline):
         if paragraphcommands_re.match(thisline) or commentline_re.match(thisline):
-            print "found special line '",thisline,"'"
+            print("found special line '",thisline,"'")
             text_list[j] = thisline.replace(' ',' %SPACE% ')
 #}}}
 text_list = ' '.join(text_list)

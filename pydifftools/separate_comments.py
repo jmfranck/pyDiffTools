@@ -1,9 +1,9 @@
 import re
 import sys
-from comment_functions import generate_alphabetnumber,matchingbrackets,comment_definition
+from .comment_functions import generate_alphabetnumber,matchingbrackets,comment_definition
 if sys.argv[1][-4:] == '.tex':
     base_filename = sys.argv[1][:-4]
-    print "yes, a tex file called",base_filename,'.tex'
+    print("yes, a tex file called",base_filename,'.tex')
 else:
     raise RuntimeError("not a tex file??")
 fp = open(base_filename+'.tex','r')
@@ -14,7 +14,7 @@ a = content.find(comment_string)
 if a>0:
     b = content.find('\n',a+len(comment_string))
     num_matches = int(content[a+len(comment_string):b])
-    print "found %d comments already!"%num_matches
+    print("found %d comments already!"%num_matches)
 else:
     num_matches = 0
 content = content.replace(r'\begin{document}',"\\include{%s_comments}\n\\begin{document}"%base_filename)
@@ -30,7 +30,7 @@ while thismatch:
     if bracket_type == '[':
         highlight = content[a+1:b]
         a,b = matchingbrackets(content,b,'{')
-        print "found comment:",content[a:b+1]
+        print("found comment:",content[a:b+1])
         comment = content[a+1:b]
         endpoint = b
     else:
@@ -40,15 +40,15 @@ while thismatch:
     after = content[endpoint+1:]
     # replace and search again
     envstring = thisname+generate_alphabetnumber(num_matches)
-    print '%s--------------------'%envstring
-    print "highlight:\n",highlight
-    print "comment:\n",comment
-    print '--------------------'
-    print "before replace:\n",content[thismatch.start():endpoint]
+    print('%s--------------------'%envstring)
+    print("highlight:\n",highlight)
+    print("comment:\n",comment)
+    print('--------------------')
+    print("before replace:\n",content[thismatch.start():endpoint])
     content = before + r"\%s"%envstring + "{" + highlight + "}" + after 
-    print '--------------------'
-    print "after replace:\n",content[thismatch.start():endpoint]
-    print '--------------------'
+    print('--------------------')
+    print("after replace:\n",content[thismatch.start():endpoint])
+    print('--------------------')
     comment_collection += comment_definition(envstring,thisname,comment)
     thismatch = comment_re.search(content)
     num_matches += 1

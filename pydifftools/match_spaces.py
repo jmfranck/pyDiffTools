@@ -8,9 +8,9 @@ def run(arguments):
     text2 = fp.read()
     fp.close()
     #text2 = text2.decode('utf-8')
-    utf_char = u'\u00a0'.encode('utf-8')# unicode no break space
+    utf_char = '\u00a0'.encode('utf-8')# unicode no break space
     text2 = text2.replace(utf_char,' ')# replace it
-    utf_char = u'\u2004'.encode('utf-8')# three-per-em space
+    utf_char = '\u2004'.encode('utf-8')# three-per-em space
     text2 = text2.replace(utf_char,' ')# replace it
     def parse_whitespace(s):
         retval = []
@@ -111,15 +111,15 @@ def run(arguments):
                 newline_debt += 1
             #print "delete -- newline debt is now",newline_debt
         elif j[0] is 'replace':
-            print "newline debt",newline_debt
+            print("newline debt",newline_debt)
             newline_debt += sum([thisstr.count('\n') for thisstr in text1_whitespace[j[1]:j[2]]])
             #print "replace -- newline debt is now",newline_debt
-            print "about to replace",text1_words[j[1]:j[2]]
-            print "   with",text2_words[j[3]:j[4]]
-            print "   whitepace from ",repr(text1_whitespace[j[1]:j[2]])
+            print("about to replace",text1_words[j[1]:j[2]])
+            print("   with",text2_words[j[3]:j[4]])
+            print("   whitepace from ",repr(text1_whitespace[j[1]:j[2]]))
             oldver_whitespace = text1_whitespace[j[1]:j[2]]
-            print "   whitepace to ",repr(text2_whitespace[j[3]:j[4]])
-            print "   newline debt",newline_debt
+            print("   whitepace to ",repr(text2_whitespace[j[3]:j[4]]))
+            print("   newline debt",newline_debt)
             temp_addition = text2_words[j[3]:j[4]]
             #{{{ check to see if I am adding any double newlines -- if I am use the original version
             temp_isdoublenewline = text2_isdoublenewline[j[3]:j[4]]
@@ -151,7 +151,7 @@ def run(arguments):
                         newline_debt -= whitespace[k].count('\n')# shouldn't be more than one but doesn't hurt
                         if newline_debt < 1:
                             break
-            print "   whitepace became",repr(whitespace)
+            print("   whitepace became",repr(whitespace))
             for k in range(len(temp_addition)):
                 final_text += temp_addition[k] + whitespace[k]
                 idx = whitespace[k].find('\n')
