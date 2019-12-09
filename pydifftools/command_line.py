@@ -129,8 +129,9 @@ def main():
             text = fpin.read()
         text = text.split('\n')
         newtext = []
-        last_had_markdown = False
-        last_had_code = False
+        in_markdown_cell = False
+        in_code_cell = False
+        last_line_empty = True
         for thisline in text:
             if thisline.startswith('#'):
                 if thisline.startswith('#!') and 'python' in thisline:
@@ -138,25 +139,26 @@ def main():
                 elif thisline.startswith('# coding: utf-8'):
                     pass
                 elif thisline.startswith('# In['):
-                    last_had_code = False
+                    in_code_cell = False
+                    in_markdown_cell = False
                 elif thisline.startswith('# Out['):
                     pass
                 elif thisline.startswith('# '):
-                    # this is markdown unless the previous line was code
-                    if not last_had_markdown and not last_had_code:
+                    # this is markdown only if the previous line was empty
+                    if last_line_empty:
                         newtext.append('# <markdowncell>')
-                        last_had_markdown = True
-                        last_had_code = False
-                    else:
-                        last_had_markdown = False
-                        last_had_code = True
+                        in_code_cell = False
+                        in_markdown_cell = True
                     newtext.append(thisline)
+                last_line_empty = False
             elif len(thisline) == 0:
-                last_had_markdown = False
-                last_had_code = False
+                last_line_empty = True
+                newtext.append(thisline)
             else:
-                if not last_had_code:
+                if not in_code_cell:
                     newtext.append('# <codecell>')
+                    in_code_cell = True
+                    in_markdown_cell = False
                 m = jupyter_magic_re.match(thisline)
                 if m:
                     thisline = '%'+m.groups()[0]
@@ -165,8 +167,7 @@ def main():
                     if m:
                         thisline = '%%'+m.groups()[0]
                 newtext.append(thisline)
-                last_had_markdown = False
-                last_had_code = True
+                last_line_empty = False
         text = '\n'.join(newtext)
 
         text += """
