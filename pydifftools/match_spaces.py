@@ -1,16 +1,15 @@
 from difflib import SequenceMatcher
 def run(arguments):
-    fp = open(arguments[0])
-    text1 = fp.read()
-    fp.close()
+    with open(arguments[0], encoding='utf-8') as fp:
+        text1 = fp.read()
     #text1 = text1.decode('utf-8')
     fp = open(arguments[1])
     text2 = fp.read()
     fp.close()
     #text2 = text2.decode('utf-8')
-    utf_char = '\u00a0'.encode('utf-8')# unicode no break space
+    utf_char = '\u00a0' # unicode no break space
     text2 = text2.replace(utf_char,' ')# replace it
-    utf_char = '\u2004'.encode('utf-8')# three-per-em space
+    utf_char = '\u2004' # three-per-em space
     text2 = text2.replace(utf_char,' ')# replace it
     def parse_whitespace(s):
         retval = []
