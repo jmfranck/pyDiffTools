@@ -93,6 +93,7 @@ def main():
         nb = nbformat.read(arguments[0],nbformat.NO_CONVERT)
         last_was_markdown = False
         jupyter_magic_re = re.compile(r"%(.*)")
+        code_counter = 1
         with open(arguments[0].replace('.ipynb','.py'),'w') as fpout:
             for j in nb.cells:
                 lines = j['source'].split('\n')
@@ -106,7 +107,8 @@ def main():
                 elif j['cell_type'] == 'code':
                     #fpout.write("start code\n")
                     if not last_was_markdown:
-                        fpout.write('# \n\n')
+                        fpout.write('# In[%d]:\n\n'%code_counter)
+                        code_counter += 1
                     for line in lines:
                         m = jupyter_magic_re.match(line)
                         if m:
