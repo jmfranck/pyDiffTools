@@ -7,6 +7,7 @@ import subprocess
 import logging
 import re
 import nbformat
+import difflib
 def errmsg():
     print(r"""arguments are:
     fs      :   smart latex forward-search
@@ -24,6 +25,7 @@ def errmsg():
                 file for a scanned document (second arg), e.g.  with
                 handwritten markup
     wmatch  :   match whitespace
+    cmp     :   compare files, and rank by how well they compare
     gvr     :   git forward search, with arguments
 
                 - file
@@ -94,7 +96,7 @@ def main():
         last_was_markdown = False
         jupyter_magic_re = re.compile(r"%(.*)")
         code_counter = 1
-        with open(arguments[0].replace('.ipynb','.py'),'w') as fpout:
+        with open(arguments[0].replace('.ipynb','.py'),'w',encoding='utf-8') as fpout:
             for j in nb.cells:
                 lines = j['source'].split('\n')
                 if j['cell_type'] == 'markdown':
@@ -123,8 +125,8 @@ def main():
                 else:
                     raise ValueError('Unknown cell type')
     elif command == 'py2nb':
-        jupyter_magic_re = re.compile("^get_ipython\(\).magic\(u'(.*)'\)")
-        jupyter_cellmagic_re = re.compile("^get_ipython\(\).run_cell_magic\(u'(.*)'\)")
+        jupyter_magic_re = re.compile("^get_ipython\(\).(?:run_line_)?magic\((?:u?'([^']*)')?"+6*"(?:u?, *'([^']*)')?"+"\)")
+        jupyter_cellmagic_re = re.compile("^get_ipython\(\).run_cell_magic\((?:u?'([^']*)')?"+6*"(?:u?, *'([^']*)')?"+"\)\)")
         assert len(arguments) == 1,"py2nb should only be called with one argument"
         assert arguments[0].endswith('.py'),"this is supposed to be called with a .py file argument! (arguments are %s)"%repr(arguments)
         with open(arguments[0], encoding='utf-8') as fpin:
@@ -163,11 +165,11 @@ def main():
                     in_markdown_cell = False
                 m = jupyter_magic_re.match(thisline)
                 if m:
-                    thisline = '%'+m.groups()[0]
+                    thisline = '%'+' '.join((j for j in m.groups() if j is not None))
                 else:
                     m = jupyter_cellmagic_re.match(thisline)
                     if m:
-                        thisline = '%%'+m.groups()[0]
+                        thisline = '%%'+' '.join((j for j in m.groups() if j is not None))
                 newtext.append(thisline)
                 last_line_empty = False
         text = '\n'.join(newtext)
@@ -333,6 +335,16 @@ def main():
         cmd += [str(format_codes[j]) for j in [first_ext, second_ext]]
         print("about to run",' '.join(cmd))
         os.system(' '.join(cmd))
+    elif command == 'cmp':
+        target = arguments[0]
+        arguments = arguments[1:]
+        with open(target, encoding='utf-8') as fp:
+            base_txt = fp.read()
+        retval = {}
+        for j in arguments:
+            with open(j, encoding='utf-8') as fp:
+                retval[j] = difflib.SequenceMatcher(None,base_txt,fp.read()).ratio()
+        print('\n'.join(str(v)+'-->'+str(k) for k, v in sorted(retval.items(), key=lambda item: item[1], reverse=True)))
     else:
         errmsg()
     return
