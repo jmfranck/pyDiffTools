@@ -56,7 +56,7 @@ def get_data(path):
     "return vbs and js scripts saved as package data"
     return os.path.join(_ROOT, path)
 def recursive_include_search(directory, basename, does_it_input):
-    with open(os.path.join(directory,basename+'.tex'),'r') as fp:
+    with open(os.path.join(directory,basename+'.tex'),'r',encoding='utf-8') as fp:
         alltxt = fp.read()
     # we're only sensitive to the name of the file, not the directory that it's in
     pattern = re.compile(r'\n[^%]*\\(?:input|include)[{]((?:[^}]*/)?'+does_it_input+')[}]')
@@ -322,7 +322,14 @@ def main():
             orig_directory = directory
             if not found:
                 while os.path.sep in directory and directory.lower()[-1] != ':':
+                    build_nb = os.path.join(directory,'build_nb')
                     directory, _ = directory.rsplit(os.path.sep,1)
+                    if os.path.exists(build_nb):
+                        print("looking for a build_nb subdirectory")
+                        found,basename,tex_name = look_for_pdf(build_nb, origbasename)
+                        if found:
+                            directory = build_nb
+                            break
                     print("looking one directory up, in ",directory)
                     found,basename,tex_name = look_for_pdf(directory, origbasename)
                     if found: break
