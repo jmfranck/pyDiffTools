@@ -3,7 +3,7 @@ def run(arguments):
     with open(arguments[0], encoding='utf-8') as fp:
         text1 = fp.read()
     #text1 = text1.decode('utf-8')
-    fp = open(arguments[1])
+    fp = open(arguments[1], encoding='utf-8')
     text2 = fp.read()
     fp.close()
     #text2 = text2.decode('utf-8')
@@ -113,11 +113,11 @@ def run(arguments):
             print("newline debt",newline_debt)
             newline_debt += sum([thisstr.count('\n') for thisstr in text1_whitespace[j[1]:j[2]]])
             #print "replace -- newline debt is now",newline_debt
-            print("about to replace",text1_words[j[1]:j[2]])
-            print("   with",text2_words[j[3]:j[4]])
-            print("   whitepace from ",repr(text1_whitespace[j[1]:j[2]]))
+            print("about to replace",repr(text1_words[j[1]:j[2]]).encode('unicode-escape'))
+            print("   with",repr(text2_words[j[3]:j[4]]).encode('unicode-escape'))
+            print("   whitepace from ",repr(text1_whitespace[j[1]:j[2]]).encode('unicode-escape'))
             oldver_whitespace = text1_whitespace[j[1]:j[2]]
-            print("   whitepace to ",repr(text2_whitespace[j[3]:j[4]]))
+            print("   whitepace to ",repr(text2_whitespace[j[3]:j[4]]).encode('unicode-escape'))
             print("   newline debt",newline_debt)
             temp_addition = text2_words[j[3]:j[4]]
             #{{{ check to see if I am adding any double newlines -- if I am use the original version
@@ -174,6 +174,6 @@ def run(arguments):
                     last_indent = whitespace[k][idx+1:]
         else:
             raise ValueError("unknown opcode"+j[0])
-    fp = open(arguments[1],'w')
+    fp = open(arguments[1],'w',encoding='utf-8')
     fp.write(final_text)
     fp.close()
