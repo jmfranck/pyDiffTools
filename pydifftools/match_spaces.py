@@ -95,7 +95,7 @@ def run(arguments):
     newline_debt = 0
     last_indent = ''
     for j in diffs:
-        if j[0] is 'equal':
+        if j[0] == 'equal':
             temp_addition = text1_words[j[1]:j[2]]
             whitespace = text1_whitespace[j[1]:j[2]]
             for k in range(len(temp_addition)):
@@ -105,11 +105,11 @@ def run(arguments):
                     last_indent = whitespace[k][idx+1:]
             if j[2] - j[1] > 4:# if five or more words have matched, forgive my newline debt
                 newline_debt = 0
-        elif j[0] is 'delete':
+        elif j[0] == 'delete':
             if sum([thisstr.count('\n') for thisstr in text1_whitespace[j[1]:j[2]]]) > 0:
                 newline_debt += 1
             #print "delete -- newline debt is now",newline_debt
-        elif j[0] is 'replace':
+        elif j[0] == 'replace':
             print("newline debt",newline_debt)
             newline_debt += sum([thisstr.count('\n') for thisstr in text1_whitespace[j[1]:j[2]]])
             #print "replace -- newline debt is now",newline_debt
@@ -156,7 +156,7 @@ def run(arguments):
                 idx = whitespace[k].find('\n')
                 if idx > -1:
                     last_indent = whitespace[k][idx+1:]
-        elif j[0] is 'insert':
+        elif j[0] == 'insert':
             temp_addition = text2_words[j[3]:j[4]]
             newver_whitespace = text2_whitespace[j[3]:j[4]]
             whitespace = [' ' if len(x) > 0 else '' for x in newver_whitespace]# sometimes, the "whitespace" can be nothing

@@ -296,7 +296,12 @@ def main():
         directory, texfile = texfile.rsplit(os.path.sep,1)
         assert texfile[-4:] == '.tex','needs to be called .tex'
         origbasename = texfile[:-4]
-        cmd = ['"C:\\Program Files\\SumatraPDF\\SumatraPDF.exe" -reuse-instance']
+        if os.name == 'posix':
+            # linux
+            cmd = ['okular --unique']
+        else:
+            # windows
+            cmd = ['start sumatrapdf -reuse-instance']
         if os.path.exists(os.path.join(directory,origbasename+'.pdf')):
             cmd.append(os.path.join(directory,origbasename+'.pdf'))
             tex_name=origbasename
@@ -314,9 +319,13 @@ def main():
             print("result:",directory,origbasename,found,basename,tex_name)
             # file has been found, so add to the command
             cmd.append(os.path.join(directory,basename+'.pdf'))
-        cmd.append('-forward-search')
-        cmd.append(tex_name+'.tex')
-        cmd.append('%s -fwdsearch-color ff0000'%lineno)
+        if os.name == 'posix':
+            cmd[-1] = cmd[-1]+'#src:%s%s'%(lineno,os.path.join(directory,tex_name+'.tex'))
+            cmd.append('&')
+        else:
+            cmd.append('-forward-search')
+            cmd.append(tex_name+'.tex')
+            cmd.append('%s -fwdsearch-color ff0000'%lineno)
         print("changing to directory",directory)
         os.chdir(directory)
         print("about to execute:\n\t",' '.join(cmd))
