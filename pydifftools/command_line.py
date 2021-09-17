@@ -1,5 +1,8 @@
 import sys
 from . import check_numbers,match_spaces,split_conflict,wrap_sentences
+from .separate_comments import tex_sepcomments
+from .unseparate_comments import tex_unsepcomments
+from .comment_functions import matchingbrackets
 import os
 import gzip
 import time
@@ -8,6 +11,9 @@ import logging
 import re
 import nbformat
 import difflib
+def printed_exec(cmd):
+    print('about to execute:\n',cmd)
+    os.system(cmd)
 def errmsg():
     print(r"""arguments are:
     fs      :   smart latex forward-search
@@ -31,6 +37,8 @@ def errmsg():
                 - file
                 - line
     sc      :   split conflict
+    sepc    :   tex separate comments
+    unsepc  :   tex unseparate comments
     wd      :   word diff
     wr      :   wrap with indented sentence format (for markdown or latex).
                 Optional flag --cleanoo cleans latex exported from
@@ -354,6 +362,70 @@ def main():
             with open(j, encoding='utf-8') as fp:
                 retval[j] = difflib.SequenceMatcher(None,base_txt,fp.read()).ratio()
         print('\n'.join(str(v)+'-->'+str(k) for k, v in sorted(retval.items(), key=lambda item: item[1], reverse=True)))
+    elif command == 'sepc':
+        tex_sepcomments(arguments[0])
+    elif command == 'unsepc':
+        tex_unsepcomments(arguments[0])
+    elif command == 'tex2docx':
+        filename = arguments[0]
+        assert filename[-4:] == '.tex'
+        basename = filename[:-4]
+        with open("%s.tex"%basename,'r',encoding='utf-8') as fp:
+            content = fp.read()
+        comment_re = re.compile(r"\\pdfcomment([A-Z]+)\b")
+        thismatch = comment_re.search(content) #match doesn't work with newlines, apparently
+        while thismatch:
+            a = thismatch.start()
+            b,c = matchingbrackets(content,a,'{')
+            content = content[:a] + content[a+1:b] + '(' + content[b+1:c] + ')' + content[c+1:]
+            thismatch = comment_re.search(content)
+        with open("%s_parencomments.tex"%basename,'w',encoding='utf-8') as fp:
+            fp.write(content)
+        printed_exec('pandoc %s_parencomments.tex -o %s.md'%((basename,)*2))
+        with open("%s.md"%basename,'r',encoding='utf-8') as fp:
+            content = fp.read()
+        thisid = 2
+        comment_re = re.compile(r"pdfcomment([A-Z]+)\(")
+        thismatch = comment_re.search(content) #match doesn't work with newlines, apparently
+        while thismatch:
+            a = thismatch.start()
+            b,c = matchingbrackets(content,a,'(')
+            author = thismatch.groups()[0]
+            content = (content[:a] +
+                    '[%s]{.comment-start id="%d" author="%s"}'%(content[b+1:c],
+                        thisid, author)
+                    + '[]{.comment-end id="%d"}'%thisid
+                    + content[c+1:])
+            thisid += 1
+            thismatch = comment_re.search(content)
+        with open("%s.md"%basename,'w',encoding='utf-8') as fp:
+            fp.write(content)
+        printed_exec('pandoc %s.md -o %s.docx'%((basename,)*2))
+        printed_exec('start %s.docx'%(basename))
+    elif command == 'docx2tex':
+        filename = arguments[0]
+        assert filename[-5:] == '.docx'
+        basename = filename[:-5]
+        printed_exec('pandoc %s.docx --track-changes=all -o %s.md'%((basename,)*2))
+        with open("%s.md"%basename,'r',encoding='utf-8') as fp:
+            content = fp.read()
+        citation_re = re.compile(r"\\\[\\@")
+        thismatch = citation_re.search(content) #match doesn't work with newlines, apparently
+        while thismatch:
+            a,b = matchingbrackets(content,thismatch.start(),'[')
+            content = content[:a-1] + content[a:b].replace('\\','') + content[b:]
+            thismatch = citation_re.search(content)
+        with open("%s.md"%basename,'w',encoding='utf-8') as fp:
+            fp.write(content)
+        printed_exec('pandoc %s.md --biblatex -r markdown-auto_identifiers -o %s_reconv.tex'%((basename,)*2))
+        print("about to match spaces:")
+        match_spaces.run((basename+'.tex',basename+'_reconv.tex'))
+        with open("%s_reconv.tex"%basename,'r',encoding='utf-8') as fp:
+            content = fp.read()
+        citation_re = re.compile(r"\\autocite\b")
+        content = citation_re.sub(r'\\cite',content)
+        with open("%s_reconv.tex"%basename,'w',encoding='utf-8') as fp:
+            fp.write(content)
     else:
         errmsg()
     return

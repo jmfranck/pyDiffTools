@@ -1,5 +1,4 @@
 #again rerun
-from lxml import html,etree
 import os
 import re
 def run(arguments):

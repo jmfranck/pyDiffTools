@@ -1,10 +1,10 @@
 def comment_definition(commandname,name,comment_text):
-    return r'\newcommand{\%s}[1]{\%smark{#1}\%sbubble{%s}}'%(commandname,name,name,comment_text)+"\n"
+    return r'\newcommand{\%s}{%s}'%(commandname,comment_text)+"\n"
 def generate_alphabetnumber(x):
     if x<26:
-        return chr(ord("A")+x)
+        return chr(ord("a")+x)
     else:
-        higher_places = x/26
+        higher_places = x//26
         return generate_alphabetnumber(higher_places-1)+generate_alphabetnumber(x-higher_places*26)
 def matchingbrackets(content,startpoint,bracket_type):
     if bracket_type == '(':
