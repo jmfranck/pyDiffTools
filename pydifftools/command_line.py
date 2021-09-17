@@ -13,7 +13,10 @@ import nbformat
 import difflib
 def printed_exec(cmd):
     print('about to execute:\n',cmd)
-    os.system(cmd)
+    result = os.system(cmd)
+    if result != 0:
+        raise RuntimeError("os.system failed for command:\n"+cmd
+        +"\n\nTry running the command by itself")
 def errmsg():
     print(r"""arguments are:
     fs      :   smart latex forward-search
@@ -380,8 +383,9 @@ def main():
             content = content[:a] + content[a+1:b] + '(' + content[b+1:c] + ')' + content[c+1:]
             thismatch = comment_re.search(content)
         with open("%s_parencomments.tex"%basename,'w',encoding='utf-8') as fp:
+            fp.write(r'\renewcommand{\nts}[1]{\textbf{\textit{#1}}}'+'\n')
             fp.write(content)
-        printed_exec('pandoc %s_parencomments.tex -o %s.md'%((basename,)*2))
+        printed_exec('pandoc %s_parencomments.tex -f latex+latex_macros -o %s.md'%((basename,)*2))
         with open("%s.md"%basename,'r',encoding='utf-8') as fp:
             content = fp.read()
         thisid = 2
@@ -424,6 +428,17 @@ def main():
             content = fp.read()
         citation_re = re.compile(r"\\autocite\b")
         content = citation_re.sub(r'\\cite',content)
+        paragraph_re = re.compile(r"\n\n(\\paragraph{.*)\n\n")
+        content = paragraph_re.sub(r'\1',content)
+        # {{{ convert \( to dollars
+        math_re = re.compile(r"\\\(")
+        thismatch = math_re.search(content) #match doesn't work with newlines, apparently
+        while thismatch:
+            a = thismatch.start()
+            b,c = matchingbrackets(content,a,'(')
+            content = content[:a] + '$' + content[a+1:b] + '$' + content[c+1:]
+            thismatch = math_re.search(content)
+        # }}}
         with open("%s_reconv.tex"%basename,'w',encoding='utf-8') as fp:
             fp.write(content)
     else:
