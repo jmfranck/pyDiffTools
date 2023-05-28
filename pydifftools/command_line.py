@@ -259,10 +259,10 @@ def main():
     elif command == 'wd':
         if arguments[0].find('Temp') > 0:
             #{{{ if it's a temporary file, I need to make a real copy to run pandoc on
-            fp = open(arguments[0])
+            fp = open(arguments[0], encoding='utf-8')
             contents = fp.read()
             fp.close()
-            fp = open(arguments[1].replace('.md','_old.md'),'w')
+            fp = open(arguments[1].replace('.md','_old.md'),'w', encoding='utf-8')
             fp.write(contents)
             fp.close()
             arguments[0] = arguments[1].replace('.md','_old.md')
