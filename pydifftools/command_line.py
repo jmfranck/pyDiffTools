@@ -11,6 +11,7 @@ import logging
 import re
 import nbformat
 import difflib
+import shutil
 def printed_exec(cmd):
     print('about to execute:\n',cmd)
     result = os.system(cmd)
@@ -309,12 +310,15 @@ def main():
         origbasename = texfile[:-4]
         if os.name == 'posix':
             # linux
-            cmd = ['okular --unique']
+            cmd = ['zathura --synctex-forward']
+            assert shutil.which("zathura"), ("first, install zathura, then set ~/.config/zathura/zathurarc"
+                    "to include"
+                    'set synctex-editor-command "gvim --servername GVIM --remote +%{line} %{input}"')
         else:
             # windows
             cmd = ['start sumatrapdf -reuse-instance']
         if os.path.exists(os.path.join(directory,origbasename+'.pdf')):
-            cmd.append(os.path.join(directory,origbasename+'.pdf'))
+            cmd.append(f"{lineno}:0:{texfile} {os.path.join(directory,origbasename+'.pdf')}")
             tex_name=origbasename
         else:
             print("no pdf file for this guy, looking for one that has one")
@@ -336,9 +340,8 @@ def main():
             if not found: raise IOError("This is not the PDF you are looking for!!!")
             print("result:",directory,origbasename,found,basename,tex_name)
             # file has been found, so add to the command
-            cmd.append(os.path.join(directory,basename+'.pdf'))
+            cmd.append(f"{lineno}:0:{texfile} {os.path.join(directory,basename+'.pdf')}")
         if os.name == 'posix':
-            cmd[-1] = cmd[-1]+'#src:%s%s'%(lineno,os.path.join(directory,tex_name+'.tex'))
             cmd.append('&')
         else:
             cmd.append('-forward-search')
