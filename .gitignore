@@ -1,4 +1,6 @@
 *.pyc
+.*.swp
+tags
 build/
 dist/
 *.egg-info/

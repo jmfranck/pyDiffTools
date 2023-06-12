@@ -3,6 +3,8 @@ from . import check_numbers,match_spaces,split_conflict,wrap_sentences
 from .separate_comments import tex_sepcomments
 from .unseparate_comments import tex_unsepcomments
 from .comment_functions import matchingbrackets
+from .copy_files import copy_image_files
+from .searchacro import replace_acros
 import os
 import gzip
 import time
@@ -12,6 +14,8 @@ import re
 import nbformat
 import difflib
 import shutil
+import time
+from pathlib import Path, PurePosixPath
 def printed_exec(cmd):
     print('about to execute:\n',cmd)
     result = os.system(cmd)
@@ -20,6 +24,10 @@ def printed_exec(cmd):
         +"\n\nTry running the command by itself")
 def errmsg():
     print(r"""arguments are:
+    arxiv   :   make a gzip file suitable for arxiv (currently only test
+                on linux)
+    ac      :   look for the file myacronyms.sty (locally or in texmf) and
+                use it substitute your acronyms
     fs      :   smart latex forward-search
                 currently this works specifically for sumatra pdf located
                 at "C:\Program Files\SumatraPDF\SumatraPDF.exe",
@@ -27,6 +35,7 @@ def errmsg():
                 Add the following line (or something like it) to your vimrc:
                 map <c-F>s :cd %:h\|sil !pydifft fs %:p <c-r>=line(".")<cr><cr>
                 it will map Cntrl-F s to a forward search.
+    rs      :   Reverse search
     py2nb   :   Make a notebook file from a python script, following certain rules.
     nb2py   :   Make a python script from a notebook file, following certain rules.
     num     :   check numbers in a latex catalog (e.g. of numbered notebook)
@@ -302,6 +311,15 @@ def main():
         cmd += [os.getcwd() + os.path.sep + word_files[1]]
         print("about to run",' '.join(cmd))
         os.system(' '.join(cmd))
+    elif command == 'rs':
+        cmd = ["gvim","--servername","GVIM", "--remote",
+                f"+{arguments[0]} {arguments[1]}"]
+        os.system(' '.join(cmd))
+        cmd = ['wmctrl','-a',"GVIM"]
+        os.system(' '.join(cmd))
+        time.sleep(0.5)
+        cmd = ['gvim','--remote-send',"'<esc>zO:cd %:h'<enter>"]
+        os.system(' '.join(cmd))
     elif command == 'fs':
         texfile,lineno = arguments
         texfile = os.path.normpath(os.path.abspath(texfile))
@@ -313,7 +331,7 @@ def main():
             cmd = ['zathura --synctex-forward']
             assert shutil.which("zathura"), ("first, install zathura, then set ~/.config/zathura/zathurarc"
                     "to include"
-                    'set synctex-editor-command "gvim --servername GVIM --remote +%{line} %{input}"')
+                    'set synctex-editor-command "pydifft rs %{line} %{input}"')
         else:
             # windows
             cmd = ['start sumatrapdf -reuse-instance']
@@ -351,6 +369,9 @@ def main():
         os.chdir(directory)
         print("about to execute:\n\t",' '.join(cmd))
         os.system(' '.join(cmd))
+        if os.name == 'posix':
+            cmd = ['wmctrl','-a',basename+'.pdf']
+            os.system(' '.join(cmd))
     elif command == 'xx':
         format_codes = {'csv':6, 'xlsx':51, 'xml':46} # determined by microsoft vbs
         cmd = ['start']
@@ -451,6 +472,36 @@ def main():
         # }}}
         with open("%s_reconv.tex"%basename,'w',encoding='utf-8') as fp:
             fp.write(content)
+    elif command == 'arxiv':
+        ROOT_TEX = arguments[0].strip(".tex")
+        project_name = Path.cwd().name
+        TARGET_DIR = Path(f"../{project_name}_forarxiv/")
+        include_suppinfo = False
+        copy_image_files(ROOT_TEX,project_name,TARGET_DIR,include_suppinfo)
+        os.chdir(Path.cwd().parent)
+        output_filename = f"{project_name}_forarxiv.tgz"
+        # create tar process
+        tar = subprocess.Popen(
+            ["tar", "cf", "-", TARGET_DIR.name], stdout=subprocess.PIPE
+        )
+        # create gzip process, using tar's stdout as its stdin
+        gzip = subprocess.Popen(
+            ["gzip", "-9"], stdin=tar.stdout, stdout=subprocess.PIPE
+        )
+        # close tar's stdout so it doesn't hang around waiting for input
+        tar.stdout.close()
+        # write gzip's stdout to a file
+        with open(output_filename, "wb") as fp:
+            shutil.copyfileobj(gzip.stdout, fp)
+        gzip.stdout.close()
+    elif command == 'ac':
+        # Run kpsewhich and capture the output
+        kpsewhich_output = subprocess.run(['kpsewhich', 'myacronyms.sty'], capture_output=True, text=True)
+
+        # Convert the string to a pathlib Path object if the file was found, else assign None
+        path = Path(kpsewhich_output.stdout.strip()) if kpsewhich_output.returncode == 0 else None
+        print("I'm using the acronyms in",path)
+        replace_acros(path)
     else:
         errmsg()
     return
