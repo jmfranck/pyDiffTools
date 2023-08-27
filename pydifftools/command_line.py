@@ -146,8 +146,8 @@ def main():
                 else:
                     raise ValueError('Unknown cell type')
     elif command == 'py2nb':
-        jupyter_magic_re = re.compile("^get_ipython\(\).(?:run_line_)?magic\((?:u?'([^']*)')?"+6*"(?:u?, *'([^']*)')?"+"\)")
-        jupyter_cellmagic_re = re.compile("^get_ipython\(\).run_cell_magic\((?:u?'([^']*)')?"+6*"(?:u?, *'([^']*)')?"+"\)\)")
+        jupyter_magic_re = re.compile("^get_ipython\(\).(?:run_line_)?magic\((?:u?['\"]([^'\"]*)['\"])?"+6*"(?:u?, *['\"]([^'\"]*)['\"])?"+"\)")
+        jupyter_cellmagic_re = re.compile("^get_ipython\(\).run_cell_magic\((?:u?['\"]([^'\"]*)['\"])?"+6*"(?:u?, *['\"]([^'\"]*)['\"])?"+"\)\)")
         assert len(arguments) == 1,"py2nb should only be called with one argument"
         assert arguments[0].endswith('.py'),"this is supposed to be called with a .py file argument! (arguments are %s)"%repr(arguments)
         with open(arguments[0], encoding='utf-8') as fpin:
@@ -358,7 +358,7 @@ def main():
             if not found: raise IOError("This is not the PDF you are looking for!!!")
             print("result:",directory,origbasename,found,basename,tex_name)
             # file has been found, so add to the command
-            cmd.append(f"{lineno}:0:{texfile} {os.path.join(directory,basename+'.pdf')}")
+            cmd.append(f"{lineno}:0:{tex_name}.tex {os.path.join(directory,basename+'.pdf')}")
         if os.name == 'posix':
             cmd.append('&')
         else:

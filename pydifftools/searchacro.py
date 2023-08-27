@@ -5,9 +5,11 @@ from pathlib import Path
 
 def replace_acros(pathtofile):
     clean_unused = False
-    if pathtofile.parent == Path.cwd():
+    if pathtofile.parent.resolve() == Path.cwd():
         clean_unused = True
         print("I'm going to clean out the unused acronyms, since myacronyms.sty lives in the current directory")
+    else:
+        print(pathtofile.parent,"not equal to",Path.cwd())
     acro_restr = r"\\newacronym{(\w+)}{(\w+)}{.*}"
     acro_re = re.compile(acro_restr)
     regex_replacements = []
@@ -46,6 +48,8 @@ def replace_acros(pathtofile):
                         filedata = re.sub(regex, replacement, filedata)
                         unused_patterns.discard(regex)
                     elif re.search(replacement, filedata):
+                        unused_patterns.discard(regex)
+                    elif re.search(replacement.replace('gls','Gls'), filedata):
                         unused_patterns.discard(regex)
                 filedata = re.sub(r"(\.\s*\n\s*)\\gls", r"\1\\Gls", filedata)
                 # Write the file out again
