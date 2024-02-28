@@ -17,16 +17,26 @@ def copy_image_files(ROOT_TEX,project_name,TARGET_DIR,include_suppinfo):
         )
     with open(ROOT_TEX + ".dep", "r") as f:
         for line in f:
-            if "*{file}" not in line:
+            if "*{file}" in line:
+                value = line.split("{")[2].split("}")
+                source = value[0]
+                _, e = os.path.splitext(source)
+                if len(e) == 0 and os.path.exists(source + ".tex"):
+                    all_files.append(source + ".tex")
+                    print("found", source + ".tex")
+                elif os.path.exists(source):
+                    all_files.append(source)
+            elif "*{package}" in line:
+                value = line.split("{")[2].split("}")
+                source = value[0]
+                _, e = os.path.splitext(source)
+                if len(e) == 0 and os.path.exists(source + ".sty"):
+                    all_files.append(source + ".sty")
+                    print("found", source + ".sty")
+                elif os.path.exists(source):
+                    all_files.append(source)
+            else:
                 continue
-            value = line.split("{")[2].split("}")
-            source = value[0]
-            _, e = os.path.splitext(source)
-            if len(e) == 0 and os.path.exists(source + ".tex"):
-                all_files.append(source + ".tex")
-                print("found", source + ".tex")
-            elif os.path.exists(source):
-                all_files.append(source)
     os.makedirs(TARGET_DIR, exist_ok=True)
     if include_suppinfo:
         all_files.append("suppinfo.pdf")

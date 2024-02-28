@@ -5,6 +5,7 @@ from .unseparate_comments import tex_unsepcomments
 from .comment_functions import matchingbrackets
 from .copy_files import copy_image_files
 from .searchacro import replace_acros
+from .continuous import watch as continuous_watch
 import os
 import gzip
 import time
@@ -28,6 +29,7 @@ def errmsg():
                 on linux)
     ac      :   look for the file myacronyms.sty (locally or in texmf) and
                 use it substitute your acronyms
+    cpb     :   continuous pandoc build.  Like latexmk, but for markdown!
     fs      :   smart latex forward-search
                 currently this works specifically for sumatra pdf located
                 at "C:\Program Files\SumatraPDF\SumatraPDF.exe",
@@ -231,6 +233,9 @@ def main():
             fp.write(new_synctex)
             fp.write(argument[1].replace())
             fp.close()
+    elif command == 'cpb':
+        assert len(arguments) == 1
+        continuous_watch(arguments[0])
     elif command == 'wr':
         logging.debug("arguments are",arguments)
         kwargs = {}
