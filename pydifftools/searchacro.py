@@ -10,7 +10,7 @@ def replace_acros(pathtofile):
         print("I'm going to clean out the unused acronyms, since myacronyms.sty lives in the current directory")
     else:
         print(pathtofile.parent,"not equal to",Path.cwd())
-    acro_restr = r"\\newacronym{(\w+)}{(\w+)}{.*}"
+    acro_restr = r"\\newacronym(?:\[[^\[\]]*\])?{(\w+)}{(\w+)}{.*}"
     acro_re = re.compile(acro_restr)
     regex_replacements = []
     with open(pathtofile, "r", encoding="utf-8") as fp:
@@ -20,6 +20,9 @@ def replace_acros(pathtofile):
                 inside, toreplace = m.groups()
                 regex_replacements.append(
                     (r"\b" + toreplace + r"\b", r"\\gls{" + inside + "}")
+                )
+                regex_replacements.append(
+                    (r"\b" + toreplace + r"s\b", r"\\glspl{" + inside + "}")
                 )
 
     def replace_in_files(

@@ -87,7 +87,7 @@ def run(filename,
         alltext[para] = []
         for this_sent in temp_paragraph:
             alltext[para].extend(
-                    re.split(r'(\\(?:begin|end|usepackage|newcommand){[^}]*})',this_sent))
+                    re.split(r'(\\(?:begin|end|usepackage|newcommand|section|subsection|subsubsection|paragraph|input){[^}]*})',this_sent))
         for this_sent in alltext[para]:
             logging.debug("--sentence: ",this_sent)
         #}}}

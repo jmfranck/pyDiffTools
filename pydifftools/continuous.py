@@ -16,7 +16,9 @@ def run_pandoc(filename, html_file):
     command = ['pandoc', '--bibliography', 'references.bib',
             '--csl=superscript_ref_short.csl',
             '--filter', 'pandoc-crossref',
-            '--citeproc', '--mathjax', '-s', '-o',
+            '--citeproc', '--mathjax',
+            '--number-sections',
+            '--toc', '-s', '-o',
             html_file, filename]
     #command = ['pandoc', '-s', '--mathjax', '-o', html_file, filename]
     subprocess.run(command)
