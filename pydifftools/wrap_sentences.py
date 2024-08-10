@@ -1,7 +1,6 @@
 import re, logging, sys, itertools
 import numpy as np
 
-
 def match_paren(thistext, pos, opener="{"):
     closer = {
             "{":"}",
@@ -83,9 +82,9 @@ def run(
         # {{{ remove mathit
         m = re.search(r"\\mathit{", alltext)
         while m:
-            logging.debug("-------------")
-            logging.debug(alltext[m.start() : m.end()])
-            logging.debug("-------------")
+            print("-------------")
+            print(alltext[m.start() : m.end()])
+            print("-------------")
             stop_bracket = match_paren(alltext, m.end() - 1,"{")
             alltext = (
                 alltext[: m.start()]
@@ -220,15 +219,12 @@ def run(
         para_lines = [(key, "\n".join([j[1] for j in group]))
                       for key, group in itertools.groupby(para_lines, lambda x: x[0])]
         print("here are the grouped para lines!----------------",para_lines)
-        para_lines_procd = []
-        for thisexcl, thiscontent in para_lines:
-            if thisexcl:
-                para_lines_procd.append((False,thiscontent))
-            else:
+        for notexcl, thiscontent in para_lines:
+            if notexcl:
                 # {{{ here I need a trick to prevent including short abbreviations, etc
                 tempsent = re.split(r"([^\.!?]{3}[\.!?])[ \n]", thiscontent)
                 for j in tempsent:
-                    logging.debug("--", j)
+                    print("--", j)
                 # {{{ put the "separators together with the preceding
                 temp_paragraph = []
                 for tempsent_num in range(0, len(tempsent), 2):
@@ -238,7 +234,7 @@ def run(
                         )
                     else:
                         temp_paragraph.append(tempsent[tempsent_num])
-                logging.debug("-------------------")
+                print("-------------------")
                 thiscontent = []
                 for this_sent in temp_paragraph:
                     thiscontent.extend(
@@ -248,26 +244,29 @@ def run(
                         )
                     )
                 for this_sent in thiscontent:
-                    logging.debug("--sentence: ", this_sent)
+                    print("--sentence: ", this_sent)
                 # }}}
                 # }}}
-                for sent in range(len(thiscontent)):  # sentences into words
-                    thiscontent[sent] = [
+                for sent_idx in range(len(thiscontent)):  # sentences into words
+                    thiscontent[sent_idx] = [
                         word
-                        for word in re.split("[ \n]+", thiscontent[sent])
+                        for word in re.split("[ \n]+", thiscontent[sent_idx])
                         if len(word) > 0
                     ]
-                para_lines_procd.append((True,thiscontent))
+                para_lines_procd = (True,thiscontent)
+            else:
+                para_lines_procd = (False,thiscontent)
         alltext[para_idx] = para_lines_procd
+    print("*"*50+"\n"+"parsed alltext"+"*"*50)
+    print(alltext)
+    print('\n\n')
     # {{{ now that it's organized into paragraphs, sentences, and
     #    words, wrap the sentences
     lines = []
     for para_idx in range(len(alltext)):  # paragraph number
-        lines += ["\n"]  # the extra line break between paragraphs
-        for sent_idx in range(len(alltext[para_idx])):  # sentences into words
-            notexcl,residual_sentence = alltext[para_idx][sent_idx]
-            indentation = 0 # if excluded or new sentence, indentation goes back to zero
-            if notexcl:
+        notexcl, para_content = alltext[para_idx]
+        if notexcl:
+            for residual_sentence in para_content:
                 while len(residual_sentence) > 0:
                     numchars = (
                         np.array(list(map(len, residual_sentence))) + 1
@@ -296,6 +295,7 @@ def run(
                                 < punctuation_slop
                             ):
                                 nextline_upto = nextline_punct_upto
+                    print('-'*10+" here is the residual sentence:\n\t",residual_sentence)
                     lines.append(
                         " " * indentation
                         + " ".join(residual_sentence[: nextline_upto + 1])
@@ -303,6 +303,11 @@ def run(
                     residual_sentence = residual_sentence[nextline_upto + 1 :]
                     if indentation == 0:
                         indentation = indent_amount
+            lines += [""]  # the extra line break between paragraphs
+        else:
+            lines += [para_content, ""]
+        indentation = 0 # if excluded or new sentence, indentation goes back to zero
+    print("here are lines!!\n\n\n\n",lines)
     # }}}
     if filename is None:
         print(("\n".join(lines)))
