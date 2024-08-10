@@ -1,4 +1,4 @@
-import re, logging, sys
+import re, logging, sys, itertools
 import numpy as np
 
 
@@ -12,7 +12,7 @@ def match_paren(thistext, pos, opener="{"):
         raise RuntimeError(
             "can't deal with babel string at the very beginning of the file"
         )
-    if thistext[pos] == "{":
+    if thistext[pos] == opener:
         parenlevel = 1
     else:
         raise ValueError("You aren't starting on a curly bracket")
@@ -25,10 +25,9 @@ def match_paren(thistext, pos, opener="{"):
             elif thistext[pos] == closer:
                 if thistext[pos - 1] != "\\":
                     parenlevel -= 1
-    except Exception as e:
+    except Exception:
         raise RuntimeError(
             "hit end of file without closing a bracket, original error\n"
-            + repr(e)
         )
     return pos
 
@@ -41,14 +40,14 @@ def run(
 ):
     # {{{ load the file
     if filename is not None:
-        fp = open(filename, encoding="utf-8")
-        alltext = fp.read()
-        fp.close()
+        with open(filename, encoding="utf-8") as fp:
+            alltext = fp.read()
         # {{{ determine if the filetype is latex or markdown
         file_extension = filename.split(".")[-1]
         if file_extension == "tex":
             filetype = "latex"
         elif file_extension == "md":
+            print("identified as markdown!!")
             filetype = "markdown"
         # }}}
     else:
@@ -100,25 +99,27 @@ def run(
     alltext = alltext.split("\n\n")  # split paragraphs
     exclusion_idx = []
     for para_idx in range(len(alltext)):
+        thispara_split = alltext[para_idx].split('\n')
         if filetype == 'latex':
             line_idx = 0
-            while line_idx < len(alltext[para_idx]):
+            while line_idx < len(thispara_split):
                 # {{{ exclude section headers and environments
-                thisline = alltext[para_idx][line_idx]
+                thisline = thispara_split[line_idx]
                 m = re.match(r"\\(?:section|subsection|subsubsection|paragraph|newcommand|input){", thisline)
                 if m:
                     starting_line = thisline
-                    pos = match_paren(alltext[para_idx], m.span()[-1],"{")
+                    remaining_in_para = '\n'.join(thispara_split[line_idx:])
+                    pos = match_paren(remaining_in_para, m.span()[-1],"{")
                     # to find the closing line, I need to find the line number
                     # inside alltext[para_idx] that corresponds to the character position
                     # pos.  Do this by counting the number of newlines between 
                     # the character len(m.group()) and pos
-                    closing_line = (alltext[para_idx][m.span()[-1]:pos].count('\n')
+                    closing_line = (remaining_in_para[m.span()[-1]:pos].count('\n')
                                     + line_idx)
                     exclusion_idx.append((para_idx, starting_line, closing_line))  
-                    line_idx = closing_line + 1
+                    line_idx = closing_line
                     print("*"*30,"excluding",'*'*30)
-                    print(alltext[para_idx][starting_line:closing_line])
+                    print(thispara_split[starting_line:closing_line])
                     print("*"*69)
                 else:
                     m = re.search(r"\\begin{(equation|align)}", thisline)
@@ -127,77 +128,83 @@ def run(
                         # to do this, I need to make a new string that gives
                         # everything from here until the end of alltext[para_idx]
                         notfound = True
-                        for closing_line in alltext[para_idx].split('\n')[line_idx:]:
+                        for closing_idx, closing_line in enumerate(thispara_split[line_idx:]):
                             m_close = re.search(r"\\end{" + m.group(1) + "}", closing_line)
                             if m_close:
                                 notfound = False
                                 break
                         if notfound:
                             raise RuntimeError("didn't find closing line for environment")
-                    exclusion_idx.append((para_idx, line_idx, closing_line))
-                    print("*"*30,"excluding env",'*'*30)
-                    print(alltext[para_idx][starting_line:closing_line])
-                    print("*"*73)
-                else:
-                    line_idx += 1
+                        exclusion_idx.append((para_idx, line_idx, line_idx+closing_idx))
+                        print("*"*30,"excluding env",'*'*30)
+                        print(thispara_split[line_idx:closing_idx])
+                        print("*"*73)
+                        line_idx = line_idx + closing_idx
+                line_idx += 1
                 # }}}
         elif filetype == 'markdown':
             line_idx = 0
             if para_idx == 0 and line_idx == 0:
                 # watch out for yaml header
-                if (alltext[para_idx][line_idx].startswith("---")
-                    or alltext[para_idx][line_idx].startswith("...")):
-                    starting_line = alltext[para_idx][line_idx]
-                    line_idx = 0
-                    while line_idx < len(alltext[para_idx]):
-                        if (alltext[para_idx][line_idx].startswith("---")
-                            or alltext[para_idx][line_idx].startswith("...")):
-                            closing_line = line_idx
+                print("first line is",thispara_split[line_idx])
+                if (thispara_split[line_idx].startswith("---")
+                    or thispara_split[line_idx].startswith("...")):
+                    starting_line = line_idx
+                    j = 1
+                    while j < len(thispara_split):
+                        if (thispara_split[j].strip() == "---"
+                            or thispara_split[j].strip()  == "..."):
+                            closing_line = j
                             exclusion_idx.append((para_idx, starting_line, closing_line))
-                            line_idx += 1
                             print("*" * 30, "excluding yaml header", "*" * 30)
-                            print(alltext[para_idx][starting_line:closing_line])
+                            print(thispara_split[starting_line:closing_line+1])
                             print("*" * 73)
-            while line_idx < len(alltext[para_idx]):
-                thisline = alltext[para_idx][line_idx]
+                            break
+                        j += 1
+            while line_idx < len(thispara_split):
+                thisline = thispara_split[line_idx]
                 # {{{ do the same thing for markdown, where I exclude (1) headers (2) figures and (3) tables
                 #     written completely with copilot after writing prev!!!
                 m = re.match(r"#+\s.*", thisline)  # exclude headers
                 if m:
-                    starting_line = thisline
-                    closing_line = line_idx
-                    exclusion_idx.append((para_idx, starting_line, closing_line))
-                    line_idx += 1
+                    exclusion_idx.append((para_idx, line_idx, line_idx))
                     print("*" * 30, "excluding header", "*" * 30)
-                    print(alltext[para_idx][starting_line:closing_line])
+                    print(thispara_split[line_idx])
                     print("*" * 73)
                 else:
                     m = re.search(r"!\[.*\]\(", thisline)  # exclude figures
                     if m:
                         # {{{ find the closing ), as we did for latex commands above
-                        starting_line = thisline
-                        pos = match_paren(alltext[para_idx], m.span()[-1], "(")
-                        closing_line = (alltext[para_idx][m.span()[-1]:pos].count('\n')
+                        remaining_in_para = '\n'.join(thispara_split[line_idx:])
+                        pos = match_paren(remaining_in_para, m.span()[-1],"(")
+                        closing_line = (remaining_in_para[m.span()[-1]:pos].count('\n')
                                         + line_idx)
-                        exclusion_idx.append((para_idx, starting_line, closing_line))
-                        line_idx = closing_line + 1
+                        exclusion_idx.append((para_idx, line_idx, closing_line))
+                        line_idx = closing_line
                         print("*" * 30, "excluding figure", "*" * 30)
-                        print(alltext[para_idx][starting_line:closing_line])
+                        print(alltext[para_idx][starting_line:closing_line+1])
                         print("*" * 73)
                         # }}}
                     else:
-                        m = re.match(r"\|.*\|", thisline)  # exclude tables
+                        m = re.search(r"(\|.*\||=\+==|-\+--)", thisline)  # exclude tables
                         if m:
-                            starting_line = thisline
-                            closing_line = line_idx
-                            exclusion_idx.append((para_idx, starting_line, closing_line))
-                            line_idx += 1
+                            starting_line = line_idx
+                            m2 = re.search(r"(\|.*\||=\+==|-\+--)", thispara_split[line_idx+1]) # need at least 2 lines
+                            if m2:
+                                line_idx += 1
+                                thisline = thispara_split[line_idx]
+                                while in_table:
+                                    m = re.search(r"(\|.*\||=\+==|-\+--)", thisline)  # exclude tables
+                                    if not m:
+                                        break
+                                    line_idx += 1
+                                exclusion_idx.append((para_idx, starting_line, line_idx))
                             print("*" * 30, "excluding table", "*" * 30)
-                            print(alltext[para_idx][starting_line:closing_line])
+                            print(alltext[para_idx][starting_line:line_idx+1])
                             print("*" * 73)
-                        else:
-                            line_idx += 1
+                line_idx += 1
                 # }}}
+    print("all exclusions:",exclusion_idx)
     for para_idx in range(len(alltext)):  # split paragraphs into sentences
         para_lines = alltext[para_idx].split("\n")
         # list comprehension to grab excluded lines for this paragraph
@@ -210,8 +217,9 @@ def run(
                                                   for j in para_lines[start_excl:stop_excl+1]]   
         # use join inside a list comprehension to gather contiguous chunks of True
         # and False together
-        para_lines = ["\n".join([j[1] for j in group])
+        para_lines = [(key, "\n".join([j[1] for j in group]))
                       for key, group in itertools.groupby(para_lines, lambda x: x[0])]
+        print("here are the grouped para lines!----------------",para_lines)
         para_lines_procd = []
         for thisexcl, thiscontent in para_lines:
             if thisexcl:
