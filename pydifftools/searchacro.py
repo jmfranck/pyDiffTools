@@ -7,9 +7,11 @@ def replace_acros(pathtofile):
     clean_unused = False
     if pathtofile.parent.resolve() == Path.cwd():
         clean_unused = True
-        print("I'm going to clean out the unused acronyms, since myacronyms.sty lives in the current directory")
+        print(
+            "I'm going to clean out the unused acronyms, since myacronyms.sty lives in the current directory"
+        )
     else:
-        print(pathtofile.parent,"not equal to",Path.cwd())
+        print(pathtofile.parent, "not equal to", Path.cwd())
     acro_restr = r"\\newacronym(?:\[[^\[\]]*\])?{(\w+)}{(\w+)}{.*}"
     acro_re = re.compile(acro_restr)
     regex_replacements = []
@@ -25,9 +27,7 @@ def replace_acros(pathtofile):
                     (r"\b" + toreplace + r"s\b", r"\\glspl{" + inside + "}")
                 )
 
-    def replace_in_files(
-        regex_replacements, exclude=[pathtofile, "ms.tex"]
-    ):
+    def replace_in_files(regex_replacements, exclude=[pathtofile, "ms.tex"]):
         """
         This function will replace all occurences of specified regex patterns with their corresponding replacements in all .tex files in the current directory except for the file specified in 'exclude'.
         It returns a list of unused regex patterns.
@@ -52,7 +52,9 @@ def replace_acros(pathtofile):
                         unused_patterns.discard(regex)
                     elif re.search(replacement, filedata):
                         unused_patterns.discard(regex)
-                    elif re.search(replacement.replace('gls','Gls'), filedata):
+                    elif re.search(
+                        replacement.replace("gls", "Gls"), filedata
+                    ):
                         unused_patterns.discard(regex)
                 filedata = re.sub(r"(\.\s*\n\s*)\\gls", r"\1\\Gls", filedata)
                 # Write the file out again
@@ -61,7 +63,7 @@ def replace_acros(pathtofile):
         return list(unused_patterns)
 
     unused = replace_in_files(regex_replacements)
-    print("unused acronyms:",unused)
+    print("unused acronyms:", unused)
     if clean_unused:
         # {{{ get rid of unused
         with open(pathtofile, "r", encoding="utf-8") as fp:

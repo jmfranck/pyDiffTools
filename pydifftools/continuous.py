@@ -11,50 +11,63 @@ import psutil
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-def run_pandoc(filename, html_file):
 
-    command = ['pandoc', '--bibliography', 'references.bib',
-            '--csl=superscript_ref_short.csl',
-            '--filter', 'pandoc-crossref',
-            '--citeproc', '--mathjax',
-            '--number-sections',
-            '--toc', '-s', '-o',
-            html_file, filename]
-    #command = ['pandoc', '-s', '--mathjax', '-o', html_file, filename]
+def run_pandoc(filename, html_file):
+    command = [
+        "pandoc",
+        "--bibliography",
+        "references.bib",
+        "--csl=superscript_ref_short.csl",
+        "--filter",
+        "pandoc-crossref",
+        "--citeproc",
+        "--mathjax",
+        "--number-sections",
+        "--toc",
+        "-s",
+        "-o",
+        html_file,
+        filename,
+    ]
+    # command = ['pandoc', '-s', '--mathjax', '-o', html_file, filename]
     subprocess.run(command)
     return
+
 
 class Handler(FileSystemEventHandler):
     def __init__(self, filename):
         self.filename = filename
-        self.html_file = filename.rsplit('.', 1)[0] + '.html'
-        #self.firefox = webbrowser.get('firefox')
-        #self.firefox = webdriver.Firefox() # requires geckodriver
-        self.firefox = webdriver.Chrome() # requires chromium
+        self.html_file = filename.rsplit(".", 1)[0] + ".html"
+        # self.firefox = webbrowser.get('firefox')
+        # self.firefox = webdriver.Firefox() # requires geckodriver
+        self.firefox = webdriver.Chrome()  # requires chromium
         run_pandoc(self.filename, self.html_file)
         self.append_autorefresh()
-        #self.firefox.open_new_tab(self.html_file)
-        self.firefox.get("file://"+os.path.abspath(self.html_file))
+        # self.firefox.open_new_tab(self.html_file)
+        self.firefox.get("file://" + os.path.abspath(self.html_file))
 
     def on_modified(self, event):
-        #print("modification event")
-        if os.path.normpath(os.path.abspath(event.src_path)) == os.path.normpath(os.path.abspath(self.filename)):
+        # print("modification event")
+        if os.path.normpath(
+            os.path.abspath(event.src_path)
+        ) == os.path.normpath(os.path.abspath(self.filename)):
             print("about to run pandoc")
             run_pandoc(self.filename, self.html_file)
             self.append_autorefresh()
             self.firefox.refresh()
             print("and refreshed!")
         else:
-            #print("saw a change in",os.path.normpath(os.path.abspath(event.src_path)))
-            #print("not",os.path.normpath(os.path.abspath(self.filename)))
+            # print("saw a change in",os.path.normpath(os.path.abspath(event.src_path)))
+            # print("not",os.path.normpath(os.path.abspath(self.filename)))
             pass
 
     def append_autorefresh(self):
         print("about to add scripts")
-        with open(self.html_file, 'r') as fp:
+        with open(self.html_file, "r") as fp:
             all_data = fp.read()
-        all_data = all_data.replace('</head>',
-            '''
+        all_data = all_data.replace(
+            "</head>",
+            """
     <script id="MathJax-script" async src="MathJax-3.1.2/es5/tex-mml-chtml.js"></script>
     <script>
         // When the page is about to be unloaded, save the current scroll position
@@ -72,15 +85,17 @@ class Handler(FileSystemEventHandler):
         });
     </script>
 </head>
-    ''')
-        with open(self.html_file, 'w') as fp:
+    """,
+        )
+        with open(self.html_file, "w") as fp:
             fp.write(all_data)
-        #print("done adding")
+        # print("done adding")
+
 
 def watch(filename):
     event_handler = Handler(filename)
     observer = Observer()
-    observer.schedule(event_handler, path='.', recursive=False)
+    observer.schedule(event_handler, path=".", recursive=False)
     observer.start()
 
     try:
@@ -90,7 +105,7 @@ def watch(filename):
         observer.stop()
 
     observer.join()
-    #print("returning from watch")
+    # print("returning from watch")
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 
-def copy_image_files(ROOT_TEX,project_name,TARGET_DIR,include_suppinfo):
+def copy_image_files(ROOT_TEX, project_name, TARGET_DIR, include_suppinfo):
     all_files = []
     with open(ROOT_TEX + ".tex", "r") as fp:
         alltext = fp.read()
