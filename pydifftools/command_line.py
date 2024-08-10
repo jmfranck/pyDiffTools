@@ -15,7 +15,6 @@ import re
 import nbformat
 import difflib
 import shutil
-import time
 from pathlib import Path, PurePosixPath
 
 
@@ -185,14 +184,14 @@ def main():
                     raise ValueError("Unknown cell type")
     elif command == "py2nb":
         jupyter_magic_re = re.compile(
-            "^get_ipython\(\).(?:run_line_)?magic\((?:u?['\"]([^'\"]*)['\"])?"
-            + 6 * "(?:u?, *['\"]([^'\"]*)['\"])?"
-            + "\)"
+            r"^get_ipython\(\).(?:run_line_)?magic\((?:u?['\"]([^'\"]*)['\"])?"
+            + 6 * r"(?:u?, *['\"]([^'\"]*)['\"])?"
+            + r"\)"
         )
         jupyter_cellmagic_re = re.compile(
-            "^get_ipython\(\).run_cell_magic\((?:u?['\"]([^'\"]*)['\"])?"
-            + 6 * "(?:u?, *['\"]([^'\"]*)['\"])?"
-            + "\)\)"
+            r"^get_ipython\(\).run_cell_magic\((?:u?['\"]([^'\"]*)['\"])?"
+            + 6 * r"(?:u?, *['\"]([^'\"]*)['\"])?"
+            + r"\)\)"
         )
         assert (
             len(arguments) == 1

@@ -1,7 +1,5 @@
-import re
-from numpy import *
-import sys
-import logging
+import re, logging, sys
+import numpy as np
 
 
 def match_curly_bracket(alltext, pos):
@@ -37,12 +35,22 @@ def run(
     stupid_strip=False,
     indent_amount=4,
 ):
-    # {{{ determine if the filetype is latex or markdown
-    file_extension = filename.split(".")[-1]
-    if file_extension == "tex":
-        filetype = "latex"
-    elif file_extension == "md":
-        filetype = "markdown"
+    # {{{ load the file
+    if filename is not None:
+        fp = open(filename, encoding="utf-8")
+        alltext = fp.read()
+        fp.close()
+        # {{{ determine if the filetype is latex or markdown
+        file_extension = filename.split(".")[-1]
+        if file_extension == "tex":
+            filetype = "latex"
+        elif file_extension == "md":
+            filetype = "markdown"
+        # }}}
+    else:
+        sys.stdin.reconfigure(encoding="utf-8")
+        fp = sys.stdin
+        alltext = fp.read()
     # }}}
     # {{{ strip stupid commands that appear in openoffice conversion
     if stupid_strip:
@@ -88,7 +96,7 @@ def run(
     alltext = alltext.split("\n\n")  # split paragraphs
     for para in range(len(alltext)):  # split paragraphs into sentences
         # {{{ here I need a trick to prevent including short abbreviations, etc
-        tempsent = re.split("([^\.!?]{3}[\.!?])[ \n]", alltext[para])
+        tempsent = re.split(r"([^\.!?]{3}[\.!?])[ \n]", alltext[para])
         for j in tempsent:
             logging.debug("--", j)
         # {{{ put the "separators together with the preceding
@@ -129,12 +137,12 @@ def run(
             indentation = 0
             while len(residual_sentence) > 0:
                 numchars = (
-                    array(list(map(len, residual_sentence))) + 1
+                    np.array(list(map(len, residual_sentence))) + 1
                 )  # +1 for space
-                cumsum_num = cumsum(numchars)
-                nextline_upto = argmin(abs(cumsum_num - wrapnumber))  #
+                cumsum_num = np.cumsum(numchars)
+                nextline_upto = np.argmin(abs(cumsum_num - wrapnumber))  #
                 #   the next line goes up to this position
-                nextline_punct_upto = array(
+                nextline_punct_upto = np.array(
                     [
                         cumsum_num[j]
                         if (
@@ -146,7 +154,7 @@ def run(
                     ]
                 )
                 if any(nextline_punct_upto < 10000):
-                    nextline_punct_upto = argmin(
+                    nextline_punct_upto = np.argmin(
                         abs(nextline_punct_upto - wrapnumber)
                     )
                     if nextline_punct_upto < nextline_upto:
