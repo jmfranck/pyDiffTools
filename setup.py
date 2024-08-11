@@ -9,5 +9,6 @@ setup(
     long_description=open('README.rst').read(),
     package_data={'pyDiffTools':['diff-doc.js','xml2xlsx.vbs']},
     entry_points=dict(
-        console_scripts=["pydifft = pydifftools.command_line:main",])
+        console_scripts=["pydifft = pydifftools.command_line:main",]),
+    install_requires=['selenium'],
 )
