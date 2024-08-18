@@ -54,7 +54,11 @@ class Handler(FileSystemEventHandler):
             print("about to run pandoc")
             run_pandoc(self.filename, self.html_file)
             self.append_autorefresh()
-            self.firefox.refresh()
+            try:
+                self.firefox.refresh()
+            except selenium.common.exceptions.WebDriverException:
+                print("I'm quitting!! You probably suspended the computer, which seems to freak selenium out.  Just restart")
+                sys.exit(1)
             print("and refreshed!")
         else:
             # print("saw a change in",os.path.normpath(os.path.abspath(event.src_path)))

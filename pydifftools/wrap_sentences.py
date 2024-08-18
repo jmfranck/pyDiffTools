@@ -258,6 +258,7 @@ def run(
                                 r"\$\$", thisline
                             )  # exclude equations
                             if m:
+                                starting_line = line_idx
                                 # {{{ find the closing $$, as we did for latex commands above
                                 remaining_in_para = "\n".join(
                                     thispara_split[line_idx:]
@@ -348,6 +349,7 @@ def run(
     # {{{ now that it's organized into paragraphs, sentences, and
     #    words, wrap the sentences
     lines = []
+    indentation = 0
     for para_idx in range(len(alltext)):  # paragraph number
         notexcl, para_content = alltext[para_idx]
         if notexcl:
