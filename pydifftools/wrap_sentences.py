@@ -3,16 +3,20 @@ import numpy as np
 
 
 def match_paren(thistext, pos, opener="{"):
-    closer = {
+    closerdict = {
         "{": "}",
         "(": ")",
         "[": "]",
-    }[opener]
-    if pos == 0:
-        raise RuntimeError(
-            "can't deal with babel string at the very beginning of the file"
-        )
-    if thistext[pos] == opener:
+        "$$": "$$",
+        "<!--": "-->",
+    }
+    if opener in closerdict.keys():
+        closer = closerdict[opener]
+    else:
+        m = re.match("<(\w+)", opener)
+        assert m
+        closer = "</"+m.groups()[0]
+    if thistext[pos:pos+len(opener)] == opener:
         parenlevel = 1
     else:
         raise ValueError(
@@ -21,18 +25,17 @@ def match_paren(thistext, pos, opener="{"):
             + ">>>>>"
             + thistext[pos:]
         )
-    try:
-        while parenlevel > 0:
-            pos += 1
-            if thistext[pos] == opener:
-                if thistext[pos - 1] != "\\":
-                    parenlevel += 1
-            elif thistext[pos] == closer:
-                if thistext[pos - 1] != "\\":
-                    parenlevel -= 1
-    except Exception:
+    while parenlevel > 0 and pos<len(thistext):
+        pos += 1
+        if thistext[pos:pos+len(closer)] == closer:
+            if thistext[pos - 1] != "\\":
+                parenlevel -= 1
+        elif thistext[pos:pos+len(opener)] == opener:
+            if thistext[pos - 1] != "\\":
+                parenlevel += 1
+    if pos == len(thistext):
         raise RuntimeError(
-            "hit end of file without closing a bracket, original error\n"
+            "hit end of file without closing a bracket"
         )
     return pos
 
@@ -257,6 +260,56 @@ def run(
                                     ]
                                 )
                                 print("*" * 73)
+                        else:
+                            m = re.search(
+                                r"\$\$", thisline
+                            )  # exclude equations
+                            if m:
+                                starting_line = line_idx
+                                # {{{ find the closing $$, as we did for latex commands above
+                                remaining_in_para = "\n".join(
+                                    thispara_split[line_idx:]
+                                )
+                                pos = match_paren(
+                                    remaining_in_para, m.span()[-1] - 2, "$$"
+                                )
+                                closing_line = (
+                                    remaining_in_para[m.span()[-1] : pos].count("\n")
+                                    + line_idx
+                                )
+                                exclusion_idx.append(
+                                    (para_idx, line_idx, closing_line)
+                                )
+                                line_idx = closing_line
+                                print("*" * 30, "excluding equation", "*" * 30)
+                                print(thispara_split[starting_line : closing_line + 1])
+                                print("*" * 73)
+                                # }}}
+                            else:
+                                m = re.search(
+                                    r"<(\w+) ?.*>", thisline
+                                )  # exclude things enclosed in tags
+                                if m:
+                                    starting_line = line_idx
+                                    # {{{ find the closing $$, as we did for latex commands above
+                                    remaining_in_para = "\n".join(
+                                        thispara_split[line_idx:]
+                                    )
+                                    pos = match_paren(
+                                        remaining_in_para, m.span()[0], "<"+m.groups()[0]
+                                    )
+                                    closing_line = (
+                                        remaining_in_para[m.span()[-1] : pos].count("\n")
+                                        + line_idx
+                                    )
+                                    exclusion_idx.append(
+                                        (para_idx, line_idx, closing_line)
+                                    )
+                                    line_idx = closing_line
+                                    print("*" * 30, "excluding tagged block", "*" * 30)
+                                    print(thispara_split[starting_line : closing_line + 1])
+                                    print("*" * 73)
+                                    # }}}
                 line_idx += 1
                 # }}}
     print("all exclusions:", exclusion_idx)
@@ -328,6 +381,7 @@ def run(
     # {{{ now that it's organized into paragraphs, sentences, and
     #    words, wrap the sentences
     lines = []
+    indentation = 0
     for para_idx in range(len(alltext)):  # paragraph number
         notexcl, para_content = alltext[para_idx]
         if notexcl:
