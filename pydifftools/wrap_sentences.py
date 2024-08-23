@@ -255,10 +255,10 @@ def run(
                                 )
                                 #print("*" * 30, "excluding table", "*" * 30)
                                 #print(
-                                    thispara_split[
-                                        starting_line : line_idx + 1
-                                    ]
-                                )
+                                #    thispara_split[
+                                #        starting_line : line_idx + 1
+                                #    ]
+                                #)
                                 #print("*" * 73)
                         else:
                             m = re.search(
