@@ -30,7 +30,10 @@ def run_pandoc(filename, html_file):
         filename,
     ]
     # command = ['pandoc', '-s', '--mathjax', '-o', html_file, filename]
-    subprocess.run(command)
+    subprocess.run(command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            )
     return
 
 
@@ -51,7 +54,7 @@ class Handler(FileSystemEventHandler):
         if os.path.normpath(
             os.path.abspath(event.src_path)
         ) == os.path.normpath(os.path.abspath(self.filename)):
-            print("about to run pandoc")
+            #print("about to run pandoc")
             run_pandoc(self.filename, self.html_file)
             self.append_autorefresh()
             try:
@@ -66,8 +69,8 @@ class Handler(FileSystemEventHandler):
             pass
 
     def append_autorefresh(self):
-        print("about to add scripts")
-        with open(self.html_file, "r") as fp:
+        #print("about to add scripts")
+        with open(self.html_file, "r", encoding="utf-8") as fp:
             all_data = fp.read()
         all_data = all_data.replace(
             "</head>",
@@ -91,7 +94,7 @@ class Handler(FileSystemEventHandler):
 </head>
     """,
         )
-        with open(self.html_file, "w") as fp:
+        with open(self.html_file, "w", encoding="utf-8") as fp:
             fp.write(all_data)
         # print("done adding")
 
