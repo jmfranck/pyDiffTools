@@ -189,10 +189,10 @@ def run(
                             )
                             #print("*" * 30, "excluding yaml header", "*" * 30)
                             #print(
-                                thispara_split[
-                                    starting_line : closing_line + 1
-                                ]
-                            )
+                            #    thispara_split[
+                            #        starting_line : closing_line + 1
+                            #    ]
+                            #)
                             #print("*" * 73)
                             break
                         j += 1
