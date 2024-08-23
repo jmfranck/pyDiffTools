@@ -336,8 +336,8 @@ def run(
             if notexcl:
                 # {{{ here I need a trick to prevent including short abbreviations, etc
                 tempsent = re.split(r"([^\.!?]{3}[\.!?])[ \n]", thiscontent)
-                for j in tempsent:
-                    #print("--", j)
+                #for j in tempsent:
+                #    #rint("--", j)
                 # {{{ put the "separators together with the preceding
                 temp_paragraph = []
                 for tempsent_num in range(0, len(tempsent), 2):
@@ -356,8 +356,8 @@ def run(
                             this_sent,
                         )
                     )
-                for this_sent in thiscontent:
-                    #print("--sentence: ", this_sent)
+                #for this_sent in thiscontent:
+                #    #rint("--sentence: ", this_sent)
                 # }}}
                 # }}}
                 for sent_idx in range(
@@ -420,9 +420,9 @@ def run(
                             ):
                                 nextline_upto = nextline_punct_upto
                     #print(
-                        "-" * 10 + " here is the residual sentence:\n\t",
-                        residual_sentence,
-                    )
+                    #    "-" * 10 + " here is the residual sentence:\n\t",
+                    #    residual_sentence,
+                    #)
                     lines.append(
                         " " * indentation
                         + " ".join(residual_sentence[: nextline_upto + 1])
@@ -438,7 +438,7 @@ def run(
     #print("here are lines!!\n\n\n\n", lines)
     # }}}
     if filename is None:
-        #print(("\n".join(lines)))
+        print(("\n".join(lines)))
     else:
         fp = open(filename, "w", encoding="utf-8")
         fp.write(("\n".join(lines)))
