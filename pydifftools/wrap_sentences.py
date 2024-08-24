@@ -8,6 +8,7 @@ def match_paren(thistext, pos, opener="{"):
         "(": ")",
         "[": "]",
         "$$": "$$",
+        "~~~": "~~~",
         "<!--": "-->",
     }
     if opener in closerdict.keys():
@@ -35,7 +36,7 @@ def match_paren(thistext, pos, opener="{"):
                 parenlevel += 1
     if pos == len(thistext):
         raise RuntimeError(
-            "hit end of file without closing a bracket"
+            f"hit end of file without closing {opener} with {closer}"
         )
     return pos
 
@@ -287,8 +288,8 @@ def run(
                                 # }}}
                             else:
                                 m = re.search(
-                                    r"<(\w+) ?.*>", thisline
-                                )  # exclude things enclosed in tags
+                                    r"^~~~", thisline
+                                )  # exclude equations
                                 if m:
                                     starting_line = line_idx
                                     # {{{ find the closing $$, as we did for latex commands above
@@ -296,7 +297,7 @@ def run(
                                         thispara_split[line_idx:]
                                     )
                                     pos = match_paren(
-                                        remaining_in_para, m.span()[0], "<"+m.groups()[0]
+                                        remaining_in_para, m.span()[0], "~~~"
                                     )
                                     closing_line = (
                                         remaining_in_para[m.span()[-1] : pos].count("\n")
@@ -306,10 +307,35 @@ def run(
                                         (para_idx, line_idx, closing_line)
                                     )
                                     line_idx = closing_line
-                                    #print("*" * 30, "excluding tagged block", "*" * 30)
+                                    #print("*" * 30, "excluding code", "*" * 30)
                                     #print(thispara_split[starting_line : closing_line + 1])
                                     #print("*" * 73)
                                     # }}}
+                                else:
+                                    m = re.search(
+                                        r"<(\w+) ?.*>", thisline
+                                    )  # exclude things enclosed in tags
+                                    if m:
+                                        starting_line = line_idx
+                                        # {{{ find the closing $$, as we did for latex commands above
+                                        remaining_in_para = "\n".join(
+                                            thispara_split[line_idx:]
+                                        )
+                                        pos = match_paren(
+                                            remaining_in_para, m.span()[0], "<"+m.groups()[0]
+                                        )
+                                        closing_line = (
+                                            remaining_in_para[m.span()[-1] : pos].count("\n")
+                                            + line_idx
+                                        )
+                                        exclusion_idx.append(
+                                            (para_idx, line_idx, closing_line)
+                                        )
+                                        line_idx = closing_line
+                                        #print("*" * 30, "excluding tagged block", "*" * 30)
+                                        #print(thispara_split[starting_line : closing_line + 1])
+                                        #print("*" * 73)
+                                        # }}}
                 line_idx += 1
                 # }}}
     #print("all exclusions:", exclusion_idx)
