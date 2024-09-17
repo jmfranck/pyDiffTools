@@ -16,8 +16,12 @@ included are (listed in order of fun/utility):
   `filename.md`, build the result,
   and displays it in your browser. 
   For this to work, you need to
-  **install selenium with `pip
-  install selenium`** *not conda*.
+  **install selenium with** `pip
+  install selenium` *not conda*.
+  Then go `here <https://pypi.org/project/selenium/>`_
+  and download the chrome driver.
+
+  Continuous pandoc build.
   This works *very well* together
   with the `g/` vim command
   (supplied by our standard vimrc
