@@ -20,11 +20,21 @@ def run_pandoc(filename, html_file):
             "wget https://github.com/mathjax/MathJax/archive/refs/tags/3.1.2.zip"
         )
         print("and then unzip")
+    current_dir = os.getcwd()
+    csl_files = [f for f in os.listdir(current_dir) if f.endswith(".csl")]
+    if len(csl_files) == 1:
+        mycsl = csl_files[0]
+    else:
+        raise ValueError(
+            "You have more than one csl file in this directory! Get rid of all"
+            " but one! of "
+            + "and".join(csl_files)
+        )
     command = [
         "pandoc",
         "--bibliography",
         "references.bib",
-        "--csl=superscript_ref_short.csl",
+        f"--csl={mycsl}",
         "--filter",
         "pandoc-crossref",
         "--citeproc",
@@ -86,7 +96,8 @@ class Handler(FileSystemEventHandler):
                 self.firefox.refresh()
             except selenium.common.exceptions.WebDriverException:
                 print(
-                    "I'm quitting!! You probably suspended the computer, which seems to freak selenium out.  Just restart"
+                    "I'm quitting!! You probably suspended the computer, which"
+                    " seems to freak selenium out.  Just restart"
                 )
                 self.firefox.quit()
                 self.init_firefox()
