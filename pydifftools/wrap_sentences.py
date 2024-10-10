@@ -427,6 +427,8 @@ def run(
                     indentation = 0
                     lines.append("")
                     continue
+                if filetype == "latex":
+                    indentation = 0
                 while len(residual_sentence) > 0:
                     numchars = (
                         np.array(list(map(len, residual_sentence))) + 1
