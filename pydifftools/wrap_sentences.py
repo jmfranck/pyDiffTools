@@ -16,8 +16,8 @@ def match_paren(thistext, pos, opener="{"):
     else:
         m = re.match("<(\w+)", opener)
         assert m
-        closer = "</"+m.groups()[0]
-    if thistext[pos:pos+len(opener)] == opener:
+        closer = "</" + m.groups()[0]
+    if thistext[pos : pos + len(opener)] == opener:
         parenlevel = 1
     else:
         raise ValueError(
@@ -26,17 +26,20 @@ def match_paren(thistext, pos, opener="{"):
             + ">>>>>"
             + thistext[pos:]
         )
-    while parenlevel > 0 and pos<len(thistext):
+    while parenlevel > 0 and pos < len(thistext):
         pos += 1
-        if thistext[pos:pos+len(closer)] == closer:
+        if thistext[pos : pos + len(closer)] == closer:
             if thistext[pos - 1] != "\\":
                 parenlevel -= 1
-        elif thistext[pos:pos+len(opener)] == opener:
+        elif thistext[pos : pos + len(opener)] == opener:
             if thistext[pos - 1] != "\\":
                 parenlevel += 1
     if pos == len(thistext):
         raise RuntimeError(
-            f"hit end of file without closing {opener} with {closer}"
+            f"hit end of file without closing {opener} with {closer}\n"
+            "here is the offending text!:\n"
+            + ("=" * 30)
+            + thistext
         )
     return pos
 
@@ -57,7 +60,7 @@ def run(
         if file_extension == "tex":
             filetype = "latex"
         elif file_extension == "md":
-            #print("identified as markdown!!")
+            # print("identified as markdown!!")
             filetype = "markdown"
         # }}}
     else:
@@ -93,9 +96,9 @@ def run(
         # {{{ remove mathit
         m = re.search(r"\\mathit{", alltext)
         while m:
-            #print("-------------")
-            #print(alltext[m.start() : m.end()])
-            #print("-------------")
+            # print("-------------")
+            # print(alltext[m.start() : m.end()])
+            # print("-------------")
             stop_bracket = match_paren(alltext, m.end() - 1, "{")
             alltext = (
                 alltext[: m.start()]
@@ -137,9 +140,9 @@ def run(
                         (para_idx, starting_line, closing_line)
                     )
                     line_idx = closing_line
-                    #print("*" * 30, "excluding", "*" * 30)
-                    #print(thispara_split[starting_line:closing_line])
-                    #print("*" * 69)
+                    # print("*" * 30, "excluding", "*" * 30)
+                    # print(thispara_split[starting_line:closing_line])
+                    # print("*" * 69)
                 else:
                     m = re.search(r"\\begin{(equation|align)}", thisline)
                     if m:
@@ -163,9 +166,9 @@ def run(
                         exclusion_idx.append(
                             (para_idx, line_idx, line_idx + closing_idx)
                         )
-                        #print("*" * 30, "excluding env", "*" * 30)
-                        #print(thispara_split[line_idx:closing_idx])
-                        #print("*" * 73)
+                        # print("*" * 30, "excluding env", "*" * 30)
+                        # print(thispara_split[line_idx:closing_idx])
+                        # print("*" * 73)
                         line_idx = line_idx + closing_idx
                 line_idx += 1
                 # }}}
@@ -173,7 +176,7 @@ def run(
             line_idx = 0
             if para_idx == 0 and line_idx == 0:
                 # watch out for yaml header
-                #print("first line is", thispara_split[line_idx])
+                # print("first line is", thispara_split[line_idx])
                 if thispara_split[line_idx].startswith(
                     "---"
                 ) or thispara_split[line_idx].startswith("..."):
@@ -188,13 +191,13 @@ def run(
                             exclusion_idx.append(
                                 (para_idx, starting_line, closing_line)
                             )
-                            #print("*" * 30, "excluding yaml header", "*" * 30)
-                            #print(
+                            # print("*" * 30, "excluding yaml header", "*" * 30)
+                            # print(
                             #    thispara_split[
                             #        starting_line : closing_line + 1
                             #    ]
-                            #)
-                            #print("*" * 73)
+                            # )
+                            # print("*" * 73)
                             break
                         j += 1
             while line_idx < len(thispara_split):
@@ -203,9 +206,9 @@ def run(
                 m = re.match(r"#+\s.*", thisline)  # exclude headers
                 if m:
                     exclusion_idx.append((para_idx, line_idx, line_idx))
-                    #print("*" * 30, "excluding header", "*" * 30)
-                    #print(thispara_split[line_idx])
-                    #print("*" * 73)
+                    # print("*" * 30, "excluding header", "*" * 30)
+                    # print(thispara_split[line_idx])
+                    # print("*" * 73)
                 else:
                     m = re.search(r"!\[.*\]\(", thisline)  # exclude figures
                     if m:
@@ -224,9 +227,9 @@ def run(
                             (para_idx, line_idx, closing_line)
                         )
                         line_idx = closing_line
-                        #print("*" * 30, "excluding figure", "*" * 30)
-                        #print(thispara_split[starting_line : closing_line + 1])
-                        #print("*" * 73)
+                        # print("*" * 30, "excluding figure", "*" * 30)
+                        # print(thispara_split[starting_line : closing_line + 1])
+                        # print("*" * 73)
                         # }}}
                     else:
                         m = re.search(
@@ -254,13 +257,13 @@ def run(
                                 exclusion_idx.append(
                                     (para_idx, starting_line, line_idx)
                                 )
-                                #print("*" * 30, "excluding table", "*" * 30)
-                                #print(
+                                # print("*" * 30, "excluding table", "*" * 30)
+                                # print(
                                 #    thispara_split[
                                 #        starting_line : line_idx + 1
                                 #    ]
-                                #)
-                                #print("*" * 73)
+                                # )
+                                # print("*" * 73)
                         else:
                             m = re.search(
                                 r"\$\$", thisline
@@ -275,16 +278,18 @@ def run(
                                     remaining_in_para, m.span()[-1] - 2, "$$"
                                 )
                                 closing_line = (
-                                    remaining_in_para[m.span()[-1] : pos].count("\n")
+                                    remaining_in_para[
+                                        m.span()[-1] : pos
+                                    ].count("\n")
                                     + line_idx
                                 )
                                 exclusion_idx.append(
                                     (para_idx, line_idx, closing_line)
                                 )
                                 line_idx = closing_line
-                                #print("*" * 30, "excluding equation", "*" * 30)
-                                #print(thispara_split[starting_line : closing_line + 1])
-                                #print("*" * 73)
+                                # print("*" * 30, "excluding equation", "*" * 30)
+                                # print(thispara_split[starting_line : closing_line + 1])
+                                # print("*" * 73)
                                 # }}}
                             else:
                                 m = re.search(
@@ -300,16 +305,18 @@ def run(
                                         remaining_in_para, m.span()[0], "~~~"
                                     )
                                     closing_line = (
-                                        remaining_in_para[m.span()[-1] : pos].count("\n")
+                                        remaining_in_para[
+                                            m.span()[-1] : pos
+                                        ].count("\n")
                                         + line_idx
                                     )
                                     exclusion_idx.append(
                                         (para_idx, line_idx, closing_line)
                                     )
                                     line_idx = closing_line
-                                    #print("*" * 30, "excluding code", "*" * 30)
-                                    #print(thispara_split[starting_line : closing_line + 1])
-                                    #print("*" * 73)
+                                    # print("*" * 30, "excluding code", "*" * 30)
+                                    # print(thispara_split[starting_line : closing_line + 1])
+                                    # print("*" * 73)
                                     # }}}
                                 else:
                                     m = re.search(
@@ -322,23 +329,27 @@ def run(
                                             thispara_split[line_idx:]
                                         )
                                         pos = match_paren(
-                                            remaining_in_para, m.span()[0], "<"+m.groups()[0]
+                                            remaining_in_para,
+                                            m.span()[0],
+                                            "<" + m.groups()[0],
                                         )
                                         closing_line = (
-                                            remaining_in_para[m.span()[-1] : pos].count("\n")
+                                            remaining_in_para[
+                                                m.span()[-1] : pos
+                                            ].count("\n")
                                             + line_idx
                                         )
                                         exclusion_idx.append(
                                             (para_idx, line_idx, closing_line)
                                         )
                                         line_idx = closing_line
-                                        #print("*" * 30, "excluding tagged block", "*" * 30)
-                                        #print(thispara_split[starting_line : closing_line + 1])
-                                        #print("*" * 73)
+                                        # print("*" * 30, "excluding tagged block", "*" * 30)
+                                        # print(thispara_split[starting_line : closing_line + 1])
+                                        # print("*" * 73)
                                         # }}}
                 line_idx += 1
                 # }}}
-    #print("all exclusions:", exclusion_idx)
+    # print("all exclusions:", exclusion_idx)
     all_text_procd = []
     for para_idx in range(len(alltext)):  # split paragraphs into sentences
         para_lines = alltext[para_idx].split("\n")
@@ -357,12 +368,12 @@ def run(
             (key, "\n".join([j[1] for j in group]))
             for key, group in itertools.groupby(para_lines, lambda x: x[0])
         ]
-        #print("here are the grouped para lines!----------------", para_lines)
+        # print("here are the grouped para lines!----------------", para_lines)
         for notexcl, thiscontent in para_lines:
             if notexcl:
                 # {{{ here I need a trick to prevent including short abbreviations, etc
                 tempsent = re.split(r"([^\.!?]{3}[\.!?])[ \n]", thiscontent)
-                #for j in tempsent:
+                # for j in tempsent:
                 #    #rint("--", j)
                 # {{{ put the "separators together with the preceding
                 temp_paragraph = []
@@ -373,7 +384,7 @@ def run(
                         )
                     else:
                         temp_paragraph.append(tempsent[tempsent_num])
-                #print("-------------------")
+                # print("-------------------")
                 thiscontent = []
                 for this_sent in temp_paragraph:
                     thiscontent.extend(
@@ -382,7 +393,7 @@ def run(
                             this_sent,
                         )
                     )
-                #for this_sent in thiscontent:
+                # for this_sent in thiscontent:
                 #    #rint("--sentence: ", this_sent)
                 # }}}
                 # }}}
@@ -401,9 +412,9 @@ def run(
             else:
                 all_text_procd += [(False, thiscontent)]
     alltext = all_text_procd
-    #print("*" * 50 + "\n" + "parsed alltext" + "*" * 50)
-    #print(alltext)
-    #print("\n\n")
+    # print("*" * 50 + "\n" + "parsed alltext" + "*" * 50)
+    # print(alltext)
+    # print("\n\n")
     # {{{ now that it's organized into paragraphs, sentences, and
     #    words, wrap the sentences
     lines = []
@@ -423,8 +434,8 @@ def run(
                     cumsum_num = np.cumsum(numchars)
                     nextline_upto = np.argmin(abs(cumsum_num - wrapnumber))  #
                     #   the next line goes up to this position
-                    nextline_punct_upto = np.array(
-                        [
+                    nextline_punct_upto = np.array([
+                        (
                             cumsum_num[j]
                             if (
                                 residual_sentence[j][-1]
@@ -432,9 +443,9 @@ def run(
                                 and len(residual_sentence[j]) > 1
                             )
                             else 10000
-                            for j in range(len(residual_sentence))
-                        ]
-                    )
+                        )
+                        for j in range(len(residual_sentence))
+                    ])
                     if any(nextline_punct_upto < 10000):
                         nextline_punct_upto = np.argmin(
                             abs(nextline_punct_upto - wrapnumber)
@@ -445,10 +456,10 @@ def run(
                                 < punctuation_slop
                             ):
                                 nextline_upto = nextline_punct_upto
-                    #print(
+                    # print(
                     #    "-" * 10 + " here is the residual sentence:\n\t",
                     #    residual_sentence,
-                    #)
+                    # )
                     lines.append(
                         " " * indentation
                         + " ".join(residual_sentence[: nextline_upto + 1])
@@ -461,11 +472,11 @@ def run(
         indentation = (
             0  # if excluded or new sentence, indentation goes back to zero
         )
-    #print("here are lines!!\n\n\n\n", lines)
+    # print("here are lines!!\n\n\n\n", lines)
     # }}}
     if filename is None:
-        print(("\n".join(lines)))
+        print("\n".join(lines))
     else:
         fp = open(filename, "w", encoding="utf-8")
-        fp.write(("\n".join(lines)))
+        fp.write("\n".join(lines))
         fp.close()
