@@ -347,6 +347,31 @@ def run(
                                         # print(thispara_split[starting_line : closing_line + 1])
                                         # print("*" * 73)
                                         # }}}
+                                    else:
+                                        m = re.search(
+                                            r"^ *([*\-]|[0-9]+\.) +", thisline
+                                        )  # exclude lists
+                                        if m:
+                                            starting_line = line_idx
+                                            stop_line = line_idx
+                                            while m:
+                                                line_idx += 1
+                                                if line_idx > len(thispara_split)-1:
+                                                    line_idx -= 1
+                                                    stop_line = line_idx
+                                                    break
+                                                testline = thispara_split[line_idx]
+                                                m = re.search(
+                                                        f"^ {{{m.span()[1]-m.span()[0]}}}", testline
+                                                        )
+                                                if m:
+                                                    stop_line = line_idx
+                                                else:
+                                                    line_idx -= 1
+                                                    break
+                                            exclusion_idx.append(
+                                                (para_idx, starting_line, stop_line)
+                                            )
                 line_idx += 1
                 # }}}
     # print("all exclusions:", exclusion_idx)
