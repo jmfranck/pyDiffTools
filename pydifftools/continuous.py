@@ -55,8 +55,6 @@ def run_pandoc(filename, html_file):
     print("running:",' '.join(command))
     subprocess.run(
         command,
-        #stdout=subprocess.DEVNULL,
-        #stderr=subprocess.DEVNULL,
     )
     if has_local_jax:
         # {{{ for slow internet connection, remove remote files
