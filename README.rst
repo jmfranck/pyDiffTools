@@ -35,8 +35,10 @@ included are (listed in order of fun/utility):
   chrome driver -- as of this update,
   the drivers are `here <https://googlechromelabs.github.io/chrome-for-testing/#stable>`_,
   but it seems like google is moving them around.
-  You also need to install `pandoc` as well as `pandoc-crossref`
+  You also need to install `pandoc <https://pandoc.org/installing.html>`_
+  as well as `pandoc-crossref <https://github.com/lierdakil/pandoc-crossref>`_
   (currently tested on windows with *version 3.5* of the former,
+  *not the latest installer*,
   since crossref isn't built with the most recent version).
 - `pydifft wr <filename.tex|md>` (wrap)
   This provides a standardized (and
