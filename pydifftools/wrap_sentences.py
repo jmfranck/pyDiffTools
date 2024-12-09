@@ -14,7 +14,7 @@ def match_paren(thistext, pos, opener="{"):
     if opener in closerdict.keys():
         closer = closerdict[opener]
     else:
-        m = re.match("<(\w+)", opener)
+        m = re.match(r"<(\w+)", opener)
         assert m
         closer = "</" + m.groups()[0]
     if thistext[pos : pos + len(opener)] == opener:

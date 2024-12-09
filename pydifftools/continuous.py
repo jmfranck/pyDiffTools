@@ -25,11 +25,16 @@ def run_pandoc(filename, html_file):
     if len(csl_files) == 1:
         mycsl = csl_files[0]
     else:
-        raise ValueError(
-            "You have more than one csl file in this directory! Get rid of all"
-            " but one! of "
-            + "and".join(csl_files)
-        )
+        if len(csl_files) == 0:
+            raise ValueError(
+                "You have no csl files.  You need one!!"
+                )
+        else:
+            raise ValueError(
+                "You have more than one csl file in this directory! Get rid of all"
+                " but one! of "
+                + "and".join(csl_files)
+            )
     command = [
         "pandoc",
         "--bibliography",
@@ -47,10 +52,11 @@ def run_pandoc(filename, html_file):
         filename,
     ]
     # command = ['pandoc', '-s', '--mathjax', '-o', html_file, filename]
+    print("running:",' '.join(command))
     subprocess.run(
         command,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        #stdout=subprocess.DEVNULL,
+        #stderr=subprocess.DEVNULL,
     )
     if has_local_jax:
         # {{{ for slow internet connection, remove remote files
@@ -80,6 +86,8 @@ class Handler(FileSystemEventHandler):
     def init_firefox(self):
         self.firefox = webdriver.Chrome()  # requires chromium
         run_pandoc(self.filename, self.html_file)
+        if not os.path.exists(self.html_file):
+            print("html doesn't exist")
         self.append_autorefresh()
         # self.firefox.open_new_tab(self.html_file)
         self.firefox.get("file://" + os.path.abspath(self.html_file))

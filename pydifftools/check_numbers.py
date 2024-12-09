@@ -10,7 +10,7 @@ def run(arguments):
     for thisnumber in range(start, stop + 1):
         if os.name == "posix":
             result = Popen(
-                ['grep -Rice "%d\." ~/notebook/list*' % thisnumber],
+                [r'grep -Rice "%d\." ~/notebook/list*' % thisnumber],
                 shell=True,
                 stdout=PIPE,
             )
