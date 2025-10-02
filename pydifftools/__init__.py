@@ -5,4 +5,5 @@ __all__ = [
     "match_spaces",
     "split_conflict",
     "wrap_sentences",
+    "rearrange_tex",
 ]

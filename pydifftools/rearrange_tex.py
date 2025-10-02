@@ -1,0 +1,122 @@
+"""Rearrange TeX files according to a plan file."""
+
+from __future__ import annotations
+
+import argparse
+import pathlib
+import re
+import sys
+from typing import List, Sequence
+
+
+S_CMD = re.compile(
+    r"""^s
+         /((?:\\.|[^/])*)   # pattern
+         /((?:\\.|[^/])*)   # replacement
+         /([gi]{0,2})$      # flags
+    """,
+    re.VERBOSE,
+)
+
+
+def unescape_slashes(s: str) -> str:
+    return s.replace(r"\/", "/")
+
+
+def apply_s_cmd(line: str, cmd: str) -> str:
+    m = S_CMD.match(cmd)
+    if not m:
+        raise ValueError(f"Bad s/// command: {cmd!r}")
+    pat_raw, rep_raw, flags = m.groups()
+    pat = unescape_slashes(pat_raw)
+    rep = unescape_slashes(rep_raw)
+    reflags = re.IGNORECASE if "i" in flags else 0
+    count = 0 if "g" in flags else 1
+    return re.sub(pat, rep, line, count=count, flags=reflags)
+
+
+def parse_plan_line(s: str):
+    s = s.rstrip("\n")
+    if not s.strip():
+        return ("comment", "")
+    if s.lstrip().startswith("#"):
+        return ("comment", s.lstrip()[1:].strip())
+    parts = s.split()
+    ln = int(parts[0])
+    scratch = False
+    s_cmds: List[str] = []
+    for tok in parts[1:]:
+        if tok.lower() == "scratch":
+            scratch = True
+        else:
+            if not S_CMD.match(tok):
+                raise ValueError(f"Bad token in plan: {tok!r}")
+            s_cmds.append(tok)
+    return ("directive", ln, scratch, s_cmds)
+
+
+def run(argv: Sequence[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="pydifftools rearrange", description="Rearrange TeX file lines"
+    )
+    parser.add_argument(
+        "tex_path", type=pathlib.Path, help="TeX file (modified in place)"
+    )
+    parser.add_argument(
+        "plan_path", type=pathlib.Path, help="Rearrangement plan file (.rrng)"
+    )
+    args = parser.parse_args(argv)
+
+    tex_lines = args.tex_path.read_text(encoding="utf-8").splitlines(keepends=False)
+    n = len(tex_lines)
+
+    items = []
+    used: List[int] = []
+    with args.plan_path.open("r", encoding="utf-8") as f:
+        for raw in f:
+            kind, *rest = parse_plan_line(raw)
+            if kind == "comment":
+                items.append(("comment", rest[0]))
+            else:
+                ln, scratch, s_cmds = rest
+                if not (1 <= ln <= n):
+                    raise ValueError(f"Line number {ln} out of range 1..{n}")
+                items.append(("directive", ln, scratch, s_cmds))
+                used.append(ln)
+
+    missing = sorted(set(range(1, n + 1)) - set(used))
+    dupes = sorted([x for x in set(used) if used.count(x) > 1])
+    if missing:
+        sys.exit(f"ERROR: Plan missing lines: {missing}")
+    if dupes:
+        sys.exit(f"ERROR: Plan duplicated lines: {dupes}")
+
+    out_main: List[str] = []
+    out_scratch: List[str] = []
+    for it in items:
+        if it[0] == "comment":
+            out_main.append("% " + it[1])
+            continue
+        _, ln, scratch, s_cmds = it
+        mod = tex_lines[ln - 1]
+        for cmd in s_cmds:
+            mod = apply_s_cmd(mod, cmd)
+        if scratch:
+            out_scratch.append("% " + mod)
+        else:
+            out_main.append(mod)
+
+    if out_scratch:
+        out_main.append("% --- SCRATCH ---")
+        out_main.extend(out_scratch)
+
+    with args.tex_path.open("w", encoding="utf-8") as f:
+        f.write("\n".join(out_main) + "\n")
+
+
+def main() -> None:
+    run()
+
+
+if __name__ == "__main__":
+    main()
