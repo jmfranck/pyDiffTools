@@ -63,49 +63,10 @@ def printed_exec(cmd):
         )
 
 
-CLI_DESCRIPTION = r"""arguments are:
-    arxiv   :   make a gzip file suitable for arxiv (currently only test
-                on linux)
-    ac      :   look for the file myacronyms.sty (locally or in texmf) and
-                use it substitute your acronyms
-    cpb     :   continuous pandoc build.  Like latexmk, but for markdown!
-    fs      :   smart latex forward-search
-                currently this works specifically for sumatra pdf located
-                at "C:\Program Files\SumatraPDF\SumatraPDF.exe",
-                but can easily be adapted based on os, etc.
-                Add the following line (or something like it) to your vimrc:
-                map <c-F>s :cd %:h\|sil !pydifft fs %:p <c-r>=line(".")<cr><cr>
-                it will map Cntrl-F s to a forward search.
-    rs      :   Reverse search
-    py2nb   :   Make a notebook file from a python script, following certain rules.
-    nb2py   :   Make a python script from a notebook file, following certain rules.
-    num     :   check numbers in a latex catalog (e.g. of numbered notebook)
-                of items of the form '\item[anything number.anything]'
-    gensync :   use a compiled latex original (first arg) to generate a synctex
-                file for a scanned document (second arg), e.g.  with
-                handwritten markup
-    wmatch  :   match whitespace
-    cmp     :   compare files, and rank by how well they compare
-    gvr     :   git forward search, with arguments
-
-                - file
-                - line
-    sc      :   split conflict
-    sepc    :   tex separate comments
-    unsepc  :   tex unseparate comments
-    wd      :   word diff
-    wr      :   wrap with indented sentence format (for markdown or latex).
-                Optional flag --cleanoo cleans latex exported from
-                OpenOffice/LibreOffice
-                Optional flag -i # specifies indentation level for subsequent
-                lines of a sentence (defaults to 4 -- e.g. for markdown you
-                will always want -i 0)
-    xx      :   Convert xml to xlsx"""
-
-
 def errmsg():
-    print(CLI_DESCRIPTION)
-    exit()
+    parser = build_parser()
+    parser.print_help()
+    sys.exit(1)
 
 
 _ROOT = os.path.abspath(os.path.dirname(__file__))
@@ -789,10 +750,7 @@ def ac(arguments):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=CLI_DESCRIPTION,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
+    parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command")
     subparsers.required = True
     for name, spec in _COMMAND_SPECS.items():
