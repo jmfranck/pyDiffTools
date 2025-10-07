@@ -21,20 +21,24 @@ def run_pandoc(filename, html_file):
         )
         print("and then unzip")
     current_dir = os.getcwd()
-    csl_files = [f for f in os.listdir(current_dir) if f.endswith(".csl")]
-    if len(csl_files) == 1:
-        mycsl = csl_files[0]
-    else:
-        raise ValueError(
-            "You have more than one csl file in this directory! Get rid of all"
-            " but one! of "
-            + "and".join(csl_files)
-        )
+    localfiles = {}
+    for k in ["csl", "bib"]:
+        localfiles[k] = [
+            f for f in os.listdir(current_dir) if f.endswith("." + k)
+        ]
+        if len(localfiles[k]) == 1:
+            localfiles[k] = localfiles[k][0]
+        else:
+            raise ValueError(
+                f"You have more than one (or no) {k} file in this directory!"
+                " Get rid of all but one! of "
+                + "and".join(localfiles[k])
+            )
     command = [
         "pandoc",
         "--bibliography",
-        "references.bib",
-        f"--csl={mycsl}",
+        localfiles["bib"],
+        f"--csl={localfiles['csl']}",
         "--filter",
         "pandoc-crossref",
         "--citeproc",
@@ -50,8 +54,9 @@ def run_pandoc(filename, html_file):
     subprocess.run(
         command,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=sys.stdout,
     )
+    print("running:\n", command)
     if has_local_jax:
         # {{{ for slow internet connection, remove remote files
         with open(html_file, encoding="utf-8") as fp:

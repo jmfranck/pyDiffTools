@@ -1,5 +1,11 @@
 import sys
-from . import check_numbers, match_spaces, split_conflict, wrap_sentences
+from . import (
+    check_numbers,
+    match_spaces,
+    split_conflict,
+    wrap_sentences,
+    outline,
+)
 from .separate_comments import tex_sepcomments
 from .unseparate_comments import tex_unsepcomments
 from .comment_functions import matchingbrackets
@@ -30,13 +36,14 @@ def printed_exec(cmd):
 
 
 def errmsg():
-    print(
-        r"""arguments are:
+    print(r"""arguments are:
     arxiv   :   make a gzip file suitable for arxiv (currently only test
                 on linux)
     ac      :   look for the file myacronyms.sty (locally or in texmf) and
                 use it substitute your acronyms
     cpb     :   continuous pandoc build.  Like latexmk, but for markdown!
+    pmd     :   Paste mark down as formatted text into email, etc. (Tested on
+                linux)
     fs      :   smart latex forward-search
                 currently this works specifically for sumatra pdf located
                 at "C:\Program Files\SumatraPDF\SumatraPDF.exe",
@@ -68,8 +75,11 @@ def errmsg():
                 Optional flag -i # specifies indentation level for subsequent
                 lines of a sentence (defaults to 4 -- e.g. for markdown you
                 will always want -i 0)
-    xx      :   Convert xml to xlsx"""
-    )
+    xo      :   Save tex file as outline, with filename_outline.pickle
+                storing content and filename_outline.md giving outline.
+    xoreorder : use the modified filename_outline.md to write reordered text
+    xx      :   Convert xml to xlsx
+    """)
     exit()
 
 
@@ -94,14 +104,15 @@ def recursive_include_search(directory, basename, does_it_input):
         print(basename + " directly includes " + does_it_input)
         return True, actual_name
     print(
-        "file %s didn't directly include '%s' -- I'm going to look for the files that it includes"
-        % (basename, does_it_input)
+        "file %s didn't directly include '%s' -- I'm going to look for the"
+        " files that it includes" % (basename, does_it_input)
     )
     pattern = re.compile(r"\n[^%]*\\(?:input|include)[{]([^}]+)[}](.*)")
     for inputname, extra in pattern.findall(alltxt):
         if "\\input" in extra or "\\include" in extra:
             raise IOError(
-                "Don't put multiple include or input statements on one lien --> are you trying to make my life difficult!!!??? "
+                "Don't put multiple include or input statements on one lien"
+                " --> are you trying to make my life difficult!!!??? "
             )
         print("%s includes input file:" % basename, inputname)
         retval, actual_name = recursive_include_search(
@@ -143,7 +154,8 @@ def main():
         check_numbers.run(arguments)
     elif command == "nb2py":
         assert arguments[0].endswith(".ipynb"), (
-            "this is supposed to be called with a .ipynb file argument! (arguments are %s)"
+            "this is supposed to be called with a .ipynb file argument!"
+            " (arguments are %s)"
             % repr(arguments)
         )
         nb = nbformat.read(arguments[0], nbformat.NO_CONVERT)
@@ -197,7 +209,8 @@ def main():
             len(arguments) == 1
         ), "py2nb should only be called with one argument"
         assert arguments[0].endswith(".py"), (
-            "this is supposed to be called with a .py file argument! (arguments are %s)"
+            "this is supposed to be called with a .py file argument!"
+            " (arguments are %s)"
             % repr(arguments)
         )
         with open(arguments[0], encoding="utf-8") as fpin:
@@ -218,7 +231,7 @@ def main():
                     in_markdown_cell = False
                 elif thisline.startswith("# Out["):
                     pass
-                elif thisline.startswith("# "):
+                elif thisline.startswith("# ") or thisline == "#":
                     # this is markdown only if the previous line was empty
                     if last_line_empty:
                         newtext.append("# <markdowncell>")
@@ -260,15 +273,13 @@ def main():
         nbook = nbformat.v4.upgrade(
             nbook
         )  # Upgrade nbformat.v3 to nbformat.v4
-        nbook.metadata.update(
-            {
-                "kernelspec": {
-                    "name": "Python [Anaconda2]",
-                    "display_name": "Python [Anaconda2]",
-                    "language": "python",
-                }
+        nbook.metadata.update({
+            "kernelspec": {
+                "name": "Python [Anaconda2]",
+                "display_name": "Python [Anaconda2]",
+                "language": "python",
             }
-        )
+        })
 
         jsonform = nbformat.v4.writes(nbook) + "\n"
         with open(
@@ -357,7 +368,8 @@ def main():
         for j in range(2):
             if arguments[0][-5:] == ".docx":
                 print(
-                    "the first argument has a docx extension, so I'm bypassing the pandoc step"
+                    "the first argument has a docx extension, so I'm bypassing"
+                    " the pandoc step"
                 )
             else:
                 cmd = ["pandoc"]
@@ -370,7 +382,8 @@ def main():
                         cmd += ["--reference-docx=" + arguments[2]]
                     else:
                         raise RuntimeError(
-                            "if you pass three arguments to wd, then the third must be a template for the word document"
+                            "if you pass three arguments to wd, then the third"
+                            " must be a template for the word document"
                         )
                 elif os.path.isfile(local_dir + os.path.sep + "template.docx"):
                     # by default, use template.docx in the current directory
@@ -461,7 +474,8 @@ def main():
             )
             # file has been found, so add to the command
             cmd.append(
-                f"{lineno}:0:{tex_name}.tex {os.path.join(directory,basename+'.pdf')}"
+                f"{lineno}:0:{tex_name}.tex"
+                f" {os.path.join(directory,basename+'.pdf')}"
             )
         if os.name == "posix":
             cmd.append("&")
@@ -594,8 +608,8 @@ def main():
         with open("%s.md" % basename, "w", encoding="utf-8") as fp:
             fp.write(content)
         printed_exec(
-            "pandoc %s.md --biblatex -r markdown-auto_identifiers -o %s_reconv.tex"
-            % ((basename,) * 2)
+            "pandoc %s.md --biblatex -r markdown-auto_identifiers -o"
+            " %s_reconv.tex" % ((basename,) * 2)
         )
         print("about to match spaces:")
         match_spaces.run((basename + ".tex", basename + "_reconv.tex"))
@@ -656,6 +670,25 @@ def main():
         )
         print("I'm using the acronyms in", path)
         replace_acros(path)
+    elif command == "pmd":
+        # pandoc input.md -t html -o - | xclip -selection clipboard -t text/html
+        p1 = subprocess.Popen(
+            ["pandoc", arguments[0], "-t", "html", "-o", "-"],
+            stdout=subprocess.PIPE,
+        )
+        subprocess.run(
+            ["xclip", "-selection", "clipboard", "-t", "text/html"],
+            stdin=p1.stdout,
+            check=True,
+        )
+        p1.stdout.close()
+        p1.wait()
+    elif command == "xo":
+        assert len(arguments) == 1
+        outline.extract_outline(arguments[0])
+    elif command == "xoreorder":
+        assert len(arguments) == 1
+        outline.write_reordered(arguments[0])
     else:
         errmsg()
     return
