@@ -91,6 +91,18 @@ def test_rrng_supports_line_ranges(tmp_path):
     )
 
 
+def test_rrng_allows_spaces_in_substitutions(tmp_path):
+    # Confirm that search and replacement sections may contain spaces without breaking tokenization.
+    tex_path = tmp_path / "spaces.tex"
+    tex_path.write_text("alpha beta\ngamma\n", encoding="utf-8")
+    plan_path = tmp_path / "spaces.rrng"
+    plan_path.write_text("1 s/alpha beta/ALPHA BETA/\n2\n", encoding="utf-8")
+
+    command_line.main(["rrng", str(tex_path), str(plan_path)])
+
+    assert tex_path.read_text(encoding="utf-8") == "ALPHA BETA\ngamma\n"
+
+
 def test_rrng_requires_all_lines(tmp_path):
     # Confirm that missing source lines cause the command to abort with a helpful error message.
     tex_path = tmp_path / "missing.tex"

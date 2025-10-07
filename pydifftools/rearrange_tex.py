@@ -39,10 +39,14 @@ def parse_plan_line(s: str):
     s = s.rstrip("\n")
     if not s.strip():
         return ("comment", "")
-    if s.lstrip().startswith("#"):
-        return ("comment", s.lstrip()[1:].strip())
-    parts = s.split()
-    line_token = parts[0]
+    stripped = s.lstrip()
+    if stripped.startswith("#"):
+        return ("comment", stripped[1:].strip())
+    line = stripped
+    idx = 0
+    while idx < len(line) and not line[idx].isspace():
+        idx += 1
+    line_token = line[:idx]
     # Allow plans to specify either a single source line or an inclusive range like "10-20".
     if "-" in line_token:
         range_parts = line_token.split("-")
@@ -57,13 +61,49 @@ def parse_plan_line(s: str):
         line_numbers = [int(line_token)]
     scratch = False
     s_cmds = []
-    for tok in parts[1:]:
-        if tok.lower() == "scratch":
+    pos = idx
+    # Walk the remainder of the line manually so spaces inside s/// survive tokenization.
+    while pos < len(line):
+        while pos < len(line) and line[pos].isspace():
+            pos += 1
+        if pos >= len(line):
+            break
+        if line[pos : pos + 7].lower() == "scratch" and (
+            pos + 7 == len(line) or line[pos + 7].isspace()
+        ):
             scratch = True
-        else:
-            if not S_CMD.match(tok):
-                raise ValueError(f"Bad token in plan: {tok!r}")
-            s_cmds.append(tok)
+            pos += 7
+            continue
+        if line.startswith("s/", pos):
+            start = pos
+            pos += 2
+            slash_count = 0
+            while pos < len(line):
+                ch = line[pos]
+                if ch == "\\":
+                    pos += 2
+                    continue
+                if ch == "/":
+                    slash_count += 1
+                    pos += 1
+                    if slash_count == 2:
+                        while pos < len(line) and line[pos] in "gi":
+                            pos += 1
+                        cmd = line[start:pos]
+                        if not S_CMD.match(cmd):
+                            raise ValueError(f"Bad token in plan: {cmd!r}")
+                        s_cmds.append(cmd)
+                        break
+                    continue
+                pos += 1
+            else:
+                raise ValueError(f"Unterminated s/// command in plan: {line!r}")
+            continue
+        end = pos
+        while end < len(line) and not line[end].isspace():
+            end += 1
+        bad = line[pos:end]
+        raise ValueError(f"Bad token in plan: {bad!r}")
     return ("directive", line_numbers, scratch, s_cmds)
 
 
