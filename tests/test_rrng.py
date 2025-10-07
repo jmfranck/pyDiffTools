@@ -76,6 +76,21 @@ def test_rrng_rearranges_tex(tmp_path):
     )
 
 
+def test_rrng_supports_line_ranges(tmp_path):
+    # Confirm that a plan line specifying an inclusive range applies to each source line in order.
+    tex_path = tmp_path / "ranges.tex"
+    tex_path.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
+    plan_path = tmp_path / "ranges.rrng"
+    plan_path.write_text("1-2\n5 scratch\n3-4 s/o/O/\n", encoding="utf-8")
+
+    command_line.main(["rrng", str(tex_path), str(plan_path)])
+
+    assert (
+        tex_path.read_text(encoding="utf-8")
+        == "one\ntwo\nthree\nfOur\n% --- SCRATCH ---\n% five\n"
+    )
+
+
 def test_rrng_requires_all_lines(tmp_path):
     # Confirm that missing source lines cause the command to abort with a helpful error message.
     tex_path = tmp_path / "missing.tex"

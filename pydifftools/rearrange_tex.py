@@ -42,9 +42,21 @@ def parse_plan_line(s: str):
     if s.lstrip().startswith("#"):
         return ("comment", s.lstrip()[1:].strip())
     parts = s.split()
-    ln = int(parts[0])
+    line_token = parts[0]
+    # Allow plans to specify either a single source line or an inclusive range like "10-20".
+    if "-" in line_token:
+        range_parts = line_token.split("-")
+        if len(range_parts) != 2:
+            raise ValueError(f"Bad line range in plan: {line_token!r}")
+        start = int(range_parts[0])
+        end = int(range_parts[1])
+        if end < start:
+            raise ValueError(f"Line range out of order: {line_token!r}")
+        line_numbers = list(range(start, end + 1))
+    else:
+        line_numbers = [int(line_token)]
     scratch = False
-    s_cmds: List[str] = []
+    s_cmds = []
     for tok in parts[1:]:
         if tok.lower() == "scratch":
             scratch = True
@@ -52,7 +64,7 @@ def parse_plan_line(s: str):
             if not S_CMD.match(tok):
                 raise ValueError(f"Bad token in plan: {tok!r}")
             s_cmds.append(tok)
-    return ("directive", ln, scratch, s_cmds)
+    return ("directive", line_numbers, scratch, s_cmds)
 
 
 def run(argv: Sequence[str] | None = None) -> None:
@@ -78,11 +90,12 @@ def run(argv: Sequence[str] | None = None) -> None:
             if kind == "comment":
                 items.append(("comment", rest[0]))
             else:
-                ln, scratch, s_cmds = rest
-                if not (1 <= ln <= n):
-                    raise ValueError(f"Line number {ln} out of range 1..{n}")
-                items.append(("directive", ln, scratch, s_cmds))
-                used.append(ln)
+                line_numbers, scratch, s_cmds = rest
+                for ln in line_numbers:
+                    if not (1 <= ln <= n):
+                        raise ValueError(f"Line number {ln} out of range 1..{n}")
+                items.append(("directive", line_numbers, scratch, s_cmds))
+                used.extend(line_numbers)
 
     missing = sorted(set(range(1, n + 1)) - set(used))
     dupes = sorted([x for x in set(used) if used.count(x) > 1])
@@ -97,14 +110,15 @@ def run(argv: Sequence[str] | None = None) -> None:
         if it[0] == "comment":
             out_main.append("% " + it[1])
             continue
-        _, ln, scratch, s_cmds = it
-        mod = tex_lines[ln - 1]
-        for cmd in s_cmds:
-            mod = apply_s_cmd(mod, cmd)
-        if scratch:
-            out_scratch.append("% " + mod)
-        else:
-            out_main.append(mod)
+        _, line_numbers, scratch, s_cmds = it
+        for ln in line_numbers:
+            mod = tex_lines[ln - 1]
+            for cmd in s_cmds:
+                mod = apply_s_cmd(mod, cmd)
+            if scratch:
+                out_scratch.append("% " + mod)
+            else:
+                out_main.append(mod)
 
     if out_scratch:
         out_main.append("% --- SCRATCH ---")
