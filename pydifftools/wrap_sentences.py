@@ -62,6 +62,11 @@ def run(
         elif file_extension == "md":
             # print("identified as markdown!!")
             filetype = "markdown"
+        elif file_extension == "qmd":
+            # print("identified as markdown!!")
+            filetype = "markdown"
+        if filetype == "markdown":
+            indent_amount = 0
         # }}}
     else:
         sys.stdin.reconfigure(encoding="utf-8")
@@ -347,31 +352,33 @@ def run(
                                         # print(thispara_split[starting_line : closing_line + 1])
                                         # print("*" * 73)
                                         # }}}
-                                    else:
-                                        m = re.search(
-                                            r"^ *([*\-]|[0-9]+\.) +", thisline
-                                        )  # exclude lists
-                                        if m:
-                                            starting_line = line_idx
-                                            stop_line = line_idx
-                                            while m:
-                                                line_idx += 1
-                                                if line_idx > len(thispara_split)-1:
-                                                    line_idx -= 1
-                                                    stop_line = line_idx
-                                                    break
-                                                testline = thispara_split[line_idx]
-                                                m = re.search(
-                                                        f"^ {{{m.span()[1]-m.span()[0]}}}", testline
-                                                        )
-                                                if m:
-                                                    stop_line = line_idx
-                                                else:
-                                                    line_idx -= 1
-                                                    break
-                                            exclusion_idx.append(
-                                                (para_idx, starting_line, stop_line)
-                                            )
+                                    # following seems to exclude everything
+                                    #else:
+                                    #    m = re.search(
+                                    #        r"^ *([*\-]|[0-9]+\.) +", thisline
+                                    #    )  # exclude lists
+                                    #    if m:
+                                    #        print("bullet",thisline)
+                                    #        starting_line = line_idx
+                                    #        stop_line = line_idx
+                                    #        while m:
+                                    #            line_idx += 1
+                                    #            if line_idx > len(thispara_split)-1:
+                                    #                line_idx -= 1
+                                    #                stop_line = line_idx
+                                    #                break
+                                    #            testline = thispara_split[line_idx]
+                                    #            m = re.search(
+                                    #                    f"^ {{{m.span()[1]-m.span()[0]}}}", testline
+                                    #                    )
+                                    #            if m:
+                                    #                stop_line = line_idx
+                                    #                print("continuation:", testline)
+                                    #            else:
+                                    #                line_idx -= 1
+                                    #        exclusion_idx.append(
+                                    #            (para_idx, starting_line, stop_line)
+                                    #        )
                 line_idx += 1
                 # }}}
     # print("all exclusions:", exclusion_idx)

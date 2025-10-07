@@ -3,7 +3,13 @@
 import argparse
 import sys
 from typing import Callable, Dict, List, Optional, Sequence
-from . import check_numbers, match_spaces, split_conflict, wrap_sentences
+from . import (
+    check_numbers,
+    match_spaces,
+    split_conflict,
+    wrap_sentences,
+    outline,
+)
 from .separate_comments import tex_sepcomments
 from .unseparate_comments import tex_unsepcomments
 from .comment_functions import matchingbrackets
@@ -35,17 +41,23 @@ class CommandRegistrationError(RuntimeError):
 _COMMAND_SPECS: Dict[str, Dict[str, object]] = {}
 
 
-def register_command(help_text: str, description: Optional[str] = None) -> Callable[[CommandHandler], CommandHandler]:
+def register_command(
+    help_text: str, description: Optional[str] = None
+) -> Callable[[CommandHandler], CommandHandler]:
     """Register a command handler for the CLI dispatcher."""
 
     def decorator(func: CommandHandler) -> CommandHandler:
         name = func.__name__
         if name in _COMMAND_SPECS:
-            raise CommandRegistrationError(f"Command '{name}' already registered")
+            raise CommandRegistrationError(
+                f"Command '{name}' already registered"
+            )
         _COMMAND_SPECS[name] = {
             "handler": func,
             "help": help_text.strip(),
-            "description": (description if description is not None else help_text).strip(),
+            "description": (
+                description if description is not None else help_text
+            ).strip(),
         }
         return func
 
@@ -90,14 +102,15 @@ def recursive_include_search(directory, basename, does_it_input):
         print(basename + " directly includes " + does_it_input)
         return True, actual_name
     print(
-        "file %s didn't directly include '%s' -- I'm going to look for the files that it includes"
-        % (basename, does_it_input)
+        "file %s didn't directly include '%s' -- I'm going to look for the"
+        " files that it includes" % (basename, does_it_input)
     )
     pattern = re.compile(r"\n[^%]*\\(?:input|include)[{]([^}]+)[}](.*)")
     for inputname, extra in pattern.findall(alltxt):
         if "\\input" in extra or "\\include" in extra:
             raise IOError(
-                "Don't put multiple include or input statements on one lien --> are you trying to make my life difficult!!!??? "
+                "Don't put multiple include or input statements on one lien"
+                " --> are you trying to make my life difficult!!!??? "
             )
         print("%s includes input file:" % basename, inputname)
         retval, actual_name = recursive_include_search(
@@ -130,9 +143,9 @@ def look_for_pdf(directory, origbasename):
     return found, basename, actual_name
 
 
-
 @register_command(
-    "check numbers in a latex catalog (e.g. of numbered notebook) of items of the form '\\item[anything number.anything]'"
+    "check numbers in a latex catalog (e.g. of numbered notebook) of items of"
+    " the form '\\item[anything number.anything]'"
 )
 def num(arguments):
     check_numbers.run(arguments)
@@ -143,7 +156,8 @@ def num(arguments):
 )
 def nb2py(arguments):
     assert arguments[0].endswith(".ipynb"), (
-        "this is supposed to be called with a .ipynb file argument! (arguments are %s)"
+        "this is supposed to be called with a .ipynb file argument! (arguments"
+        " are %s)"
         % repr(arguments)
     )
     nb = nbformat.read(arguments[0], nbformat.NO_CONVERT)
@@ -198,11 +212,10 @@ def py2nb(arguments):
         + 6 * r"(?:u?, *['\"]([^'\"]*)['\"])?"
         + r"\)\)"
     )
-    assert (
-        len(arguments) == 1
-    ), "py2nb should only be called with one argument"
+    assert len(arguments) == 1, "py2nb should only be called with one argument"
     assert arguments[0].endswith(".py"), (
-        "this is supposed to be called with a .py file argument! (arguments are %s)"
+        "this is supposed to be called with a .py file argument! (arguments"
+        " are %s)"
         % repr(arguments)
     )
     with open(arguments[0], encoding="utf-8") as fpin:
@@ -262,18 +275,14 @@ def py2nb(arguments):
 
     nbook = nbformat.v3.reads_py(text)
 
-    nbook = nbformat.v4.upgrade(
-        nbook
-    )  # Upgrade nbformat.v3 to nbformat.v4
-    nbook.metadata.update(
-        {
-            "kernelspec": {
-                "name": "Python [Anaconda2]",
-                "display_name": "Python [Anaconda2]",
-                "language": "python",
-            }
+    nbook = nbformat.v4.upgrade(nbook)  # Upgrade nbformat.v3 to nbformat.v4
+    nbook.metadata.update({
+        "kernelspec": {
+            "name": "Python [Anaconda2]",
+            "display_name": "Python [Anaconda2]",
+            "language": "python",
         }
-    )
+    })
 
     jsonform = nbformat.v4.writes(nbook) + "\n"
     with open(
@@ -283,7 +292,8 @@ def py2nb(arguments):
 
 
 @register_command(
-    "use a compiled latex original (first arg) to generate a synctex file for a scanned document (second arg), e.g.  with handwritten markup"
+    "use a compiled latex original (first arg) to generate a synctex file for"
+    " a scanned document (second arg), e.g.  with handwritten markup"
 )
 def gensync(arguments):
     with gzip.open(arguments[0].replace(".pdf", ".synctek.gz")) as fp:
@@ -295,9 +305,7 @@ def gensync(arguments):
         os.path.dir(arguments[0]), os.path.dir(arguments[1])
     )
     base_fname = arguments[0].replace(".pdf", "")
-    new_synctex = orig_synctex.replace(
-        base_fname, relative_path + base_fname
-    )
+    new_synctex = orig_synctex.replace(base_fname, relative_path + base_fname)
     new_synctex = orig_synctex
     with gzip.open(arguments[1].replace(".pdf", ".synctek.gz")) as fp:
         fp.write(new_synctex)
@@ -318,14 +326,12 @@ def rrng(arguments):
 
 @register_command(
     "wrap with indented sentence format (for markdown or latex).",
-    (
-        "wrap with indented sentence format (for markdown or latex).\n"
-        "Optional flag --cleanoo cleans latex exported from\n"
-        "OpenOffice/LibreOffice\n"
-        "Optional flag -i # specifies indentation level for subsequent\n"
-        "lines of a sentence (defaults to 4 -- e.g. for markdown you\n"
-        "will always want -i 0)"
-    ),
+    "wrap with indented sentence format (for markdown or latex).\n"
+    "Optional flag --cleanoo cleans latex exported from\n"
+    "OpenOffice/LibreOffice\n"
+    "Optional flag -i # specifies indentation level for subsequent\n"
+    "lines of a sentence (defaults to 4 -- e.g. for markdown you\n"
+    "will always want -i 0)",
 )
 def wr(arguments):
     logging.debug("arguments are", arguments)
@@ -403,7 +409,8 @@ def wd(arguments):
     for j in range(2):
         if arguments[0][-5:] == ".docx":
             print(
-                "the first argument has a docx extension, so I'm bypassing the pandoc step"
+                "the first argument has a docx extension, so I'm bypassing the"
+                " pandoc step"
             )
         else:
             cmd = ["pandoc"]
@@ -416,7 +423,8 @@ def wd(arguments):
                     cmd += ["--reference-docx=" + arguments[2]]
                 else:
                     raise RuntimeError(
-                        "if you pass three arguments to wd, then the third must be a template for the word document"
+                        "if you pass three arguments to wd, then the third"
+                        " must be a template for the word document"
                     )
             elif os.path.isfile(local_dir + os.path.sep + "template.docx"):
                 # by default, use template.docx in the current directory
@@ -461,15 +469,13 @@ def rs(arguments):
 
 @register_command(
     "smart latex forward-search",
-    (
-        "smart latex forward-search\n"
-        "currently this works specifically for sumatra pdf located\n"
-        'at "C:\\Program Files\\SumatraPDF\\SumatraPDF.exe",\n'
-        "but can easily be adapted based on os, etc.\n"
-        "Add the following line (or something like it) to your vimrc:\n"
-        "map <c-F>s :cd %:h\\|sil !pydifft fs %:p <c-r>=line(\".\")<cr><cr>\n"
-        "it will map Cntrl-F s to a forward search."
-    ),
+    "smart latex forward-search\n"
+    "currently this works specifically for sumatra pdf located\n"
+    'at "C:\\Program Files\\SumatraPDF\\SumatraPDF.exe",\n'
+    "but can easily be adapted based on os, etc.\n"
+    "Add the following line (or something like it) to your vimrc:\n"
+    'map <c-F>s :cd %:h\\|sil !pydifft fs %:p <c-r>=line(".")<cr><cr>\n'
+    "it will map Cntrl-F s to a forward search.",
 )
 def fs(arguments):
     texfile, lineno = arguments
@@ -498,9 +504,7 @@ def fs(arguments):
         found, basename, tex_name = look_for_pdf(directory, origbasename)
         orig_directory = directory
         if not found:
-            while (
-                os.path.sep in directory and directory.lower()[-1] != ":"
-            ):
+            while os.path.sep in directory and directory.lower()[-1] != ":":
                 build_nb = os.path.join(directory, "build_nb")
                 directory, _ = directory.rsplit(os.path.sep, 1)
                 if os.path.exists(build_nb):
@@ -519,12 +523,11 @@ def fs(arguments):
                     break
         if not found:
             raise IOError("This is not the PDF you are looking for!!!")
-        print(
-            "result:", directory, origbasename, found, basename, tex_name
-        )
+        print("result:", directory, origbasename, found, basename, tex_name)
         # file has been found, so add to the command
         cmd.append(
-            f"{lineno}:0:{tex_name}.tex {os.path.join(directory,basename+'.pdf')}"
+            f"{lineno}:0:{tex_name}.tex"
+            f" {os.path.join(directory,basename+'.pdf')}"
         )
     if os.name == "posix":
         cmd.append("&")
@@ -617,9 +620,7 @@ def tex2docx(arguments):
             + content[c + 1 :]
         )
         thismatch = comment_re.search(content)
-    with open(
-        "%s_parencomments.tex" % basename, "w", encoding="utf-8"
-    ) as fp:
+    with open("%s_parencomments.tex" % basename, "w", encoding="utf-8") as fp:
         fp.write(r"\renewcommand{\nts}[1]{\textbf{\textit{#1}}}" + "\n")
         fp.write(content)
     printed_exec(
@@ -731,7 +732,8 @@ def arxiv(arguments):
 
 
 @register_command(
-    "look for the file myacronyms.sty (locally or in texmf) and use it substitute your acronyms"
+    "look for the file myacronyms.sty (locally or in texmf) and use it"
+    " substitute your acronyms"
 )
 def ac(arguments):
     # Run kpsewhich and capture the output
@@ -749,6 +751,41 @@ def ac(arguments):
     replace_acros(path)
 
 
+@register_command(
+    "Paste mark down as formatted text into email, etc. (Tested on linux)"
+)
+def pmd(arguments):
+    # pandoc input.md -t html -o - | xclip -selection clipboard -t text/html
+    p1 = subprocess.Popen(
+        ["pandoc", arguments[0], "-t", "html", "-o", "-"],
+        stdout=subprocess.PIPE,
+    )
+    subprocess.run(
+        ["xclip", "-selection", "clipboard", "-t", "text/html"],
+        stdin=p1.stdout,
+        check=True,
+    )
+    p1.stdout.close()
+    p1.wait()
+
+
+@register_command(
+    "use the modified filename_outline.md to write reordered text"
+)
+def xoreorder(arguments):
+    assert len(arguments) == 1
+    outline.write_reordered(arguments[0])
+
+
+@register_command(
+    "Save tex file as outline, with filename_outline.pickle storing content"
+    " and filename_outline.md giving outline."
+)
+def xo(arguments):
+    assert len(arguments) == 1
+    outline.extract_outline(arguments[0])
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command")
@@ -760,7 +797,9 @@ def build_parser() -> argparse.ArgumentParser:
             description=spec["description"],
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
-        subparser.add_argument("args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+        subparser.add_argument(
+            "args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS
+        )
         subparser.set_defaults(_handler=spec["handler"])
     return parser
 
@@ -777,4 +816,3 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     handler = namespace._handler
     arguments = list(namespace.args)
     handler(arguments)
-

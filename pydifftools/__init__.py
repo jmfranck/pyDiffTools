@@ -6,4 +6,5 @@ __all__ = [
     "split_conflict",
     "wrap_sentences",
     "rearrange_tex",
+    "outline",
 ]
