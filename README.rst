@@ -15,11 +15,6 @@ included are (listed in order of fun/utility):
   This continuously monitors
   `filename.md`, build the result,
   and displays it in your browser. 
-  For this to work, you need to
-  **install selenium with** `pip
-  install selenium` *not conda*.
-  Then go `here <https://pypi.org/project/selenium/>`_
-  and download the chrome driver.
 
   Continuous pandoc build.
   This works *very well* together
@@ -30,6 +25,21 @@ included are (listed in order of fun/utility):
   spectroscopic methodology" -- this
   works *much better* than you
   would expect)
+
+  For this to work, you need to
+  **install selenium with** `pip
+  install selenium` *not conda*.
+  Then go `here <https://pypi.org/project/selenium/>`_
+  and download the chrome driver.
+  Note that from there, it can be hard to find the
+  chrome driver -- as of this update,
+  the drivers are `here <https://googlechromelabs.github.io/chrome-for-testing/#stable>`_,
+  but it seems like google is moving them around.
+  You also need to install `pandoc <https://pandoc.org/installing.html>`_
+  as well as `pandoc-crossref <https://github.com/lierdakil/pandoc-crossref>`_
+  (currently tested on windows with *version 3.5* of the former,
+  *not the latest installer*,
+  since crossref isn't built with the most recent version).
 - `pydifft wr <filename.tex|md>` (wrap)
   This provides a standardized (and
   short) line

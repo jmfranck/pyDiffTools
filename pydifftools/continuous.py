@@ -51,10 +51,9 @@ def run_pandoc(filename, html_file):
         filename,
     ]
     # command = ['pandoc', '-s', '--mathjax', '-o', html_file, filename]
+    print("running:",' '.join(command))
     subprocess.run(
         command,
-        stdout=subprocess.DEVNULL,
-        stderr=sys.stdout,
     )
     print("running:\n", command)
     if has_local_jax:
@@ -85,6 +84,8 @@ class Handler(FileSystemEventHandler):
     def init_firefox(self):
         self.firefox = webdriver.Chrome()  # requires chromium
         run_pandoc(self.filename, self.html_file)
+        if not os.path.exists(self.html_file):
+            print("html doesn't exist")
         self.append_autorefresh()
         # self.firefox.open_new_tab(self.html_file)
         self.firefox.get("file://" + os.path.abspath(self.html_file))
