@@ -103,6 +103,47 @@ def test_rrng_allows_spaces_in_substitutions(tmp_path):
     assert tex_path.read_text(encoding="utf-8") == "ALPHA BETA\ngamma\n"
 
 
+def test_rrng_detects_missing_substitution_matches(tmp_path):
+    # If a substitution never matches, the command should raise an error instead of silently ignoring it.
+    tex_path = tmp_path / "missing_sub.tex"
+    tex_path.write_text("alpha\n", encoding="utf-8")
+    plan_path = tmp_path / "missing_sub.rrng"
+    plan_path.write_text("1 s/beta/BETA/\n", encoding="utf-8")
+
+    with pytest.raises(ValueError) as excinfo:
+        command_line.main(["rrng", str(tex_path), str(plan_path)])
+
+    assert "Pattern 's/beta/BETA/' not found" in str(excinfo.value)
+
+
+def test_rrng_applies_substitutions_within_ranges(tmp_path):
+    # Ranges may reference many lines, but substitutions should only require a match somewhere within the range.
+    tex_path = tmp_path / "range_sub.tex"
+    tex_path.write_text(
+        "\n".join(
+            [
+                "\\section{Hardware for Optimization, Versatility, and Automation}\\label{sec:automation}",
+                "Body text",  # No substitution should occur here.
+                "Conclusion",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    plan_path = tmp_path / "range_sub.rrng"
+    plan_path.write_text(
+        "1-3 s/\\\\section\\{Hardware for Optimization, Versatility, and Automation\\}/\\\\section{ODNP for Confined-Water Benchmarks (multi-f \\/ multi-T on \\\\glspl{rm})}/ s/\\\\label\\{sec:automation\\}/\\\\label{sec:odnpbench}/\n",
+        encoding="utf-8",
+    )
+
+    command_line.main(["rrng", str(tex_path), str(plan_path)])
+
+    assert (
+        tex_path.read_text(encoding="utf-8")
+        == "\\section{ODNP for Confined-Water Benchmarks (multi-f / multi-T on \\glspl{rm})}\\label{sec:odnpbench}\nBody text\nConclusion\n"
+    )
+
+
 def test_rrng_requires_all_lines(tmp_path):
     # Confirm that missing source lines cause the command to abort with a helpful error message.
     tex_path = tmp_path / "missing.tex"

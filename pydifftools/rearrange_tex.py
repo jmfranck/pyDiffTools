@@ -23,7 +23,7 @@ def unescape_slashes(s: str) -> str:
     return s.replace(r"\/", "/")
 
 
-def apply_s_cmd(line: str, cmd: str) -> str:
+def apply_s_cmd(line: str, cmd: str):
     m = S_CMD.match(cmd)
     if not m:
         raise ValueError(f"Bad s/// command: {cmd!r}")
@@ -32,7 +32,9 @@ def apply_s_cmd(line: str, cmd: str) -> str:
     rep = unescape_slashes(rep_raw)
     reflags = re.IGNORECASE if "i" in flags else 0
     count = 0 if "g" in flags else 1
-    return re.sub(pat, rep, line, count=count, flags=reflags)
+    # Use re.subn so callers can tell whether the substitution matched any text.
+    result, replaced = re.subn(pat, rep, line, count=count, flags=reflags)
+    return result, replaced
 
 
 def parse_plan_line(s: str):
@@ -151,14 +153,24 @@ def run(argv: Sequence[str] | None = None) -> None:
             out_main.append("% " + it[1])
             continue
         _, line_numbers, scratch, s_cmds = it
+        # Track how many replacements each substitution performs across the
+        # referenced lines so we can surface errors when a pattern never
+        # matches.  This mirrors the Perl s/// behavior the tool emulates.
+        replaced_counts = [0] * len(s_cmds)
         for ln in line_numbers:
             mod = tex_lines[ln - 1]
-            for cmd in s_cmds:
-                mod = apply_s_cmd(mod, cmd)
+            for idx, cmd in enumerate(s_cmds):
+                mod, replaced = apply_s_cmd(mod, cmd)
+                replaced_counts[idx] += replaced
             if scratch:
                 out_scratch.append("% " + mod)
             else:
                 out_main.append(mod)
+        for idx, replaced in enumerate(replaced_counts):
+            if replaced == 0:
+                raise ValueError(
+                    f"Pattern {s_cmds[idx]!r} not found in lines {line_numbers}"
+                )
 
     if out_scratch:
         out_main.append("% --- SCRATCH ---")
