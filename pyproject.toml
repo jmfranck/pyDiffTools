@@ -9,7 +9,7 @@ authors = [{ name = "J M Franck" }]
 description = "Diff tools"
 readme = "README.rst"
 license = { file = "LICENSE.md" }
-dependencies = ["selenium"]
+dependencies = ["selenium","fuzzywuzzy"]
 
 [project.scripts]
 pydifft = "pydifftools.command_line:main"
