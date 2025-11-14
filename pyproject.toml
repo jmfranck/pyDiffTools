@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyDiffTools"
+version = "0.1.4"
+authors = [{ name = "J M Franck" }]
+description = "Diff tools"
+readme = "README.rst"
+license = { file = "LICENSE.md" }
+dependencies = ["selenium"]
+
+[project.scripts]
+pydifft = "pydifftools.command_line:main"
+
+[tool.setuptools]
+packages = ["pydifftools"]
+
+[tool.setuptools.package-data]
+pyDiffTools = ["diff-doc.js", "xml2xlsx.vbs"]
