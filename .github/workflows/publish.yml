@@ -150,10 +150,7 @@ jobs:
         # 1) Go to: https://github.com/settings/personal-access-tokens
         #    → “Fine-grained tokens” → Generate new token.
         #
-        # 2) Basic fields:
-        #    - Token name: e.g., "Actions admin push"
-        #    - Expiration: set a reasonable date
-        #    - Resource owner: select your organization
+        # 2) set name and expiration
         #
         # 3) Repository access (IMPORTANT per current UI):
         #    - Select **All repositories**  (required to expose repo permissions panel in this UI)
@@ -228,14 +225,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload sdist artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: sdist-${{ github.sha }}
-          path: dist
-          if-no-files-found: error
-          retention-days: 7
-
   # ---------- Publish to PyPI (downloads all artifacts) ----------
   publish:
     name: Publish to PyPI
@@ -246,34 +235,10 @@ jobs:
       - name: Create output dir
         run: mkdir -p dist
 
-      - name: Download Linux wheels
+      - name: Download dist
         uses: actions/download-artifact@v4
         with:
-          name: wheels-linux-${{ github.sha }}
-          path: dist
-
-      - name: Download macOS wheels (arm64)
-        uses: actions/download-artifact@v4
-        with:
-          name: wheels-macos-macos-15-${{ github.sha }}
-          path: dist
-
-      - name: Download macOS wheels (x86_64)
-        uses: actions/download-artifact@v4
-        with:
-          name: wheels-macos-macos-13-${{ github.sha }}
-          path: dist
-
-      - name: Download Windows wheels
-        uses: actions/download-artifact@v4
-        with:
-          name: wheels-windows-${{ github.sha }}
-          path: dist
-
-      - name: Download sdist
-        uses: actions/download-artifact@v4
-        with:
-          name: sdist-${{ github.sha }}
+          name: dist-${{ github.sha }}
           path: dist
 
       # In your repo, go to:
