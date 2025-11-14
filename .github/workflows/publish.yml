@@ -193,7 +193,7 @@ jobs:
 
 
   # ---------- sdist + universal wheel ----------
-  sdist:
+  build_dist:
     name: Build sdist + wheel
     needs: [test, version_bump]
     runs-on: ubuntu-latest
@@ -234,7 +234,7 @@ jobs:
   # ---------- Publish to PyPI (downloads all artifacts) ----------
   publish:
     name: Publish to PyPI
-    needs: [build_wheels_linux, build_wheels_macos, build_wheels_windows, sdist]
+    needs: [build_dist]
     if: ${{ github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/master' && github.event_name == 'push') }}
     runs-on: ubuntu-latest
     steps:
