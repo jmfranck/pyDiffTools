@@ -1,8 +1,9 @@
-==================================================
-        pydifftools
-==================================================
+pydifftools
+===========
+
 :Info: See <https://github.com/jmfranck/pyDiffTools>
 :Author: J. M. Franck <https://github.com/jmfranck>
+
 .. _vim: http://www.vim.org
 
 this is a set of tools to help with merging, mostly for use with vim_.
@@ -29,7 +30,7 @@ included are (listed in order of fun/utility):
   For this to work, you need to
   **install selenium with** `pip
   install selenium` *not conda*.
-  Then go `here <https://pypi.org/project/selenium/>`_
+  Then go to `the selenium page <https://pypi.org/project/selenium/>`_
   and download the chrome driver.
   Note that from there, it can be hard to find the
   chrome driver -- as of this update,
