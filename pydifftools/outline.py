@@ -57,10 +57,7 @@ def write_reordered(texfile):
         and picklefile.endswith(".pickle")
         and texfile.endswith(".tex")
     ):
-        raise ValueError(
-            "pass arguments markdownfile (input) picklefile (input) texfile"
-            " (output)"
-        )
+        raise ValueError("pass 1 argument: texfile (output)")
 
     with open(picklefile, "rb") as fp:
         all_contents = pickle.load(fp)
