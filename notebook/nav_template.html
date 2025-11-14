@@ -1,0 +1,111 @@
+<style>
+  body { margin-left:10px; margin-right:220px; max-width:60em; }
+  #on-this-page {position:fixed; right:0; top:100px; width:200px; max-height:70vh;
+    overflow:auto; background:rgba(248,249,250,0.5); padding:10px;
+    font-family:"Helvetica Neue", Arial, sans-serif; font-size:0.9em;}
+  #on-this-page .page-title {border-left:3px solid #6c757d; padding-left:4px; margin:2px 0;}
+  #on-this-page .page-title.current {background:rgba(13,110,253,0.15);}
+  #on-this-page .outline {border-left:3px solid #0d6efd; margin-left:3px; padding-left:4px;}
+  #on-this-page ul { list-style:none; padding-left:15px; margin:0; }
+  #on-this-page li { margin:2px 0; }
+  #on-this-page li.collapsed > ul { display:none; }
+  #on-this-page a { text-decoration:none; color:inherit; cursor:pointer; }
+  #on-this-page a.active {font-weight:bold; background:rgba(13,110,253,0.15); border-radius:4px; padding:2px 4px;}
+</style>
+<div id="on-this-page">
+  {% macro render(items) -%}
+  <ul>
+  {%- for item in items %}
+    <li><a href="#{{ item.id }}">{{ item.text }}</a>
+    {%- if item.children %}
+      {{ render(item.children) }}
+    {%- endif %}
+    </li>
+  {%- endfor %}
+  </ul>
+  {%- endmacro %}
+  {% for page in pages %}
+    <div class="page-title{% if page.file == current %} current{% endif %}"><a href="{{ page.href }}">{{ page.title }}</a></div>
+    <div class="outline">
+      {{ render(page.sections) }}
+    </div>
+  {% endfor %}
+</div>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const menu = document.querySelector('#on-this-page');
+  menu.querySelectorAll('.page-title').forEach(title => {
+    const outline = title.nextElementSibling;
+    if(!title.classList.contains('current') && outline){
+      outline.style.display = 'none';
+    }
+    title.addEventListener('click', () => {
+      if(outline){
+        outline.style.display = outline.style.display === 'block' ? 'none' : 'block';
+      }
+    });
+  });
+
+  // collapse all sublists initially
+  menu.querySelectorAll('.outline ul ul').forEach(ul => {
+    ul.parentElement.classList.add('collapsed');
+  });
+
+  const links = menu.querySelectorAll('.outline a');
+
+  function showPath(li){
+    while(li && li !== menu){
+      if(li.tagName === 'LI'){
+        li.classList.remove('collapsed');
+      }
+      li = li.parentElement.closest('li');
+    }
+  }
+
+  function collapseOthers(activeLi){
+    menu.querySelectorAll('.outline li').forEach(li => {
+      if(li !== activeLi && !li.contains(activeLi)){
+        if(li.querySelector(':scope > ul')){
+          li.classList.add('collapsed');
+        }
+      }
+    });
+  }
+
+  function activate(id){
+    let activeLi = null;
+    links.forEach(l => {
+      const match = l.getAttribute('href').slice(1) === id;
+      l.classList.toggle('active', match);
+      if(match) activeLi = l.parentElement;
+    });
+    if(activeLi){
+      showPath(activeLi);
+      collapseOthers(activeLi);
+    }
+  }
+
+  links.forEach(l => {
+    const li = l.parentElement;
+    const sub = li.querySelector(':scope > ul');
+    if(sub){
+      l.addEventListener('click', () => {
+        li.classList.toggle('collapsed');
+      });
+    }
+  });
+
+  const opts = {rootMargin: '0px 0px -80% 0px'};
+  const obs = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if(e.isIntersecting){
+        activate(e.target.id);
+      }
+    });
+  }, opts);
+  links.forEach(l => {
+    const t = document.getElementById(l.getAttribute('href').slice(1));
+    if(t) obs.observe(t);
+  });
+});
+</script>

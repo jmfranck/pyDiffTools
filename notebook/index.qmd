@@ -1,0 +1,7 @@
+## SubProject1
+
+{{< include project1/subproject1/tasks.qmd >}}
+
+## Trying for error
+
+{{< include project1/subproject1/tryforerror.qmd >}}

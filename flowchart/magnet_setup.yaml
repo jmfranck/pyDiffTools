@@ -1,0 +1,431 @@
+nodes:
+  BringInNewDesk:
+    children:
+      - SetUpDedicatedComputer
+    parents:
+      - HelpWaltRemoveDesk
+    style: completed
+    text: Get Walt's help to bring in a new desk for a workstation
+  CalibrateBruker:
+    children: []
+    parents:
+      - LCD
+    style: completed
+    text: |-
+      Compare Lakeshore 475 DSP readings against the readings of the commercial Bruker X-band
+
+      <font color="blue">
+      Reads 1.999 T when bruker set to 2000 G
+      </font>
+  CheckMagnet:
+    children: []
+    parents:
+      - EstimateRatio
+      - LowPowerSupply
+    style: completed
+    text: |-
+      Calculate if Varian Magnet can be powered by TDK-Lambda Genesys supply (Does it supply sufficient current to get B₀=0.4 T)
+
+      <font point-size="10" color="blue">
+      Manual says up to 80 V and 187.5 A, where we need only 15.9 A and 17 V.
+      </font>
+  ClearOldDesk:
+    children:
+      - SetUpDedicatedComputer
+      - MoveE4
+    parents: []
+    style: completed
+    text: See if we can clear out old desk behind the large Varian magnet.
+  Confirm:
+    children:
+      - Record
+    parents:
+      - EthSwitch
+      - ProLogix
+    text: |-
+      Read single B₀ value via ProLogix and confirm match to front instrument reading
+
+      <font point-size="10">
+      * Prologix is likely in box JF #16
+      * Field sensor is LakeShore 475 DSP, and has both analog and GPIB (IEEE-488) outputs
+      </font>
+  Disconnect:
+    children:
+      - LowPowerSupply
+    parents: []
+    style: completed
+    text: |-
+      Prepare magnet for low-power testing.
+
+      <font point-size="10">
+      1. Disconnect magnet from high-power supplies.
+      2. Add notes to the wall disconnect and Genesys supply warning that the magnet is disconnected.
+      3. Loop a wire or paperclip through disconnect lever lock hole.
+      </font>
+  E4Test:
+    children: []
+    parents:
+      - E4Water
+      - EstimateRatio
+      - MoveE4
+    text: Use small power supply to measure impedance and <i>B₀/I</i> of Varian E-4
+      (small) magnet
+  E4Water:
+    children:
+      - E4Test
+    parents:
+      - MoveE4
+    text: Figure out how to flow tap water through the E4 magnet, so that we can temporarily
+      test it
+  EstimateRatio:
+    children:
+      - RemovePeterPole
+      - CheckMagnet
+      - E4Test
+    parents:
+      - LCD
+      - LowPowerSupply
+    style: completed
+    text: |-
+      Use low power supply to estimate the <i>B₀/I</i> ratio when Peter's additional pole piece is still in
+
+      <font color="blue">
+
+      <font point-size="10">
+      with current set to 1 A, we get anyshwere from 215 to 230 G in the middle (left/right).  Left to right there is a bit of variation -- he gets 220 next to the unaltered staionary pole piece and 240 next to the one that Peter added (both in the middle up/down).
+      </font>
+      This corresponds to 220 G/A, which means that for 3,500 G, we need 15.9 A
+      </font>
+  EthSwitch:
+    children:
+      - Confirm
+    parents:
+      - LCD
+    style: completed
+    text: |-
+      Get a ethernet switch or hub (first check ChemIT on the first floor make it clear this is to hook up instruments, and is not for connecting to the network (tell them ACERT/Freed))
+
+      <font color="blue">
+      * Have switch that came from Syracuse
+      </font>
+      * Still need appropriate ethernet cable.
+  GetUSB:
+    children:
+      - MeasureNoise
+    parents: []
+    style: completed
+    text: |-
+      Get or order a connector to connect your computer to USB type B
+
+      <font color="blue">
+      One is in the box the prologix came from
+      </font>
+  GroundMagnet:
+    children:
+      - ManualGenesys
+    due: 10/9
+    parents:
+      - SafeHookup
+    text: |-
+      Hook up 10 AWG wire or thicker
+       
+       <font point-size="12">
+       (with green tape on ends to indicate earth ground) to connect 2 grounding screws on the magnet to the grounding pin on the back of the Genesys
+       </font>
+  HallManual:
+    children:
+      - Record
+    due: 10/9
+    orig_due: 10/6
+    parents: []
+    style: completed
+    text: |-
+      Find the Programming Manual for the Lakeshore DSP Hall Probe Sensor
+      `some code formatting`
+  HelpWaltRemoveDesk:
+    children:
+      - BringInNewDesk
+    parents: []
+    style: completed
+    text: Help Walt remove desk with Dee's stuff
+  LCD:
+    children:
+      - EstimateRatio
+      - EthSwitch
+      - CalibrateBruker
+    parents: []
+    style: completed
+    text: |-
+      Use LCD screen on hall probe sensor to read the B₀ near permanent magnets to confirm that it's reading reasonable B₀ values
+
+      <font point-size="10" color="blue">
+      read 100 G for small (stainless covered) magnets 1,100-1,300 G for the large ceramic magnets 0.23-0.27 G for earth's field
+      </font>
+  LowPowerSupply:
+    children:
+      - CheckMagnet
+      - EstimateRatio
+    parents:
+      - Disconnect
+    style: completed
+    text: |-
+      Re-measure magnet resistive impedance with low-power supply
+
+      <font point-size="10">
+      * Black devices in JF box #19 — if these don't work, try the ones in box #14
+      * see what voltage is required for 0.1 A
+      </font>
+
+      <font point-size="10" color="blue">
+      Even though the ratios are less than 1.0 Ω, the slope ends up being 1.06 Ω
+      </font>
+  ManualGenesys:
+    children:
+      - Report
+      - MeasureNoise
+    parents:
+      - GroundMagnet
+      - SetupProc
+    style: completed
+    text: |-
+      Manually slowly ramp up to 20 A through the magnet, and manually measure the <i>B₀/I</i> ratio near 0.35 T <i>and</i> ΔT of both magnet plates
+
+      <font point-size="10">
+      (<i>I</i> read on Genesys is fine)
+
+      <font color="blue">
+      Observed 163 G/A (Atahan n.b. 6/18/25)
+      </font>
+      </font>
+  MeasureNoise:
+    children: []
+    parents:
+      - GetUSB
+      - ManualGenesys
+      - NoisePaper
+      - SetUpSpecBox
+    style: endpoints
+    text: Quantify noise levels from Genesys power supply
+  MoveE4:
+    children:
+      - E4Water
+      - E4Test
+      - SetUpSpecBox
+      - SetUpDedicatedComputer
+    parents:
+      - ClearOldDesk
+    style: completed
+    text: |-
+      Move the E-4 magnet and table to near the large Varian Magnet so that it's near water and Power supplies
+
+      <font point-size="10">
+      To finish up, move the console off the table
+      </font>
+  NoisePaper:
+    children:
+      - MeasureNoise
+    parents: []
+    text: Explain A. Guinness paper on noise (which I sent) to me
+  OverSensor:
+    children:
+      - SafeHookup
+    parents: []
+    style: completed
+    text: |-
+      look up “Thermal contact overcurrent sensor” to see how it works
+
+      <font point-size="10">
+      As Peter describes it, it goes from closed (bad) to open (good) to trip the interlock.  However, it's not clear to me what it's sensing.
+
+      <font color="blue">
+      → Looking up online and clarifying with Peter, does seem to be very similar to a circuit breaker.
+      </font>
+      </font>
+  ProLogix:
+    children:
+      - Confirm
+    parents: []
+    style: completed
+    text: |-
+      Feed ChatGPT examples of FLinst modules that use the prologix class (HP8672A, HP8672A, gigatronics) and the Hall Probe manual, and ask for a class to control the Hall probe → Generate a PR and be able to parse and explain to me
+
+      <font color="blue">
+      Atahan got a working module here then, JMF ended up spending a few hours to make it comprehensive
+      </font>
+  Pyspecdata1:
+    children:
+      - Pyspecdata2
+    parents: []
+    style: completed
+    text: Install pyspecdata on your laptop and get set up with github
+  Pyspecdata2:
+    children:
+      - UseTheComputer
+    parents:
+      - Pyspecdata1
+    style: completed
+    text: |-
+      Explain to me (at the level of parsing) the code I sent on 6/6/25
+
+      <font point-size="10">
+      6/6/25 3:15 pm email should have slides with a reasonable intro to pyspecdata and also define what I mean by parsing
+      </font>
+  Record:
+    children:
+      - Report
+    parents:
+      - Confirm
+      - HallManual
+    text: Record B₀ as a function of time
+  RemovePeterPole:
+    children:
+      - Report
+    parents:
+      - EstimateRatio
+    style: completed
+    text: |-
+      Remove Peter's additional pole piece and check left/right homogeneity
+
+      <font point-size="10" color="blue">
+      * A 0.9 G variation from the left to the right
+      * A 0.4 G radial variation if we stay withing the inner circle of screws
+      * <i>B₀/I</i> drops to 183 G/A
+      </font>
+  Report:
+    children: []
+    parents:
+      - ManualGenesys
+      - Record
+      - RemovePeterPole
+      - UseTheComputer
+    style: endpoints
+    text: |-
+      Report control (current) and response (field) as a function of time
+
+      <font point-size="10">
+      Peter says hysteresis is on the order of 80 G
+      </font>
+  ResistorPurchase:
+    children:
+      - kWresist
+    parents: []
+    style: completed
+    text: |-
+      Locate or buy 1 kW 1 Ω resistor
+
+      <font point-size="10">
+      (To be used to test programming without worrying about inductance of magnet)
+      </font>
+  SafeHookup:
+    children:
+      - kWresist
+      - GroundMagnet
+    parents:
+      - OverSensor
+    style: completed
+    text: |-
+      Discuss safe hookup with Peter
+
+      <font point-size="10">
+      * need to flow water to keep magnet cool
+      * covering magnet leads
+      * how to use interlock
+      * hook up to Genesys supply again
+
+      <font color="blue">
+      * 1 kW 1 Ω resistor so that we can test genesys supply
+      * 10 AWG green wire grounds the magnet
+      * Check for low resistance between this and screwhole/etc on the body of the magnet. → 6/12 this is connected
+      * Check for low resistance between this and ground coming from the wall → 6/12 not grounded to the wall, but grounded to the green cable of the old PS
+      * 6/12 found that currently, grounding pin on Genesys has about 0.4 Ω to the ground connector inside the disconnect
+      * Magnet has huge inductance (JF estimates at least 540 J stored energy just between the magnet gap from 6 in radius, 6 in gap)
+      * hook up interlock on magnet using the multi-pin connector on the back of the Genesys → 6/12 decided that the two red eyehole connectors are also where the interlock cable would connect
+      * for water pressure coming out of the chiller, figure about 20 PSI for regulator (will need a bypass to allow rejected water to return to circulation loop)
+      * part that Peter attached is a high-current tolerance diode (Genesys manual recommends adding something like this for an inductive load) (see genesys_notes.md for details on all of above)
+      </font>
+      </font>
+  SetUpDedicatedComputer:
+    children: []
+    parents:
+      - BringInNewDesk
+      - ClearOldDesk
+      - MoveE4
+    text: Set up a dedicated computer
+  SetUpSpecBox:
+    children:
+      - MeasureNoise
+    parents:
+      - MoveE4
+    text: Set up spectrometer box with attached oscilloscope to quantify SNR
+  SetupProc:
+    children:
+      - ManualGenesys
+    parents:
+      - kWresist
+    style: completed
+    text: work through setup procedure in section 3.8 in the paper manual
+  TCPIP:
+    children:
+      - UseTheComputer
+    parents:
+      - TDKManual
+    style: completed
+    text: Feed manual to GenAI to Write a simple Python script to use TCP/IP to program
+      the current flowing through the magnet (be able to explain it to me)
+  TDKManual:
+    children:
+      - TCPIP
+    parents: []
+    style: completed
+    text: Find the Programming Manual for the Lambda-TDK Genesys Power Supply
+  UseTheComputer:
+    children:
+      - Report
+    parents:
+      - Pyspecdata2
+      - TCPIP
+      - kWresist
+    style: completed
+    text: Test → debug → generate FLinst PR to program of current on Genesys (use
+      1 kW resistor and cables to attach)
+  VSCodeLinting:
+    children: []
+    parents: []
+    text: |-
+      Figure out how to use VSCode to help lint PRs so that they pass -- see 6/26 3:29pm email
+
+      <font color="blue">
+      JMF found that setting ruff linter and ReWrap revived together worked well
+      </font>
+  kWresist:
+    children:
+      - SetupProc
+      - UseTheComputer
+    parents:
+      - ResistorPurchase
+      - SafeHookup
+    style: completed
+    text: Receive 1 kW 1 Ω resistor (OK to hook up with 8 AWG cable, which has better
+      current tolerance vs. resistor)
+  ocra:
+    children: []
+    parents: []
+    text: |-
+      Check out OCRA MRI https://openmri.github.io/ocra/ + more recent papers that use successor MarCOS
+
+      <font point-size="10">
+      In the draft paper I sent you, we are using a SpinCore RadioProcessor-G, which we have and which was working at Syracuse, so I plan to set it up here once we have the magnet working.  However, the OCRA system should allow for greater customization and helps meet the ACERT goals of developing inexpensive and widely deployable NMR instrumentation. see: https://chatgpt.co m/share/6849ace0-9f68-800b-8458-682f9ea71c10
+      </font>
+styles:
+  completed:
+    attrs:
+      node:
+        - color: lightblue4
+          fillcolor: lightcyan
+          fontcolor: lightblue4
+          style: filled
+  endpoints:
+    attrs:
+      node:
+        - color: red
+          fontcolor: red

@@ -1,0 +1,58 @@
+# Example project
+
+This is an example project!!
+
+```
+this is a verbatim block
+   yes, it is!!
+```
+
+I'm learning to plot in python!
+
+## some basic examples!
+
+### example plot {#sec:examplePlot1}
+
+Here's an example plot!
+<obs time="7/8/25 20:08" author="JF">this is what I observe about the plot there is no space before the debug block</obs>
+<err>
+  <obs time="7/8/25 20:06" author="JF">I had some problems making the plot</obs>
+  then I do some stuff to fix the problems *in italics!*
+  <obs time="7/8/25 20:08" author="JF">here are notes about the specific solution</obs>
+</err>
+<obs time="11/27 16:51">Make sure there is no space betwen the err and obs here!!</obs>
+<obs time="2/15/24 11:55">another observation</obs>
+<obs>$\checkmark$</obs>
+
+<err>
+  Make sure that this line lines up with the following lines.
+
+  Another step for debugging.
+
+  And another step for debugging -- make sure there is no space between this and closing tag.
+</err>
+
+```{python}
+%reset -f
+from pylab import *
+plot(r_[0:10])
+```
+
+```{python}
+%reset -f
+from pylab import *
+from pyspecdata import *
+with figlist_var() as fl:
+    fl.next('this is a plot')
+    fl.plot(r_[0:10])
+```
+
+continue
+
+<err>
+  <obs time="7/9/25 11:04" author="JF">maybe I'm having issues continuing!</obs>
+  resolve those issues!
+  <obs time="7/9/25 11:04" author="JF">I did some stuff, but it was insufficient</obs>
+  continue debugging
+
+</err>
