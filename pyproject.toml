@@ -9,13 +9,33 @@ authors = [{ name = "J M Franck" }]
 description = "Diff tools"
 readme = "README.rst"
 license = { file = "LICENSE.md" }
-dependencies = ["selenium","fuzzywuzzy"]
+dependencies = [
+    "selenium",
+    "fuzzywuzzy",
+    "PyYAML>=6.0",
+    "watchdog",
+    "pydot",
+    "python-dateutil",
+    "jinja2",
+    "nbformat",
+    "nbconvert",
+    "pygments",
+    "ansi2html",
+    "lxml",
+]
 
 [project.scripts]
 pydifft = "pydifftools.command_line:main"
 
 [tool.setuptools]
-packages = ["pydifftools"]
+packages = [
+    "pydifftools",
+    "pydifftools.flowchart",
+    "pydifftools.notebook",
+    "pydifftools.data",
+    "pydifftools.data.qmd_template",
+]
 
 [tool.setuptools.package-data]
-pyDiffTools = ["diff-doc.js", "xml2xlsx.vbs"]
+pydifftools = ["diff-doc.js", "xml2xlsx.vbs"]
+"pydifftools.data.qmd_template" = ["templates/*", "project/**/*"]

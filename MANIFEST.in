@@ -3,3 +3,4 @@ include README.rst
 include LICENSE.md
 include pydifftools/diff-doc.js
 include pydifftools/xml2xlsx.vbs
+recursive-include pydifftools/data/qmd_template *

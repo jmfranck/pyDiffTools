@@ -144,6 +144,85 @@ def look_for_pdf(directory, origbasename):
 
 
 @register_command(
+    "Watch a flowchart YAML file, rebuild DOT/SVG output, and open the preview"
+)
+def wgrph(arguments):
+    parser = argparse.ArgumentParser(prog="wgrph", description="Watch a YAML flowchart")
+    parser.add_argument("yaml", help="Path to the flowchart YAML file")
+    parser.add_argument(
+        "--wrap-width",
+        type=int,
+        default=55,
+        help="Line wrap width used when generating node labels",
+    )
+    args = parser.parse_args(arguments)
+    yaml_path = Path(args.yaml)
+    if not yaml_path.exists():
+        parser.error(f"YAML file not found: {yaml_path}")
+    from pydifftools.flowchart.watch_graph import main as watch_main
+
+    # Delegate to the relocated watcher so behavior matches the original script.
+    watch_main(str(yaml_path), wrap_width=args.wrap_width)
+
+
+@register_command("Convert LaTeX sources to Quarto Markdown (.qmd) files")
+def tex2qmd(arguments):
+    parser = argparse.ArgumentParser(prog="tex2qmd", description="Convert TeX to QMD")
+    parser.add_argument("tex", help="Input .tex file to convert")
+    args = parser.parse_args(arguments)
+    from pydifftools.notebook.tex_to_qmd import convert_tex_to_qmd
+
+    convert_tex_to_qmd(args.tex)
+
+
+@register_command(
+    "Build Quarto-style projects with Pandoc and the fast builder (optionally watch)"
+)
+def qmdb(arguments):
+    parser = argparse.ArgumentParser(prog="qmdb", description="Pandoc-based builder")
+    parser.add_argument("--watch", action="store_true", help="Watch files and serve")
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not launch a browser when using --watch",
+    )
+    parser.add_argument(
+        "--webtex",
+        action="store_true",
+        help="Use Pandoc's --webtex option instead of MathJax",
+    )
+    args = parser.parse_args(arguments)
+    from pydifftools.notebook import fast_build
+
+    fast_build.ensure_template_assets(Path("."))
+    if args.watch:
+        fast_build.watch_and_serve(no_browser=args.no_browser, webtex=args.webtex)
+    else:
+        fast_build.build_all(webtex=args.webtex)
+
+
+@register_command("Initialize a sample Quarto project with bundled templates")
+def qmdinit(arguments):
+    parser = argparse.ArgumentParser(prog="qmdinit", description="Scaffold a project")
+    parser.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Directory to initialize (defaults to current working directory)",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing files when copying the scaffold",
+    )
+    args = parser.parse_args(arguments)
+    from pydifftools.notebook import fast_build
+
+    fast_build.scaffold_project(args.path, force=args.force)
+    print(f"Initialized Quarto scaffold in {Path(args.path).resolve()}")
+
+
+@register_command(
     "check numbers in a latex catalog (e.g. of numbered notebook) of items of"
     " the form '\\item[anything number.anything]'"
 )
