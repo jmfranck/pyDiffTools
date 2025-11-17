@@ -1,0 +1,52 @@
+### A control
+
+This works fine because there is no nesting
+<err>
+  This text is inside an err block with no nesting
+  <obs time="7/14/25 10:19" author="JF">and it seems fine</obs>
+
+</err>
+
+### Demonstration of a problem
+
+Then I try to do some stuff and get some errors
+
+<err>
+  This is at the top of the main error block that has other error blocks nested inside it
+  <obs time="7/14/25 10:20" author="JF">this shows up in an err block, but a nested one should start after it, and it doesn't</obs>
+
+<err>
+  This is inside the parent err block
+  <obs time="7/14/25 10:18" author="JF">and before that sentence is the first place I see an err tag</obs>
+  <obs time="7/14/25 10:20" author="JF">and it's repeated!!</obs>
+
+</err>
+<err>
+  This is inside a second nested error block
+  <obs time="7/14/25 10:14" author="JF">It does not show up as an error block!</obs>
+
+</err>
+  This is back inside the parent err block
+  <obs time="7/14/25 10:16" author="JF">but it shows up in the main text!</obs>
+</err>
+This comment is back in the main text
+<obs time="7/14/25 10:14" author="JF">make some observations</obs>
+
+<err>
+  this, interestingly, does not get repeated
+  <obs time="7/12/25 19:43" author="JF">I observe it does not!</obs>
+
+  this sentence gets repeated
+  
+  this also gets repeated 
+
+</err>
+
+This is some more main text
+
+<err>
+  And this is a final error block
+
+</err>
+
+<obs time="7/14/25 10:23" author="JF">I see no repetition in the final error block</obs>
