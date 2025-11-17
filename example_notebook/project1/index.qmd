@@ -1,0 +1,9 @@
+---
+title: "Project1"
+---
+
+# header for project 1
+
+Here is a reference that should be on the same page: @sec:task1
+
+{{< include project1/subproject1/index.qmd >}}
