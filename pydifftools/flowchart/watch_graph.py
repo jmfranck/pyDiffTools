@@ -8,20 +8,10 @@ from pydifftools.command_registry import register_command
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-# Selenium is only required when the watch command launches a browser.  Import
-# it defensively so the module can still load in environments where the
-# dependency is unavailable.
-try:
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.chrome.service import Service
-    from selenium.common.exceptions import WebDriverException, NoSuchWindowException
-except ImportError:  # pragma: no cover - executed only when selenium is missing
-    webdriver = None
-    Options = None
-    Service = None
-    WebDriverException = Exception
-    NoSuchWindowException = Exception
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.common.exceptions import WebDriverException, NoSuchWindowException
 
 from .graph import write_dot_from_yaml
 
@@ -115,8 +105,6 @@ def wgrph(yaml, wrap_width=55):
     yaml_file = Path(yaml)
     if not yaml_file.exists():
         raise FileNotFoundError(f"YAML file not found: {yaml_file}")
-    if webdriver is None:
-        raise ImportError("The watch command requires selenium to be installed.")
     dot_file = yaml_file.with_suffix(".dot")
     svg_file = yaml_file.with_suffix(".svg")
     html_file = yaml_file.with_suffix(".html")

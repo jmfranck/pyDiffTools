@@ -57,11 +57,8 @@ def register_command(help_text, description=None, help=None):
                     kwargs["type"] = type(parameter.default)
             if parameter.name in argument_help:
                 kwargs["help"] = argument_help[parameter.name].strip()
-            dest_value = None
-            if flags and flags[0].startswith("-"):
-                dest_value = parameter.name
             _COMMAND_SPECS[name]["arguments"].append(
-                {"flags": flags, "kwargs": kwargs, "dest": dest_value}
+                {"flags": flags, "kwargs": kwargs}
             )
         return func
 

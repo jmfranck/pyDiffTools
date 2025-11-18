@@ -8,6 +8,7 @@ from . import (
     split_conflict,
     outline,
 )
+from .wrap_sentences import wr as wrap_sentences_wr  # registers wrap command
 from .separate_comments import tex_sepcomments
 from .unseparate_comments import tex_unsepcomments
 from .comment_functions import matchingbrackets
@@ -284,42 +285,6 @@ def cpb(arguments):
 @register_command("rearrange TeX file based on a .rrng plan")
 def rrng(arguments):
     rearrange_tex_run(arguments)
-
-
-@register_command(
-    "wrap with indented sentence format (for markdown or latex).",
-    "wrap with indented sentence format (for markdown or latex).\n"
-    "Optional flag --cleanoo cleans latex exported from\n"
-    "OpenOffice/LibreOffice\n"
-    "Optional flag -i # specifies indentation level for subsequent\n"
-    "lines of a sentence (defaults to 4 -- e.g. for markdown you\n"
-    "will always want -i 0)",
-)
-def wr(arguments):
-    from . import wrap_sentences
-
-    logging.debug("arguments are", arguments)
-    kwargs = {}
-    if "-i" in arguments:
-        idx = arguments.index("-i")
-        arguments.pop(idx)
-        kwargs["indent_amount"] = int(arguments.pop(idx))
-    if len(arguments) == 1:
-        filename = arguments[0]
-    elif len(arguments) == 2 and arguments[0] == "--cleanoo":
-        filename = arguments[1]
-        kwargs.update({"stupid_strip": True})
-        logging.debug("stripped stupid markup from LibreOffice")
-    elif len(arguments) == 0:
-        filename = None  # wrap_sentences.run(None) # assumes stdin
-    else:
-        raise ValueError(
-            "I don't understand your arguments:" + repr(arguments)
-        )
-    # if filename is a markdown file, then set indent_amount to 0
-    if filename is not None and filename[-3:] == ".md":
-        kwargs["indent_amount"] = 0
-    wrap_sentences.run(filename, **kwargs)
 
 
 @register_command(
@@ -759,8 +724,6 @@ def build_parser():
         for argument in arguments:
             flags = argument["flags"]
             kwargs = dict(argument["kwargs"])
-            if "dest" in argument and argument["dest"]:
-                kwargs["dest"] = argument["dest"]
             subparser.add_argument(*flags, **kwargs)
         subparser.set_defaults(_handler=spec["handler"])
     return parser
