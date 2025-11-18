@@ -3,8 +3,11 @@ import time
 from pathlib import Path
 from typing import Dict, Any
 
+from pydifftools.command_registry import register_command
+
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -91,8 +94,17 @@ class GraphEventHandler(FileSystemEventHandler):
             _reload_svg(self.driver, self.svg_file)
 
 
-def main(yaml_path: str, wrap_width: int = 55) -> None:
-    yaml_file = Path(yaml_path)
+@register_command(
+    "Watch a flowchart YAML file, rebuild DOT/SVG output, and open the preview",
+    help={
+        "yaml": "Path to the flowchart YAML file",
+        "wrap_width": "Line wrap width used when generating node labels",
+    },
+)
+def wgrph(yaml, wrap_width=55):
+    yaml_file = Path(yaml)
+    if not yaml_file.exists():
+        raise FileNotFoundError(f"YAML file not found: {yaml_file}")
     dot_file = yaml_file.with_suffix(".dot")
     svg_file = yaml_file.with_suffix(".svg")
     html_file = yaml_file.with_suffix(".html")
@@ -129,19 +141,4 @@ def main(yaml_path: str, wrap_width: int = 55) -> None:
             driver.quit()
         except Exception:
             pass
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Watch YAML and render flowchart")
-    parser.add_argument("yaml", help="Path to YAML graph description")
-    parser.add_argument(
-        "--wrap-width",
-        type=int,
-        default=55,
-        help="Line wrap width for node text",
-    )
-    args = parser.parse_args()
-    main(args.yaml, wrap_width=args.wrap_width)
 
