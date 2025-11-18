@@ -33,9 +33,7 @@ packages = [
     "pydifftools.flowchart",
     "pydifftools.notebook",
     "pydifftools.data",
-    "pydifftools.data.qmd_template",
 ]
 
 [tool.setuptools.package-data]
 pydifftools = ["diff-doc.js", "xml2xlsx.vbs"]
-"pydifftools.data.qmd_template" = ["templates/*", "project/**/*"]

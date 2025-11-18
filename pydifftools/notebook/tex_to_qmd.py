@@ -7,6 +7,8 @@ import tempfile
 import shutil
 from pathlib import Path
 
+from pydifftools.command_registry import register_command
+
 
 def find_matching(text: str, start: int, open_ch: str, close_ch: str) -> int:
     """Return index of matching close_ch for open_ch at *start* or -1."""
@@ -225,10 +227,14 @@ def format_tags(text: str, indent_str: str = '  ') -> str:
     return re.sub(r'[ \t]+(?=\n)', '', formatted)
 
 
-def convert_tex_to_qmd(tex_path):
-    """Convert ``tex_path`` to a .qmd file and return the output path."""
+@register_command(
+    "Convert LaTeX sources to Quarto Markdown (.qmd) files",
+    help={"tex": "Input .tex file to convert"},
+)
+def tex2qmd(tex):
+    """Convert ``tex`` to a .qmd file and return the output path."""
 
-    inp = Path(tex_path)
+    inp = Path(tex)
     if not inp.exists():
         print(f"File not found: {inp}", file=sys.stderr)
         sys.exit(1)
@@ -280,8 +286,12 @@ def main():
     if len(sys.argv) != 2:
         print("Usage: tex_to_qmd.py file.tex", file=sys.stderr)
         sys.exit(1)
-    convert_tex_to_qmd(sys.argv[1])
+    tex2qmd(sys.argv[1])
 
 
 if __name__ == '__main__':
     main()
+
+
+# Maintain the previous helper name for any existing imports.
+convert_tex_to_qmd = tex2qmd

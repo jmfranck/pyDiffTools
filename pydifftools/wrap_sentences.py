@@ -1,6 +1,8 @@
 import re, sys, itertools
 import numpy as np
 
+from .command_registry import register_command
+
 
 def match_paren(thistext, pos, opener="{"):
     closerdict = {
@@ -44,13 +46,25 @@ def match_paren(thistext, pos, opener="{"):
     return pos
 
 
-def run(
-    filename,
-    wrapnumber=45,
-    punctuation_slop=20,
-    stupid_strip=False,
-    indent_amount=4,
-):
+@register_command(
+    "wrap with indented sentence format (for markdown or latex).",
+    "wrap with indented sentence format (for markdown or latex).\n"
+    "Optional flag --cleanoo cleans latex exported from\n"
+    "OpenOffice/LibreOffice\n"
+    "Optional flag -i # specifies indentation level for subsequent\n"
+    "lines of a sentence (defaults to 4 -- e.g. for markdown you\n"
+    "will always want -i 0)",
+    help={
+        "filename": "Input file to wrap. Use '-' to read from stdin.",
+        "cleanoo": "Strip LibreOffice markup before wrapping.",
+        "i": "Indentation level for wrapped lines.",
+    },
+)
+def wr(filename, wrapnumber=45, punctuation_slop=20, cleanoo=False, i=-1):
+    indent_amount = i if i != -1 else 4
+    stupid_strip = cleanoo
+    if filename == "-":
+        filename = None
     # {{{ load the file
     if filename is not None:
         with open(filename, encoding="utf-8") as fp:
@@ -66,12 +80,14 @@ def run(
             # print("identified as markdown!!")
             filetype = "markdown"
         if filetype == "markdown":
-            indent_amount = 0
+            if i == -1:
+                indent_amount = 0
         # }}}
     else:
         sys.stdin.reconfigure(encoding="utf-8")
         fp = sys.stdin
         alltext = fp.read()
+        filetype = "latex"
     # }}}
     # {{{ strip stupid commands that appear in openoffice conversion
     if stupid_strip:

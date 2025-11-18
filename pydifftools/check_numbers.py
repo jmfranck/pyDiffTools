@@ -1,12 +1,25 @@
 from subprocess import Popen, PIPE
 import os
 
+from .command_registry import register_command
 
-def run(arguments):
+
+@register_command(
+    "check numbers in a latex catalog (e.g. of numbered notebook) of items of"
+    " the form '\\item[anything number.anything]'",
+    help={
+        "start": "First number in the range to search",
+        "stop": "Last number in the range to search",
+    },
+)
+def num(start, stop):
+    """Search a range of numbers in notebook list files and report matches."""
+
     try:
-        start, stop = list(map(int, arguments))
-    except:
-        raise ValueError("I didn't understand the arguments" + repr(arguments))
+        start = int(start)
+        stop = int(stop)
+    except Exception:
+        raise ValueError("I didn't understand the arguments" + repr([start, stop]))
     for thisnumber in range(start, stop + 1):
         if os.name == "posix":
             result = Popen(
@@ -53,3 +66,5 @@ def run(arguments):
                 print("single\t\t", full_string[-1][:-2])
             else:
                 print(thisnumber, " has no match")
+
+

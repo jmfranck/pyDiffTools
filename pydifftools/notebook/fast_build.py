@@ -13,7 +13,8 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 import threading
 import shutil
 import yaml
-import importlib.resources as resources
+
+from pydifftools.command_registry import register_command
 
 # use a polling observer for wider compatibility
 from watchdog.observers.polling import PollingObserver as Observer
@@ -342,8 +343,13 @@ BODY_TEMPLATE = Path("_template/body-only.html").resolve()
 PANDOC_TEMPLATE = Path("_template/pandoc_template.html").resolve()
 NAV_TEMPLATE = Path("_template/nav_template.html").resolve()
 MATHJAX_DIR = Path("_template/mathjax").resolve()
-ASSET_PACKAGE = "pydifftools.data.qmd_template"
 PROJECT_ROOT = Path(".").resolve()
+
+
+def example_notebook_root():
+    """Return the path to the bundled example notebook directory."""
+
+    return Path(__file__).resolve().parents[2] / "example_notebook"
 
 
 def download_mathjax(target_dir):
@@ -384,19 +390,118 @@ def _copy_resource_tree(resource, dest, overwrite=False):
 
 
 def ensure_template_assets(project_root, overwrite=False):
-    """Copy packaged template assets into ``project_root`` if missing."""
-    template_src = resources.files(ASSET_PACKAGE).joinpath("templates")
+    """Copy template assets from the checked-in example notebook when present."""
+
+    template_src = example_notebook_root() / "_template"
     target = Path(project_root) / "_template"
-    _copy_resource_tree(template_src, target, overwrite)
+    target.mkdir(parents=True, exist_ok=True)
+    if template_src.exists():
+        _copy_resource_tree(template_src, target, overwrite)
+    # Fall back to simple built-in templates when packaged assets are missing.
+    nav_target = target / "nav_template.html"
+    if overwrite or not nav_target.exists():
+        nav_target.write_text(
+            """
+<style>
+#on-this-page {font-family: sans-serif; border: 1px solid #ddd; padding: 0.5rem; margin-bottom: 1rem;}
+#on-this-page h2 {margin-top: 0; font-size: 1.1rem;}
+#on-this-page ul {list-style: none; padding-left: 0; margin: 0;}
+#on-this-page li {margin: 0.25rem 0;}
+</style>
+<nav id="on-this-page">
+  <h2>On this page</h2>
+  <ul>
+  {% for page in pages %}
+    <li><a href="{{ page.href }}">{{ page.title or page.file }}</a></li>
+  {% endfor %}
+  </ul>
+</nav>
+            """
+        )
+    body_target = target / "body-only.html"
+    if overwrite or not body_target.exists():
+        body_target.write_text(
+            """
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  $for(header-includes)$
+  $header-includes$
+  $endfor$
+</head>
+<body>
+$body$
+</body>
+</html>
+            """
+        )
+    pandoc_target = target / "pandoc_template.html"
+    if overwrite or not pandoc_target.exists():
+        pandoc_target.write_text(body_target.read_text())
+    obs_target = target / "obs.lua"
+    if overwrite or not obs_target.exists():
+        obs_target.write_text("-- placeholder filter\n")
 
 
-def scaffold_project(target_dir, force=False):
-    """Copy the sample project and templates into ``target_dir``."""
-    target = Path(target_dir)
-    project_src = resources.files(ASSET_PACKAGE).joinpath("project")
-    _copy_resource_tree(project_src, target, force)
+@register_command(
+    "Initialize a sample Quarto project with bundled templates",
+    help={
+        "path": "Directory to initialize (defaults to current working directory)",
+        "force": "Overwrite existing files when copying the scaffold",
+    },
+)
+def qmdinit(path=".", force=False):
+    """Copy the example notebook contents into ``path`` for a ready-to-run demo."""
+
+    source_root = example_notebook_root()
+    if not source_root.exists():
+        raise RuntimeError("example_notebook directory is missing")
+    target = Path(path).resolve()
+    # Keep all of the key paths tied to the project we just initialized so
+    # subsequent build steps read and write in the expected location even if
+    # the module was imported from elsewhere.
+    global PROJECT_ROOT, BUILD_DIR, DISPLAY_DIR
+    global BODY_TEMPLATE, PANDOC_TEMPLATE, NAV_TEMPLATE, MATHJAX_DIR
+    PROJECT_ROOT = target
+    BUILD_DIR = PROJECT_ROOT / "_build"
+    DISPLAY_DIR = PROJECT_ROOT / "_display"
+    BODY_TEMPLATE = PROJECT_ROOT / "_template" / "body-only.html"
+    PANDOC_TEMPLATE = PROJECT_ROOT / "_template" / "pandoc_template.html"
+    NAV_TEMPLATE = PROJECT_ROOT / "_template" / "nav_template.html"
+    MATHJAX_DIR = PROJECT_ROOT / "_template" / "mathjax"
+    for child in source_root.iterdir():
+        _copy_resource_tree(child, target / child.name, force)
+    # Some expected render targets are not present in the checked-in example,
+    # so create lightweight placeholders to keep the sample project runnable
+    # in isolation.
+    projects_qmd = target / "projects.qmd"
+    if force or not projects_qmd.exists():
+        projects_qmd.write_text("{{< include project1/index.qmd >}}\n")
+    notebook_qmd = target / "notebook250708.qmd"
+    if force or not notebook_qmd.exists():
+        notebook_qmd.write_text("# Example notebook placeholder\n")
     ensure_template_assets(target, overwrite=force)
     download_mathjax(target / "_template" / "mathjax")
+    print(f"Initialized Quarto scaffold in {target.resolve()}")
+
+
+@register_command(
+    "Build Quarto-style projects with Pandoc and the fast builder (optionally watch)",
+    help={
+        "watch": "Watch files and serve",
+        "no_browser": "Do not launch a browser when using --watch",
+        "webtex": "Use Pandoc's --webtex option instead of MathJax",
+    },
+)
+def qmdb(watch=False, no_browser=False, webtex=False):
+    """Build or watch the current directory using the fast notebook builder."""
+
+    ensure_template_assets(Path("."))
+    if watch:
+        watch_and_serve(no_browser=no_browser, webtex=webtex)
+    else:
+        build_all(webtex=webtex)
 
 
 def ensure_pandoc_available():
