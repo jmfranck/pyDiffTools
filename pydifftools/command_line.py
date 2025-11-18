@@ -6,7 +6,6 @@ from . import (
     check_numbers,
     match_spaces,
     split_conflict,
-    wrap_sentences,
     outline,
 )
 from .separate_comments import tex_sepcomments
@@ -297,6 +296,8 @@ def rrng(arguments):
     "will always want -i 0)",
 )
 def wr(arguments):
+    from . import wrap_sentences
+
     logging.debug("arguments are", arguments)
     kwargs = {}
     if "-i" in arguments:
