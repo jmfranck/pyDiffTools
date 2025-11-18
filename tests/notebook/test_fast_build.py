@@ -12,7 +12,7 @@ import pydifftools.notebook.fast_build as fast_build
 def fb(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PYDIFFTOOLS_FAKE_MATHJAX", "1")
-    fast_build.scaffold_project(tmp_path, force=True)
+    fast_build.qmdinit(tmp_path, force=True)
     dummybin = tmp_path / "dummybin"
     dummybin.mkdir()
     for name in ("pandoc", "pandoc-crossref"):

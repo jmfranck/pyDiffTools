@@ -1,3 +1,4 @@
+import argparse
 import inspect
 
 
@@ -37,10 +38,22 @@ def register_command(help_text, description=None, help=None):
             kwargs = {}
             if parameter.default is inspect._empty:
                 flags.append(parameter.name)
+                if parameter.name == "arguments":
+                    # Most commands accept a raw list of trailing arguments.
+                    kwargs["nargs"] = argparse.REMAINDER
+                    kwargs["help"] = argparse.SUPPRESS
             else:
-                flags.append("--" + parameter.name.replace("_", "-"))
+                # Single-letter keywords use a short flag; everything else uses
+                # the long two-dash style expected by the CLI.
+                dash_prefix = "-" if len(parameter.name) == 1 else "--"
+                flags.append(dash_prefix + parameter.name.replace("_", "-"))
                 kwargs["default"] = parameter.default
-                if parameter.default is not None:
+                if isinstance(parameter.default, bool):
+                    # Boolean flags toggle on or off without needing a value.
+                    kwargs["action"] = (
+                        "store_false" if parameter.default else "store_true"
+                    )
+                elif parameter.default is not None:
                     kwargs["type"] = type(parameter.default)
             if parameter.name in argument_help:
                 kwargs["help"] = argument_help[parameter.name].strip()
