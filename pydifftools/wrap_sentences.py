@@ -1,5 +1,4 @@
 import re, sys, itertools
-import numpy as np
 
 from .command_registry import register_command
 
@@ -61,6 +60,9 @@ def match_paren(thistext, pos, opener="{"):
     },
 )
 def wr(filename, wrapnumber=45, punctuation_slop=20, cleanoo=False, i=-1):
+    # numpy is only needed when performing the wrap calculations; import it lazily
+    import numpy as np
+
     indent_amount = i if i != -1 else 4
     stupid_strip = cleanoo
     if filename == "-":

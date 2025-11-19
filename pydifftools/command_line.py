@@ -14,7 +14,6 @@ from .unseparate_comments import tex_unsepcomments
 from .comment_functions import matchingbrackets
 from .copy_files import copy_image_files
 from .searchacro import replace_acros
-from .continuous import watch as continuous_watch
 from .rearrange_tex import run as rearrange_tex_run
 from .flowchart.watch_graph import wgrph
 from .notebook.tex_to_qmd import tex2qmd
@@ -30,7 +29,6 @@ import difflib
 import shutil
 from pathlib import Path, PurePosixPath
 
-import argcomplete
 
 from .command_registry import _COMMAND_SPECS, register_command
 
@@ -279,6 +277,8 @@ def gensync(arguments):
 @register_command("continuous pandoc build.  Like latexmk, but for markdown!")
 def cpb(arguments):
     assert len(arguments) == 1
+    from .continuous import watch as continuous_watch
+
     continuous_watch(arguments[0])
 
 
@@ -733,7 +733,13 @@ def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
     parser = build_parser()
-    argcomplete.autocomplete(parser)
+    try:
+        import argcomplete
+    except ImportError:
+        argcomplete = None
+    # Autocompletion is optional; skip it when the helper package is absent.
+    if argcomplete is not None:
+        argcomplete.autocomplete(parser)
     if not argv:
         parser.print_help()
         return
@@ -743,3 +749,7 @@ def main(argv=None):
     handler_kwargs.pop("_handler", None)
     handler_kwargs.pop("command", None)
     handler(**handler_kwargs)
+
+
+if __name__ == "__main__":
+    main()
