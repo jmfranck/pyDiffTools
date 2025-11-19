@@ -23,7 +23,7 @@ from .wrap_sentences import wr as wrap_sentences_wr  # registers wrap command
 from .separate_comments import tex_sepcomments
 from .unseparate_comments import tex_unsepcomments
 from .comment_functions import matchingbrackets
-from .copy_image_files import copy_image_files
+from .copy_files import copy_image_files
 from .searchacro import replace_acros
 from .rearrange_tex import run as rearrange_tex_run
 from .flowchart.watch_graph import wgrph
