@@ -32,7 +32,6 @@ packages = [
     "pydifftools",
     "pydifftools.flowchart",
     "pydifftools.notebook",
-    "pydifftools.data",
 ]
 
 [tool.setuptools.package-data]
