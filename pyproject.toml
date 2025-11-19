@@ -11,7 +11,7 @@ readme = "README.rst"
 license = { file = "LICENSE.md" }
 dependencies = [
     "selenium",
-    "fuzzywuzzy",
+    "fuzzywuzzy[speedup]",
     "PyYAML>=6.0",
     "watchdog",
     "pydot",
@@ -32,10 +32,18 @@ packages = [
     "pydifftools",
     "pydifftools.flowchart",
     "pydifftools.notebook",
-    "pydifftools.data",
-    "pydifftools.data.qmd_template",
 ]
 
 [tool.setuptools.package-data]
 pydifftools = ["diff-doc.js", "xml2xlsx.vbs"]
-"pydifftools.data.qmd_template" = ["templates/*", "project/**/*"]
+
+[tool.black]
+line-length = 79
+target-version = ['py36', 'py37', 'py38', 'py39']
+preview = true
+
+[tool.ruff]
+line-length = 79
+
+[tool.ruff.lint]
+extend-select = ["E501"]

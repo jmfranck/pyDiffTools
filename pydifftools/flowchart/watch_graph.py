@@ -2,33 +2,16 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Dict, Any
-
-from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import WebDriverException, NoSuchWindowException
-
+from selenium.common.exceptions import (
+    WebDriverException,
+    NoSuchWindowException,
+)
+from pydifftools.command_registry import register_command
 from .graph import write_dot_from_yaml
-
-
-def build_graph(
-    yaml_file: Path,
-    dot_file: Path,
-    svg_file: Path,
-    wrap_width: int,
-    prev_data: Dict[str, Any] | None = None,
-) -> Dict[str, Any]:
-    """Regenerate DOT and SVG output from the YAML description."""
-    data = write_dot_from_yaml(
-        str(yaml_file), str(dot_file), wrap_width=wrap_width, old_data=prev_data
-    )
-    subprocess.run(
-        ["dot", "-Tsvg", str(dot_file), "-o", str(svg_file)],
-        check=True,
-    )
-    return data
 
 
 def _reload_svg(driver, svg_file: Path) -> None:
@@ -38,15 +21,35 @@ def _reload_svg(driver, svg_file: Path) -> None:
     scroll_y = driver.execute_script("return window.scrollY")
     svg_uri = svg_file.resolve().as_uri() + f"?t={time.time()}"
     driver.execute_async_script(
-        "const [src,z,x,y,done]=arguments;"
-        "const s=document.getElementById('svg-view');"
-        "s.onload=function(){document.body.style.zoom=z; window.scrollTo(x,y); done();};"
-        "s.setAttribute('src', src);",
+        "const [src,z,x,y,done]=arguments;const"
+        " s=document.getElementById('svg-view');s.onload=function()"
+        "{document.body.style.zoom=z;"
+        " window.scrollTo(x,y); done();};s.setAttribute('src', src);",
         svg_uri,
         zoom,
         scroll_x,
         scroll_y,
     )
+
+
+def build_graph(
+    yaml_file: Path,
+    dot_file: Path,
+    svg_file: Path,
+    wrap_width: int,
+    prev_data: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    data = write_dot_from_yaml(
+        str(yaml_file),
+        str(dot_file),
+        wrap_width=wrap_width,
+        old_data=prev_data,
+    )
+    subprocess.run(
+        ["dot", "-Tsvg", str(dot_file), "-o", str(svg_file)],
+        check=True,
+    )
+    return data
 
 
 class GraphEventHandler(FileSystemEventHandler):
@@ -87,20 +90,32 @@ class GraphEventHandler(FileSystemEventHandler):
                 self.wrap_width,
                 self.data,
             )
-            self._last_mtime = self.yaml_file.stat().st_mtime
             _reload_svg(self.driver, self.svg_file)
+            self._last_mtime = self.yaml_file.stat().st_mtime
 
 
-def main(yaml_path: str, wrap_width: int = 55) -> None:
-    yaml_file = Path(yaml_path)
+@register_command(
+    "Watch a flowchart YAML file, rebuild DOT/SVG output, and open the"
+    " preview",
+    help={
+        "yaml": "Path to the flowchart YAML file",
+        "wrap_width": "Line wrap width used when generating node labels",
+    },
+)
+def wgrph(yaml, wrap_width=55):
+    yaml_file = Path(yaml)
+    if not yaml_file.exists():
+        raise FileNotFoundError(f"YAML file not found: {yaml_file}")
+
     dot_file = yaml_file.with_suffix(".dot")
     svg_file = yaml_file.with_suffix(".svg")
     html_file = yaml_file.with_suffix(".html")
+
     data = build_graph(yaml_file, dot_file, svg_file, wrap_width)
     html_file.write_text(
-        "<html><body style='margin:0'>"
-        f"<embed id='svg-view' type='image/svg+xml' src='{svg_file.name}?t={time.time()}'/>"
-        "</body></html>"
+        "<html><body style='margin:0'><embed id='svg-view'"
+        " type='image/svg+xml'"
+        f" src='{svg_file.name}?t={time.time()}'/></body></html>"
     )
     options = Options()
     driver = webdriver.Chrome(options=options)
@@ -114,7 +129,6 @@ def main(yaml_path: str, wrap_width: int = 55) -> None:
     try:
         while True:
             try:
-                # Cheap liveness checks: if the window is gone these raise
                 _ = driver.window_handles
                 driver.execute_script("return 1")
             except (NoSuchWindowException, WebDriverException):
@@ -129,19 +143,3 @@ def main(yaml_path: str, wrap_width: int = 55) -> None:
             driver.quit()
         except Exception:
             pass
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Watch YAML and render flowchart")
-    parser.add_argument("yaml", help="Path to YAML graph description")
-    parser.add_argument(
-        "--wrap-width",
-        type=int,
-        default=55,
-        help="Line wrap width for node text",
-    )
-    args = parser.parse_args()
-    main(args.yaml, wrap_width=args.wrap_width)
-

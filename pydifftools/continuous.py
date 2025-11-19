@@ -1,13 +1,15 @@
-"""
-this requires geckodriver to be installed and available
-"""
+"""Continuous Pandoc build utility that requires geckodriver."""
 
 import time
-from selenium import webdriver
+import subprocess
+import sys
+import os
+import re
 import selenium
-import subprocess, sys, os, psutil, re
-from watchdog.observers import Observer
+from selenium import webdriver
 from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
+from .command_registry import register_command
 
 
 def run_pandoc(filename, html_file):
@@ -17,7 +19,8 @@ def run_pandoc(filename, html_file):
         has_local_jax = False
         print("you don't have a local copy of mathjax.  You could get it with")
         print(
-            "wget https://github.com/mathjax/MathJax/archive/refs/tags/3.1.2.zip"
+            "wget https://github.com/mathjax/MathJax/archive/"
+            + "refs/tags/3.1.2.zip"
         )
         print("and then unzip")
     current_dir = os.getcwd()
@@ -31,8 +34,7 @@ def run_pandoc(filename, html_file):
         else:
             raise ValueError(
                 f"You have more than one (or no) {k} file in this directory!"
-                " Get rid of all but one! of "
-                + "and".join(localfiles[k])
+                " Get rid of all but one! of " + "and".join(localfiles[k])
             )
     command = [
         "pandoc",
@@ -51,7 +53,7 @@ def run_pandoc(filename, html_file):
         filename,
     ]
     # command = ['pandoc', '-s', '--mathjax', '-o', html_file, filename]
-    print("running:",' '.join(command))
+    print("running:", " ".join(command))
     subprocess.run(
         command,
     )
@@ -77,25 +79,20 @@ class Handler(FileSystemEventHandler):
         self.observer = observer
         self.filename = filename
         self.html_file = filename.rsplit(".", 1)[0] + ".html"
-        # self.firefox = webbrowser.get('firefox')
-        # self.firefox = webdriver.Firefox() # requires geckodriver
         self.init_firefox()
 
     def init_firefox(self):
-        self.firefox = webdriver.Chrome()  # requires chromium
+        self.firefox = webdriver.Chrome()
         run_pandoc(self.filename, self.html_file)
         if not os.path.exists(self.html_file):
             print("html doesn't exist")
         self.append_autorefresh()
-        # self.firefox.open_new_tab(self.html_file)
         self.firefox.get("file://" + os.path.abspath(self.html_file))
 
     def on_modified(self, event):
-        # print("modification event")
         if os.path.normpath(
             os.path.abspath(event.src_path)
         ) == os.path.normpath(os.path.abspath(self.filename)):
-            # print("about to run pandoc")
             run_pandoc(self.filename, self.html_file)
             self.append_autorefresh()
             try:
@@ -107,22 +104,18 @@ class Handler(FileSystemEventHandler):
                 )
                 self.firefox.quit()
                 self.init_firefox()
-            print("and refreshed!")
-        else:
-            # print("saw a change in",os.path.normpath(os.path.abspath(event.src_path)))
-            # print("not",os.path.normpath(os.path.abspath(self.filename)))
-            pass
 
     def append_autorefresh(self):
-        # print("about to add scripts")
         with open(self.html_file, "r", encoding="utf-8") as fp:
             all_data = fp.read()
         all_data = all_data.replace(
             "</head>",
             """
-    <script id="MathJax-script" async src="MathJax-3.1.2/es5/tex-mml-chtml.js"></script>
+    <script id="MathJax-script" async src="MathJax-3.1.2/es5/tex-mml-chtml.js"\
+></script>
     <script>
-        // When the page is about to be unloaded, save the current scroll position
+        // When the page is about to be unloaded, save the current scroll\
+position
         window.addEventListener('beforeunload', function() {
             sessionStorage.setItem('scrollPosition', window.scrollY);
         });
@@ -141,7 +134,6 @@ class Handler(FileSystemEventHandler):
         )
         with open(self.html_file, "w", encoding="utf-8") as fp:
             fp.write(all_data)
-        # print("done adding")
 
 
 def watch(filename):
@@ -157,7 +149,14 @@ def watch(filename):
         observer.stop()
 
     observer.join()
-    # print("returning from watch")
+
+
+@register_command(
+    "continuous pandoc build.  Like latexmk, but for markdown!",
+    help={"filename": "Markdown or TeX file to watch for changes"},
+)
+def cpb(filename):
+    watch(filename)
 
 
 if __name__ == "__main__":

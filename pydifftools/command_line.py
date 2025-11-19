@@ -2,66 +2,34 @@
 
 import argparse
 import sys
-from typing import Callable, Dict, List, Optional, Sequence
+import os
+import gzip
+import time
+import subprocess
+import re
+import nbformat
+import difflib
+import shutil
+from pathlib import Path
 from . import (
-    check_numbers,
     match_spaces,
     split_conflict,
-    wrap_sentences,
     outline,
 )
+from .continuous import cpb
+from .wrap_sentences import wr as wrap_sentences_wr  # registers wrap command
 from .separate_comments import tex_sepcomments
 from .unseparate_comments import tex_unsepcomments
 from .comment_functions import matchingbrackets
 from .copy_files import copy_image_files
 from .searchacro import replace_acros
-from .continuous import watch as continuous_watch
 from .rearrange_tex import run as rearrange_tex_run
-import os
-import gzip
-import time
-import subprocess
-import logging
-import re
-import nbformat
-import difflib
-import shutil
-from pathlib import Path, PurePosixPath
-
-import argcomplete
+from .flowchart.watch_graph import wgrph
+from .notebook.tex_to_qmd import tex2qmd
+from .notebook.fast_build import qmdb, qmdinit
 
 
-CommandHandler = Callable[[Sequence[str]], None]
-
-
-class CommandRegistrationError(RuntimeError):
-    """Raised when attempting to register duplicate command handlers."""
-
-
-_COMMAND_SPECS: Dict[str, Dict[str, object]] = {}
-
-
-def register_command(
-    help_text: str, description: Optional[str] = None
-) -> Callable[[CommandHandler], CommandHandler]:
-    """Register a command handler for the CLI dispatcher."""
-
-    def decorator(func: CommandHandler) -> CommandHandler:
-        name = func.__name__
-        if name in _COMMAND_SPECS:
-            raise CommandRegistrationError(
-                f"Command '{name}' already registered"
-            )
-        _COMMAND_SPECS[name] = {
-            "handler": func,
-            "help": help_text.strip(),
-            "description": (
-                description if description is not None else help_text
-            ).strip(),
-        }
-        return func
-
-    return decorator
+from .command_registry import _COMMAND_SPECS, register_command
 
 
 def printed_exec(cmd):
@@ -94,7 +62,8 @@ def recursive_include_search(directory, basename, does_it_input):
         os.path.join(directory, basename + ".tex"), "r", encoding="utf-8"
     ) as fp:
         alltxt = fp.read()
-    # we're only sensitive to the name of the file, not the directory that it's in
+    # we're only sensitive to the name of the file, not the directory that it's
+    # in
     pattern = re.compile(
         r"\n[^%]*\\(?:input|include)[{]((?:[^}]*/)?" + does_it_input + ")[}]"
     )
@@ -122,7 +91,8 @@ def recursive_include_search(directory, basename, does_it_input):
 
 
 def look_for_pdf(directory, origbasename):
-    'look for pdf -- if found return tuple(True, the basename of the pdf, the basename of the tex) else return tuple(False, "", "")'
+    """look for pdf -- if found return tuple(True, the basename of the pdf, the
+    basename of the tex) else return tuple(False, "", "")"""
     found = False
     basename = ""
     actual_name = ""
@@ -144,100 +114,12 @@ def look_for_pdf(directory, origbasename):
 
 
 @register_command(
-    "Watch a flowchart YAML file, rebuild DOT/SVG output, and open the preview"
-)
-def wgrph(arguments):
-    parser = argparse.ArgumentParser(prog="wgrph", description="Watch a YAML flowchart")
-    parser.add_argument("yaml", help="Path to the flowchart YAML file")
-    parser.add_argument(
-        "--wrap-width",
-        type=int,
-        default=55,
-        help="Line wrap width used when generating node labels",
-    )
-    args = parser.parse_args(arguments)
-    yaml_path = Path(args.yaml)
-    if not yaml_path.exists():
-        parser.error(f"YAML file not found: {yaml_path}")
-    from pydifftools.flowchart.watch_graph import main as watch_main
-
-    # Delegate to the relocated watcher so behavior matches the original script.
-    watch_main(str(yaml_path), wrap_width=args.wrap_width)
-
-
-@register_command("Convert LaTeX sources to Quarto Markdown (.qmd) files")
-def tex2qmd(arguments):
-    parser = argparse.ArgumentParser(prog="tex2qmd", description="Convert TeX to QMD")
-    parser.add_argument("tex", help="Input .tex file to convert")
-    args = parser.parse_args(arguments)
-    from pydifftools.notebook.tex_to_qmd import convert_tex_to_qmd
-
-    convert_tex_to_qmd(args.tex)
-
-
-@register_command(
-    "Build Quarto-style projects with Pandoc and the fast builder (optionally watch)"
-)
-def qmdb(arguments):
-    parser = argparse.ArgumentParser(prog="qmdb", description="Pandoc-based builder")
-    parser.add_argument("--watch", action="store_true", help="Watch files and serve")
-    parser.add_argument(
-        "--no-browser",
-        action="store_true",
-        help="Do not launch a browser when using --watch",
-    )
-    parser.add_argument(
-        "--webtex",
-        action="store_true",
-        help="Use Pandoc's --webtex option instead of MathJax",
-    )
-    args = parser.parse_args(arguments)
-    from pydifftools.notebook import fast_build
-
-    fast_build.ensure_template_assets(Path("."))
-    if args.watch:
-        fast_build.watch_and_serve(no_browser=args.no_browser, webtex=args.webtex)
-    else:
-        fast_build.build_all(webtex=args.webtex)
-
-
-@register_command("Initialize a sample Quarto project with bundled templates")
-def qmdinit(arguments):
-    parser = argparse.ArgumentParser(prog="qmdinit", description="Scaffold a project")
-    parser.add_argument(
-        "path",
-        nargs="?",
-        default=".",
-        help="Directory to initialize (defaults to current working directory)",
-    )
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Overwrite existing files when copying the scaffold",
-    )
-    args = parser.parse_args(arguments)
-    from pydifftools.notebook import fast_build
-
-    fast_build.scaffold_project(args.path, force=args.force)
-    print(f"Initialized Quarto scaffold in {Path(args.path).resolve()}")
-
-
-@register_command(
-    "check numbers in a latex catalog (e.g. of numbered notebook) of items of"
-    " the form '\\item[anything number.anything]'"
-)
-def num(arguments):
-    check_numbers.run(arguments)
-
-
-@register_command(
     "Make a python script from a notebook file, following certain rules."
 )
 def nb2py(arguments):
     assert arguments[0].endswith(".ipynb"), (
         "this is supposed to be called with a .ipynb file argument! (arguments"
-        " are %s)"
-        % repr(arguments)
+        " are %s)" % repr(arguments)
     )
     nb = nbformat.read(arguments[0], nbformat.NO_CONVERT)
     last_was_markdown = False
@@ -294,14 +176,12 @@ def py2nb(arguments):
     assert len(arguments) == 1, "py2nb should only be called with one argument"
     assert arguments[0].endswith(".py"), (
         "this is supposed to be called with a .py file argument! (arguments"
-        " are %s)"
-        % repr(arguments)
+        " are %s)" % repr(arguments)
     )
     with open(arguments[0], encoding="utf-8") as fpin:
         text = fpin.read()
     text = text.split("\n")
     newtext = []
-    in_markdown_cell = False
     in_code_cell = False
     last_line_empty = True
     for thisline in text:
@@ -312,7 +192,6 @@ def py2nb(arguments):
                 pass
             elif thisline.startswith("# In["):
                 in_code_cell = False
-                in_markdown_cell = False
             elif thisline.startswith("# Out["):
                 pass
             elif thisline.startswith("# "):
@@ -320,7 +199,6 @@ def py2nb(arguments):
                 if last_line_empty:
                     newtext.append("# <markdowncell>")
                     in_code_cell = False
-                    in_markdown_cell = True
                 newtext.append(thisline)
             last_line_empty = False
         elif len(thisline) == 0:
@@ -330,7 +208,6 @@ def py2nb(arguments):
             if not in_code_cell:
                 newtext.append("# <codecell>")
                 in_code_cell = True
-                in_markdown_cell = False
             m = jupyter_magic_re.match(thisline)
             if m:
                 thisline = "%" + " ".join(
@@ -355,13 +232,15 @@ def py2nb(arguments):
     nbook = nbformat.v3.reads_py(text)
 
     nbook = nbformat.v4.upgrade(nbook)  # Upgrade nbformat.v3 to nbformat.v4
-    nbook.metadata.update({
-        "kernelspec": {
-            "name": "Python [Anaconda2]",
-            "display_name": "Python [Anaconda2]",
-            "language": "python",
+    nbook.metadata.update(
+        {
+            "kernelspec": {
+                "name": "Python [Anaconda2]",
+                "display_name": "Python [Anaconda2]",
+                "language": "python",
+            }
         }
-    })
+    )
 
     jsonform = nbformat.v4.writes(nbook) + "\n"
     with open(
@@ -388,53 +267,13 @@ def gensync(arguments):
     new_synctex = orig_synctex
     with gzip.open(arguments[1].replace(".pdf", ".synctek.gz")) as fp:
         fp.write(new_synctex)
-        fp.write(argument[1].replace())
+        fp.write(arguments[1].replace())
         fp.close()
-
-
-@register_command("continuous pandoc build.  Like latexmk, but for markdown!")
-def cpb(arguments):
-    assert len(arguments) == 1
-    continuous_watch(arguments[0])
 
 
 @register_command("rearrange TeX file based on a .rrng plan")
 def rrng(arguments):
     rearrange_tex_run(arguments)
-
-
-@register_command(
-    "wrap with indented sentence format (for markdown or latex).",
-    "wrap with indented sentence format (for markdown or latex).\n"
-    "Optional flag --cleanoo cleans latex exported from\n"
-    "OpenOffice/LibreOffice\n"
-    "Optional flag -i # specifies indentation level for subsequent\n"
-    "lines of a sentence (defaults to 4 -- e.g. for markdown you\n"
-    "will always want -i 0)",
-)
-def wr(arguments):
-    logging.debug("arguments are", arguments)
-    kwargs = {}
-    if "-i" in arguments:
-        idx = arguments.index("-i")
-        arguments.pop(idx)
-        kwargs["indent_amount"] = int(arguments.pop(idx))
-    if len(arguments) == 1:
-        filename = arguments[0]
-    elif len(arguments) == 2 and arguments[0] == "--cleanoo":
-        filename = arguments[1]
-        kwargs.update({"stupid_strip": True})
-        logging.debug("stripped stupid markup from LibreOffice")
-    elif len(arguments) == 0:
-        filename = None  # wrap_sentences.run(None) # assumes stdin
-    else:
-        raise ValueError(
-            "I don't understand your arguments:" + repr(arguments)
-        )
-    # if filename is a markdown file, then set indent_amount to 0
-    if filename is not None and filename[-3:] == ".md":
-        kwargs["indent_amount"] = 0
-    wrap_sentences.run(filename, **kwargs)
 
 
 @register_command(
@@ -471,7 +310,8 @@ def sc(arguments):
 @register_command("word diff")
 def wd(arguments):
     if arguments[0].find("Temp") > 0:
-        # {{{ if it's a temporary file, I need to make a real copy to run pandoc on
+        # {{{ if it's a temporary file, I need to make a real copy to run
+        #     pandoc on
         fp = open(arguments[0], encoding="utf-8")
         contents = fp.read()
         fp.close()
@@ -574,14 +414,12 @@ def fs(arguments):
         # windows
         cmd = ["start sumatrapdf -reuse-instance"]
     if os.path.exists(os.path.join(directory, origbasename + ".pdf")):
-        cmd.append(
-            f"{lineno}:0:{texfile} {os.path.join(directory,origbasename+'.pdf')}"
-        )
+        temp = os.path.join(directory, origbasename + ".pdf")
+        cmd.append(f"{lineno}:0:{texfile} {temp}")
         tex_name = origbasename
     else:
         print("no pdf file for this guy, looking for one that has one")
         found, basename, tex_name = look_for_pdf(directory, origbasename)
-        orig_directory = directory
         if not found:
             while os.path.sep in directory and directory.lower()[-1] != ":":
                 build_nb = os.path.join(directory, "build_nb")
@@ -606,7 +444,7 @@ def fs(arguments):
         # file has been found, so add to the command
         cmd.append(
             f"{lineno}:0:{tex_name}.tex"
-            f" {os.path.join(directory,basename+'.pdf')}"
+            f" {os.path.join(directory, basename + '.pdf')}"
         )
     if os.name == "posix":
         cmd.append("&")
@@ -820,7 +658,8 @@ def ac(arguments):
         ["kpsewhich", "myacronyms.sty"], capture_output=True, text=True
     )
 
-    # Convert the string to a pathlib Path object if the file was found, else assign None
+    # Convert the string to a pathlib Path object if the file was found, else
+    # assign None
     path = (
         Path(kpsewhich_output.stdout.strip())
         if kpsewhich_output.returncode == 0
@@ -849,14 +688,6 @@ def pmd(arguments):
 
 
 @register_command(
-    "use the modified filename_outline.md to write reordered text"
-)
-def xoreorder(arguments):
-    assert len(arguments) == 1
-    outline.write_reordered(arguments[0])
-
-
-@register_command(
     "Save tex file as outline, with filename_outline.pickle storing content"
     " and filename_outline.md giving outline."
 )
@@ -865,7 +696,7 @@ def xo(arguments):
     outline.extract_outline(arguments[0])
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser():
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command")
     subparsers.required = True
@@ -876,22 +707,31 @@ def build_parser() -> argparse.ArgumentParser:
             description=spec["description"],
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
-        subparser.add_argument(
-            "args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS
-        )
+        arguments = []
+        if "arguments" in spec:
+            arguments = spec["arguments"]
+        for argument in arguments:
+            flags = argument["flags"]
+            kwargs = dict(argument["kwargs"])
+            subparser.add_argument(*flags, **kwargs)
         subparser.set_defaults(_handler=spec["handler"])
     return parser
 
 
-def main(argv: Optional[Sequence[str]] = None) -> None:
+def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
     parser = build_parser()
-    argcomplete.autocomplete(parser)
     if not argv:
         parser.print_help()
         return
     namespace = parser.parse_args(argv)
     handler = namespace._handler
-    arguments = list(namespace.args)
-    handler(arguments)
+    handler_kwargs = dict(vars(namespace))
+    handler_kwargs.pop("_handler", None)
+    handler_kwargs.pop("command", None)
+    handler(**handler_kwargs)
+
+
+if __name__ == "__main__":
+    main()

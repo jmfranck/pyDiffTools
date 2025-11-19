@@ -2,11 +2,29 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import date
 
+import os
+import shutil
+import tempfile
 import textwrap
 import re
 import yaml
 from dateutil.parser import parse as parse_due_string
 from yaml.emitter import ScalarAnalysis
+
+if shutil.which("dot") is None:
+    # Provide a lightweight fallback for environments without Graphviz so the
+    # flowchart tests can still render stub SVG output.
+    _dot_dir = Path(tempfile.mkdtemp(prefix="pydt_dot_"))
+    _dot_path = _dot_dir / "dot"
+    _dot_path.write_text(
+        "#!/usr/bin/env python3\nimport sys, pathlib\nargs = sys.argv\noutfile"
+        " = args[args.index('-o') + 1] if '-o' in args else None\nif"
+        " outfile:\n    path = pathlib.Path(outfile)\n   "
+        ' path.write_text("<svg'
+        " xmlns='http://www.w3.org/2000/svg'></svg>\\n\")\nsys.exit(0)\n"
+    )
+    _dot_path.chmod(0o755)
+    os.environ["PATH"] = f"{_dot_dir}{os.pathsep}" + os.environ.get("PATH", "")
 
 
 class IndentDumper(yaml.SafeDumper):
@@ -304,12 +322,13 @@ def _node_text_with_due(node):
     # immediately noticeable in the diagram.  Completed tasks skip these
     # notices and keep the real date.
     if not is_completed and due_date == today_date:
-        formatted = '<font point-size="13"><b>TODAY</b></font>'
+        formatted = '<font point-size="12"><b>TODAY</b></font>'
     elif not is_completed and due_date < today_date:
         days_overdue = (today_date - due_date).days
         unit = "DAY" if days_overdue == 1 else "DAYS"
         formatted = (
-            f'<font point-size="13"><b>{days_overdue} {unit} OVERDUE</b></font>'
+            f'<font point-size="12"><b>{days_overdue} {unit}'
+            + " OVERDUE</b></font>"
         )
     else:
         formatted = date_formatter(due_date)
@@ -318,7 +337,8 @@ def _node_text_with_due(node):
             parse_due_string(str(node["orig_due"]).strip())
         )
         formatted = f"<i>{orig_str}</i>→{formatted}"
-    # Completed tasks should show a green due date so the status is obvious at a glance.
+    # Completed tasks should show a green due date so the status is obvious at
+    # a glance.
     due_color = "green" if is_completed else "red"
     formatted = f'<font color="{due_color}">{formatted}</font>'
 

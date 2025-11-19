@@ -1,5 +1,0 @@
----
-title: "Projects"
----
-
-{{< include project1/index.qmd >}}

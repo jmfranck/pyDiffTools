@@ -2,6 +2,8 @@ import pickle
 from .doc_contents import doc_contents_class
 import re
 
+from .command_registry import register_command
+
 
 def extract_outline(filename):
     basename = filename.replace(".tex", "")
@@ -25,7 +27,8 @@ def extract_outline(filename):
                     all_contents += thisline
             if (
                 bracelevel > 0
-            ):  # do this whether continued open brace from previous line, or if we opened brace on previous
+            ):  # do this whether continued open brace from previous line,
+                # or if we opened brace on previous
                 for n, j in enumerate(thisline[thismatch.end() :]):
                     if escaped:
                         escaped = False
@@ -49,7 +52,13 @@ def extract_outline(filename):
         fp.write(all_contents.outline)
 
 
-def write_reordered(texfile):
+@register_command(
+    "use the modified filename_outline.md to write reordered text",
+    help={"texfile": "TeX file to regenerate from its outline files"},
+)
+def xoreorder(texfile):
+    """Rewrite a TeX file using its saved outline and ordering hints."""
+
     markdownfile = texfile.replace(".tex", "_outline.md")
     picklefile = texfile.replace(".tex", "_outline.pickle")
     if not (
@@ -66,3 +75,7 @@ def write_reordered(texfile):
             all_contents.outline_in_order(thisline.rstrip())
     with open(texfile, "w", encoding="utf-8", newline="\n") as fp:
         fp.write(str(all_contents))
+
+
+# Provide the previous function name for callers expecting it.
+write_reordered = xoreorder
