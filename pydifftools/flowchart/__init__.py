@@ -1,8 +1,8 @@
-"""Flowchart helpers for dot/yaml conversion and watching."""
+"""Flowchart helpers for dot/yaml conversion and watching.
 
-from .graph import IndentDumper, load_graph_yaml, write_dot_from_yaml
-from .dot_to_yaml import dot_to_yaml
-from . import watch_graph
+Heavy dependencies (like PyYAML) are imported lazily so unrelated CLI commands
+can start up even when optional packages are absent.
+"""
 
 __all__ = [
     "IndentDumper",
@@ -11,3 +11,5 @@ __all__ = [
     "dot_to_yaml",
     "watch_graph",
 ]
+
+

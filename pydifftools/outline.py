@@ -27,7 +27,8 @@ def extract_outline(filename):
                     all_contents += thisline
             if (
                 bracelevel > 0
-            ):  # do this whether continued open brace from previous line, or if we opened brace on previous
+            ):  # do this whether continued open brace from previous line,
+                # or if we opened brace on previous
                 for n, j in enumerate(thisline[thismatch.end() :]):
                     if escaped:
                         escaped = False

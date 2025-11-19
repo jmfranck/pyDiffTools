@@ -37,3 +37,14 @@ packages = [
 
 [tool.setuptools.package-data]
 pydifftools = ["diff-doc.js", "xml2xlsx.vbs"]
+
+[tool.black]
+line-length = 79
+target-version = ['py36', 'py37', 'py38', 'py39']
+preview = true
+
+[tool.ruff]
+line-length = 79
+
+[tool.ruff.lint]
+extend-select = ["E501"]

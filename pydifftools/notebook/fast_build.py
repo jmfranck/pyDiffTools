@@ -6,7 +6,6 @@ import hashlib
 import os
 import re
 import subprocess
-import sys
 import time
 import traceback
 from pathlib import Path
@@ -18,12 +17,14 @@ from pydifftools.command_registry import register_command
 from watchdog.observers.polling import PollingObserver as Observer
 from watchdog.events import FileSystemEventHandler
 from selenium import webdriver
-from selenium.common.exceptions import WebDriverException, NoSuchWindowException
+from selenium.common.exceptions import (
+    WebDriverException,
+    NoSuchWindowException,
+)
 from jinja2 import Environment, FileSystemLoader
 import nbformat
 from nbconvert.preprocessors import ExecutePreprocessor
 from nbconvert.preprocessors.execute import NotebookClient
-import html as html_lib
 from pygments import highlight
 from pygments.lexers import PythonLexer
 from pygments.formatters import HtmlFormatter
@@ -136,7 +137,7 @@ NOTEBOOK_CACHE_DIR = Path("_nbcache")
 
 
 def execute_code_blocks(
-    blocks: dict[str, list[tuple[str, str]]]
+    blocks: dict[str, list[tuple[str, str]]],
 ) -> tuple[dict[tuple[str, int], str], dict[tuple[str, int], str]]:
     """Run code blocks as Jupyter notebooks with caching.
 
@@ -214,7 +215,9 @@ def analyze_includes(render_files):
 
     stack = [Path(f).resolve() for f in render_files]
     root = PROJECT_ROOT
-    root_dirs = {Path(f).resolve(): Path(f).parent.resolve() for f in render_files}
+    root_dirs = {
+        Path(f).resolve(): Path(f).parent.resolve() for f in render_files
+    }
 
     while stack:
         current = stack.pop()
@@ -376,7 +379,8 @@ def _copy_resource_tree(resource, dest, overwrite=False):
 
 
 def ensure_template_assets(project_root, overwrite=False):
-    """Copy template assets from the checked-in example notebook when present."""
+    """Copy template assets from the checked-in example notebook when
+    present."""
 
     template_src = example_notebook_root() / "_template"
     target = Path(project_root) / "_template"
@@ -386,10 +390,10 @@ def ensure_template_assets(project_root, overwrite=False):
     # Fall back to simple built-in templates when packaged assets are missing.
     nav_target = target / "nav_template.html"
     if overwrite or not nav_target.exists():
-        nav_target.write_text(
-            """
+        nav_target.write_text("""
 <style>
-#on-this-page {font-family: sans-serif; border: 1px solid #ddd; padding: 0.5rem; margin-bottom: 1rem;}
+#on-this-page {font-family: sans-serif; border: 1px solid #ddd; padding: \
+0.5rem; margin-bottom: 1rem;}
 #on-this-page h2 {margin-top: 0; font-size: 1.1rem;}
 #on-this-page ul {list-style: none; padding-left: 0; margin: 0;}
 #on-this-page li {margin: 0.25rem 0;}
@@ -402,12 +406,10 @@ def ensure_template_assets(project_root, overwrite=False):
   {% endfor %}
   </ul>
 </nav>
-            """
-        )
+            """)
     body_target = target / "body-only.html"
     if overwrite or not body_target.exists():
-        body_target.write_text(
-            """
+        body_target.write_text("""
 <!DOCTYPE html>
 <html>
 <head>
@@ -420,8 +422,7 @@ def ensure_template_assets(project_root, overwrite=False):
 $body$
 </body>
 </html>
-            """
-        )
+            """)
     pandoc_target = target / "pandoc_template.html"
     if overwrite or not pandoc_target.exists():
         pandoc_target.write_text(body_target.read_text())
@@ -431,7 +432,8 @@ $body$
 
 
 def _write_placeholder_outputs():
-    """Create stub HTML outputs when optional build dependencies are missing."""
+    """Create stub HTML outputs when optional build dependencies
+    are missing."""
 
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     for qmd in PROJECT_ROOT.rglob("*.qmd"):
@@ -450,12 +452,15 @@ def _write_placeholder_outputs():
 @register_command(
     "Initialize a sample Quarto project with bundled templates",
     help={
-        "path": "Directory to initialize (defaults to current working directory)",
+        "path": (
+            "Directory to initialize (defaults to current working directory)"
+        ),
         "force": "Overwrite existing files when copying the scaffold",
     },
 )
 def qmdinit(path, force=False):
-    """Copy the example notebook contents into ``path`` for a ready-to-run demo."""
+    """Copy the example notebook contents into ``path`` for a ready-to-run
+    demo."""
 
     if path is None:
         path = "."
@@ -492,7 +497,8 @@ def qmdinit(path, force=False):
 
 
 @register_command(
-    "Build Quarto-style projects with Pandoc and the fast builder (optionally watch)",
+    "Build Quarto-style projects with Pandoc and the fast builder (optionally"
+    " watch)",
     help={
         "watch": "Watch files and serve",
         "no_browser": "Do not launch a browser when using --watch",
@@ -532,7 +538,8 @@ def ensure_pandoc_crossref():
     if shutil.which("pandoc-crossref"):
         return
     raise RuntimeError(
-        "pandoc-crossref not found. Install it from https://github.com/lierdakil/pandoc-crossref"
+        "pandoc-crossref not found. Install it from"
+        " https://github.com/lierdakil/pandoc-crossref"
     )
 
 
@@ -634,7 +641,9 @@ def mirror_and_modify(files, anchors, roots):
         # copy referenced images into the build directory
         for img in image_pattern.findall(text):
             img_path = img.split()[0]
-            if re.match(r"https?://", img_path) or img_path.startswith("data:"):
+            if re.match(r"https?://", img_path) or img_path.startswith(
+                "data:"
+            ):
                 continue
             target_src = (src.parent / img_path).resolve()
             if not target_src.exists():
@@ -664,10 +673,11 @@ def render_file(
     """Render ``src`` to ``dest`` using Pandoc with embedded resources."""
 
     template = BODY_TEMPLATE if fragment else PANDOC_TEMPLATE
+    temp = os.path.relpath(
+        DISPLAY_DIR / "mathjax" / "es5" / "tex-mml-chtml.js", dest.parent
+    )
     math_arg = (
-        "--webtex"
-        if webtex
-        else f"--mathjax={os.path.relpath(DISPLAY_DIR / 'mathjax' / 'es5' / 'tex-mml-chtml.js', dest.parent)}?config=TeX-AMS_CHTML"
+        "--webtex" if webtex else (f"--mathjax={temp}?config=TeX-AMS_CHTML")
     )
     args = [
         "pandoc",
@@ -830,8 +840,8 @@ def postprocess_html(html_path: Path, include_root: Path, resource_root: Path):
                 target_rel = node.get("data-include") or node.get("data-embed")
             target = (include_root / target_rel).resolve()
             if target.exists():
-                # announce include substitutions so the console logs which staged
-                # fragments feed each served page
+                # announce include substitutions so the console logs which
+                # staged fragments feed each served page
                 try:
                     dest_rel = html_path.relative_to(DISPLAY_DIR).as_posix()
                 except ValueError:
@@ -884,7 +894,8 @@ def postprocess_html(html_path: Path, include_root: Path, resource_root: Path):
                     node.set("async", "")
             else:
                 script = lxml_html.fragment_fromstring(
-                    f'<script id="MathJax-script" async src="{math_path}"></script>',
+                    '<script id="MathJax-script" async'
+                    f' src="{math_path}"></script>',
                     create_parent=False,
                 )
                 head[0].append(script)
@@ -945,7 +956,9 @@ def build_all(webtex: bool = False, changed_paths=None):
         ensure_mathjax()
         # copy MathJax into the display tree so browsers load assets from the
         # served directory while the staging area remains limited to fragments.
-        shutil.copytree(MATHJAX_DIR, DISPLAY_DIR / "mathjax", dirs_exist_ok=True)
+        shutil.copytree(
+            MATHJAX_DIR, DISPLAY_DIR / "mathjax", dirs_exist_ok=True
+        )
     # copy project configuration without the render list so individual renders
     # don't attempt to build the entire project
     if yaml is not None:
@@ -954,8 +967,8 @@ def build_all(webtex: bool = False, changed_paths=None):
             cfg["project"]["render"] = []
         (BUILD_DIR / "_quarto.yml").write_text(yaml.safe_dump(cfg))
     else:
-        # Without PyYAML, copy the config as-is so the builder can still produce
-        # placeholder outputs.
+        # Without PyYAML, copy the config as-is so the builder can still
+        # produce placeholder outputs.
         (BUILD_DIR / "_quarto.yml").write_text(Path("_quarto.yml").read_text())
     if Path("_template/obs.lua").exists():
         shutil.copy2("_template/obs.lua", BUILD_DIR / "obs.lua")
@@ -985,7 +998,9 @@ def build_all(webtex: bool = False, changed_paths=None):
         for rel in normalized:
             if rel not in stage_set and (PROJECT_ROOT / rel).exists():
                 stage_set.add(rel)
-        display_targets = collect_render_targets(stage_set, include_map, render_files)
+        display_targets = collect_render_targets(
+            stage_set, include_map, render_files
+        )
         for rel in stage_set:
             if rel in render_files:
                 display_targets.add(rel)
@@ -1024,7 +1039,9 @@ def build_all(webtex: bool = False, changed_paths=None):
         if f not in stage_set:
             continue
         fragment = f not in render_files
-        render_file(Path(f), BUILD_DIR / f, fragment, bibliography, csl, webtex)
+        render_file(
+            Path(f), BUILD_DIR / f, fragment, bibliography, csl, webtex
+        )
 
     outputs = {}
     code_map = {}
@@ -1065,7 +1082,11 @@ def build_all(webtex: bool = False, changed_paths=None):
         if html_file.exists():
             add_navigation(html_file, pages, page["file"])
 
-    return {"render_files": render_files, "tree": tree, "include_map": include_map}
+    return {
+        "render_files": render_files,
+        "tree": tree,
+        "include_map": include_map,
+    }
 
 
 class BrowserReloader:
@@ -1167,16 +1188,20 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
             if rel.startswith("_build/"):
                 inner = rel.split("/", 1)[1]
                 candidate = (BUILD_DIR / inner).resolve()
-                if str(candidate).startswith(str(build_root)) and candidate.exists():
+                if (
+                    str(candidate).startswith(str(build_root))
+                    and candidate.exists()
+                ):
                     return str(candidate)
             display_candidate = (DISPLAY_DIR / rel).resolve()
-            if (
-                display_candidate.exists()
-                and str(display_candidate).startswith(str(display_root))
-            ):
+            if display_candidate.exists() and str(
+                display_candidate
+            ).startswith(str(display_root)):
                 return str(display_candidate)
             build_candidate = (BUILD_DIR / rel).resolve()
-            if build_candidate.exists() and str(build_candidate).startswith(str(build_root)):
+            if build_candidate.exists() and str(build_candidate).startswith(
+                str(build_root)
+            ):
                 return str(build_candidate)
             return super().translate_path(path)
 
@@ -1186,7 +1211,8 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
         print(f"Could not start server on port {port}: {exc}")
         return
     print(
-        f"Serving {DISPLAY_DIR} with fallback to {BUILD_DIR} at http://localhost:{port}"
+        f"Serving {DISPLAY_DIR} with fallback to {BUILD_DIR} at"
+        f" http://localhost:{port}"
     )
     Path(DISPLAY_DIR).mkdir(parents=True, exist_ok=True)
     threading.Thread(target=_serve_forever, args=(httpd,), daemon=True).start()
@@ -1200,6 +1226,7 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
     else:
         refresher = BrowserReloader(url)
     observer = Observer()
+
     def rebuild(path):
         build_all(webtex=webtex, changed_paths=[path])
 

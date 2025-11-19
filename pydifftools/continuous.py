@@ -1,7 +1,10 @@
 """Continuous Pandoc build utility that requires geckodriver."""
 
 import time
-import subprocess, sys, os, re
+import subprocess
+import sys
+import os
+import re
 import selenium
 from selenium import webdriver
 from watchdog.events import FileSystemEventHandler
@@ -16,7 +19,8 @@ def run_pandoc(filename, html_file):
         has_local_jax = False
         print("you don't have a local copy of mathjax.  You could get it with")
         print(
-            "wget https://github.com/mathjax/MathJax/archive/refs/tags/3.1.2.zip"
+            "wget https://github.com/mathjax/MathJax/archive/"
+            + "refs/tags/3.1.2.zip"
         )
         print("and then unzip")
     current_dir = os.getcwd()
@@ -30,8 +34,7 @@ def run_pandoc(filename, html_file):
         else:
             raise ValueError(
                 f"You have more than one (or no) {k} file in this directory!"
-                " Get rid of all but one! of "
-                + "and".join(localfiles[k])
+                " Get rid of all but one! of " + "and".join(localfiles[k])
             )
     command = [
         "pandoc",
@@ -50,7 +53,7 @@ def run_pandoc(filename, html_file):
         filename,
     ]
     # command = ['pandoc', '-s', '--mathjax', '-o', html_file, filename]
-    print("running:",' '.join(command))
+    print("running:", " ".join(command))
     subprocess.run(
         command,
     )
@@ -87,9 +90,9 @@ class Handler(FileSystemEventHandler):
         self.firefox.get("file://" + os.path.abspath(self.html_file))
 
     def on_modified(self, event):
-        if os.path.normpath(os.path.abspath(event.src_path)) == os.path.normpath(
-            os.path.abspath(self.filename)
-        ):
+        if os.path.normpath(
+            os.path.abspath(event.src_path)
+        ) == os.path.normpath(os.path.abspath(self.filename)):
             run_pandoc(self.filename, self.html_file)
             self.append_autorefresh()
             try:
@@ -108,9 +111,11 @@ class Handler(FileSystemEventHandler):
         all_data = all_data.replace(
             "</head>",
             """
-    <script id="MathJax-script" async src="MathJax-3.1.2/es5/tex-mml-chtml.js"></script>
+    <script id="MathJax-script" async src="MathJax-3.1.2/es5/tex-mml-chtml.js"\
+></script>
     <script>
-        // When the page is about to be unloaded, save the current scroll position
+        // When the page is about to be unloaded, save the current scroll\
+position
         window.addEventListener('beforeunload', function() {
             sessionStorage.setItem('scrollPosition', window.scrollY);
         });

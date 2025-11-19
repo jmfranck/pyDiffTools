@@ -17,14 +17,11 @@ if shutil.which("dot") is None:
     _dot_dir = Path(tempfile.mkdtemp(prefix="pydt_dot_"))
     _dot_path = _dot_dir / "dot"
     _dot_path.write_text(
-        "#!/usr/bin/env python3\n"
-        "import sys, pathlib\n"
-        "args = sys.argv\n"
-        "outfile = args[args.index('-o') + 1] if '-o' in args else None\n"
-        "if outfile:\n"
-        "    path = pathlib.Path(outfile)\n"
-        "    path.write_text(\"<svg xmlns='http://www.w3.org/2000/svg'></svg>\\n\")\n"
-        "sys.exit(0)\n"
+        "#!/usr/bin/env python3\nimport sys, pathlib\nargs = sys.argv\noutfile"
+        " = args[args.index('-o') + 1] if '-o' in args else None\nif"
+        " outfile:\n    path = pathlib.Path(outfile)\n   "
+        ' path.write_text("<svg'
+        " xmlns='http://www.w3.org/2000/svg'></svg>\\n\")\nsys.exit(0)\n"
     )
     _dot_path.chmod(0o755)
     os.environ["PATH"] = f"{_dot_dir}{os.pathsep}" + os.environ.get("PATH", "")
@@ -330,7 +327,8 @@ def _node_text_with_due(node):
         days_overdue = (today_date - due_date).days
         unit = "DAY" if days_overdue == 1 else "DAYS"
         formatted = (
-            f'<font point-size="12"><b>{days_overdue} {unit} OVERDUE</b></font>'
+            f'<font point-size="12"><b>{days_overdue} {unit}'
+            + "OVERDUE</b></font>"
         )
     else:
         formatted = date_formatter(due_date)
@@ -339,7 +337,8 @@ def _node_text_with_due(node):
             parse_due_string(str(node["orig_due"]).strip())
         )
         formatted = f"<i>{orig_str}</i>→{formatted}"
-    # Completed tasks should show a green due date so the status is obvious at a glance.
+    # Completed tasks should show a green due date so the status is obvious at
+    # a glance.
     due_color = "green" if is_completed else "red"
     formatted = f'<font color="{due_color}">{formatted}</font>'
 

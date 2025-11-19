@@ -6,14 +6,12 @@ import os
 import gzip
 import time
 import subprocess
-import logging
 import re
 import nbformat
 import difflib
 import shutil
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from . import (
-    check_numbers,
     match_spaces,
     split_conflict,
     outline,
@@ -64,7 +62,8 @@ def recursive_include_search(directory, basename, does_it_input):
         os.path.join(directory, basename + ".tex"), "r", encoding="utf-8"
     ) as fp:
         alltxt = fp.read()
-    # we're only sensitive to the name of the file, not the directory that it's in
+    # we're only sensitive to the name of the file, not the directory that it's
+    # in
     pattern = re.compile(
         r"\n[^%]*\\(?:input|include)[{]((?:[^}]*/)?" + does_it_input + ")[}]"
     )
@@ -92,7 +91,8 @@ def recursive_include_search(directory, basename, does_it_input):
 
 
 def look_for_pdf(directory, origbasename):
-    'look for pdf -- if found return tuple(True, the basename of the pdf, the basename of the tex) else return tuple(False, "", "")'
+    """look for pdf -- if found return tuple(True, the basename of the pdf, the
+    basename of the tex) else return tuple(False, "", "")"""
     found = False
     basename = ""
     actual_name = ""
@@ -119,8 +119,7 @@ def look_for_pdf(directory, origbasename):
 def nb2py(arguments):
     assert arguments[0].endswith(".ipynb"), (
         "this is supposed to be called with a .ipynb file argument! (arguments"
-        " are %s)"
-        % repr(arguments)
+        " are %s)" % repr(arguments)
     )
     nb = nbformat.read(arguments[0], nbformat.NO_CONVERT)
     last_was_markdown = False
@@ -177,14 +176,12 @@ def py2nb(arguments):
     assert len(arguments) == 1, "py2nb should only be called with one argument"
     assert arguments[0].endswith(".py"), (
         "this is supposed to be called with a .py file argument! (arguments"
-        " are %s)"
-        % repr(arguments)
+        " are %s)" % repr(arguments)
     )
     with open(arguments[0], encoding="utf-8") as fpin:
         text = fpin.read()
     text = text.split("\n")
     newtext = []
-    in_markdown_cell = False
     in_code_cell = False
     last_line_empty = True
     for thisline in text:
@@ -195,7 +192,6 @@ def py2nb(arguments):
                 pass
             elif thisline.startswith("# In["):
                 in_code_cell = False
-                in_markdown_cell = False
             elif thisline.startswith("# Out["):
                 pass
             elif thisline.startswith("# "):
@@ -203,7 +199,6 @@ def py2nb(arguments):
                 if last_line_empty:
                     newtext.append("# <markdowncell>")
                     in_code_cell = False
-                    in_markdown_cell = True
                 newtext.append(thisline)
             last_line_empty = False
         elif len(thisline) == 0:
@@ -213,7 +208,6 @@ def py2nb(arguments):
             if not in_code_cell:
                 newtext.append("# <codecell>")
                 in_code_cell = True
-                in_markdown_cell = False
             m = jupyter_magic_re.match(thisline)
             if m:
                 thisline = "%" + " ".join(
@@ -238,13 +232,15 @@ def py2nb(arguments):
     nbook = nbformat.v3.reads_py(text)
 
     nbook = nbformat.v4.upgrade(nbook)  # Upgrade nbformat.v3 to nbformat.v4
-    nbook.metadata.update({
-        "kernelspec": {
-            "name": "Python [Anaconda2]",
-            "display_name": "Python [Anaconda2]",
-            "language": "python",
+    nbook.metadata.update(
+        {
+            "kernelspec": {
+                "name": "Python [Anaconda2]",
+                "display_name": "Python [Anaconda2]",
+                "language": "python",
+            }
         }
-    })
+    )
 
     jsonform = nbformat.v4.writes(nbook) + "\n"
     with open(
@@ -271,7 +267,7 @@ def gensync(arguments):
     new_synctex = orig_synctex
     with gzip.open(arguments[1].replace(".pdf", ".synctek.gz")) as fp:
         fp.write(new_synctex)
-        fp.write(argument[1].replace())
+        fp.write(arguments[1].replace())
         fp.close()
 
 
@@ -314,7 +310,8 @@ def sc(arguments):
 @register_command("word diff")
 def wd(arguments):
     if arguments[0].find("Temp") > 0:
-        # {{{ if it's a temporary file, I need to make a real copy to run pandoc on
+        # {{{ if it's a temporary file, I need to make a real copy to run
+        #     pandoc on
         fp = open(arguments[0], encoding="utf-8")
         contents = fp.read()
         fp.close()
@@ -417,14 +414,12 @@ def fs(arguments):
         # windows
         cmd = ["start sumatrapdf -reuse-instance"]
     if os.path.exists(os.path.join(directory, origbasename + ".pdf")):
-        cmd.append(
-            f"{lineno}:0:{texfile} {os.path.join(directory,origbasename+'.pdf')}"
-        )
+        temp = os.path.join(directory, origbasename + ".pdf")
+        cmd.append(f"{lineno}:0:{texfile} {temp}")
         tex_name = origbasename
     else:
         print("no pdf file for this guy, looking for one that has one")
         found, basename, tex_name = look_for_pdf(directory, origbasename)
-        orig_directory = directory
         if not found:
             while os.path.sep in directory and directory.lower()[-1] != ":":
                 build_nb = os.path.join(directory, "build_nb")
@@ -449,7 +444,7 @@ def fs(arguments):
         # file has been found, so add to the command
         cmd.append(
             f"{lineno}:0:{tex_name}.tex"
-            f" {os.path.join(directory,basename+'.pdf')}"
+            f" {os.path.join(directory, basename + '.pdf')}"
         )
     if os.name == "posix":
         cmd.append("&")
@@ -663,7 +658,8 @@ def ac(arguments):
         ["kpsewhich", "myacronyms.sty"], capture_output=True, text=True
     )
 
-    # Convert the string to a pathlib Path object if the file was found, else assign None
+    # Convert the string to a pathlib Path object if the file was found, else
+    # assign None
     path = (
         Path(kpsewhich_output.stdout.strip())
         if kpsewhich_output.returncode == 0

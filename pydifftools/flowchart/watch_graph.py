@@ -6,7 +6,10 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import WebDriverException, NoSuchWindowException
+from selenium.common.exceptions import (
+    WebDriverException,
+    NoSuchWindowException,
+)
 from pydifftools.command_registry import register_command
 from .graph import write_dot_from_yaml
 
@@ -18,10 +21,10 @@ def _reload_svg(driver, svg_file: Path) -> None:
     scroll_y = driver.execute_script("return window.scrollY")
     svg_uri = svg_file.resolve().as_uri() + f"?t={time.time()}"
     driver.execute_async_script(
-        "const [src,z,x,y,done]=arguments;"
-        "const s=document.getElementById('svg-view');"
-        "s.onload=function(){document.body.style.zoom=z; window.scrollTo(x,y); done();};"
-        "s.setAttribute('src', src);",
+        "const [src,z,x,y,done]=arguments;const"
+        " s=document.getElementById('svg-view');s.onload=function()"
+        "{document.body.style.zoom=z;"
+        " window.scrollTo(x,y); done();};s.setAttribute('src', src);",
         svg_uri,
         zoom,
         scroll_x,
@@ -92,7 +95,8 @@ class GraphEventHandler(FileSystemEventHandler):
 
 
 @register_command(
-    "Watch a flowchart YAML file, rebuild DOT/SVG output, and open the preview",
+    "Watch a flowchart YAML file, rebuild DOT/SVG output, and open the"
+    " preview",
     help={
         "yaml": "Path to the flowchart YAML file",
         "wrap_width": "Line wrap width used when generating node labels",
@@ -109,9 +113,9 @@ def wgrph(yaml, wrap_width=55):
 
     data = build_graph(yaml_file, dot_file, svg_file, wrap_width)
     html_file.write_text(
-        "<html><body style='margin:0'>"
-        f"<embed id='svg-view' type='image/svg+xml' src='{svg_file.name}?t={time.time()}'/>"
-        "</body></html>"
+        "<html><body style='margin:0'><embed id='svg-view'"
+        " type='image/svg+xml'"
+        f" src='{svg_file.name}?t={time.time()}'/></body></html>"
     )
     options = Options()
     driver = webdriver.Chrome(options=options)

@@ -19,7 +19,9 @@ def num(start, stop):
         start = int(start)
         stop = int(stop)
     except Exception:
-        raise ValueError("I didn't understand the arguments" + repr([start, stop]))
+        raise ValueError(
+            "I didn't understand the arguments" + repr([start, stop])
+        )
     for thisnumber in range(start, stop + 1):
         if os.name == "posix":
             result = Popen(
@@ -37,7 +39,7 @@ def num(start, stop):
                     ],
                     stdout=PIPE,
                 )
-            except:
+            except Exception:
                 result = Popen(
                     [
                         r"C:\Program Files (x86)\Git\bin\bash.exe",
@@ -66,5 +68,3 @@ def num(start, stop):
                 print("single\t\t", full_string[-1][:-2])
             else:
                 print(thisnumber, " has no match")
-
-
