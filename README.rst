@@ -41,6 +41,25 @@ included are (listed in order of fun/utility):
   (currently tested on windows with *version 3.5* of the former,
   *not the latest installer*,
   since crossref isn't built with the most recent version).
+- `pydifft wgrph <graph.yaml>` watches a YAML flowchart description,
+  rebuilds the DOT/SVG output using GraphViz, and keeps a browser window
+  refreshed as you edit the file.  This wraps the former
+  ``flowchart/watch_graph.py`` script so all of its functionality is now
+  available through the main ``pydifft`` entry point.
+- `pydifft tex2qmd file.tex` converts LaTeX sources to Quarto markdown.
+  The converter preserves custom observation blocks and errata tags while
+  translating verbatim/python environments into fenced code blocks so the
+  result is ready for the Pandoc-based builder.
+- `pydifft qmdb [--watch] [--no-browser] [--webtex]` runs the relocated
+  ``fast_build.py`` logic from inside the package.  Without ``--watch`` it
+  performs a single build of the configured `_quarto.yml` targets into the
+  ``_build``/``_display`` directories; with ``--watch`` it starts the HTTP
+  server and automatically rebuilds the staged fragments whenever you edit
+  a ``.qmd`` file.
+- `pydifft qmdinit [directory]` scaffolds a new Quarto-style project using
+  the bundled templates and example ``project1`` hierarchy, then downloads
+  MathJax into ``_template/mathjax`` so the builder can run immediately.
+  This is analogous to ``git init`` for markdown notebooks.
 - `pydifft wr <filename.tex|md>` (wrap)
   This provides a standardized (and
   short) line

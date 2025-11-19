@@ -1,0 +1,30 @@
+styles:
+  group1:
+    attrs:
+      node:
+      - color: blue
+        fontcolor: blue
+nodes:
+  Start:
+    children:
+    - Middle
+    parents: []
+    style: group1
+    text: |
+      Begin process
+      * item1
+      * item2
+  Middle:
+    children:
+    - End
+    parents:
+    - Start
+    text: |
+      Continue
+  End:
+    children: []
+    parents:
+    - Middle
+    due: 2025-10-02
+    text: |
+      Finish

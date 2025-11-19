@@ -1,0 +1,30 @@
+
+project:
+  type: website
+  render:
+    - notebook250708.qmd
+    - projects.qmd
+    - project1/example.qmd
+
+website:
+  sidebar:
+    contents:
+      - notebook250708.qmd
+      - projects.qmd
+      - project1/example.qmd
+
+execute:
+  cache: true
+  jupyter: python3
+  fig-width: 6.0
+  fig-height: 3.708282 # aspect 1.618
+
+format:
+  html:
+    toc: true
+    toc-depth: 4
+    toc-location: right
+    extensions: [markdown+raw_html]
+    title-block-style: none
+
+filters: [obs.lua]

@@ -1,5 +1,8 @@
-import re, sys, itertools
-import numpy as np
+import re
+import sys
+import itertools
+
+from .command_registry import register_command
 
 
 def match_paren(thistext, pos, opener="{"):
@@ -37,20 +40,30 @@ def match_paren(thistext, pos, opener="{"):
     if pos == len(thistext):
         raise RuntimeError(
             f"hit end of file without closing {opener} with {closer}\n"
-            "here is the offending text!:\n"
-            + ("=" * 30)
-            + thistext
+            "here is the offending text!:\n" + ("=" * 30) + thistext
         )
     return pos
 
 
-def run(
-    filename,
-    wrapnumber=45,
-    punctuation_slop=20,
-    stupid_strip=False,
-    indent_amount=4,
-):
+@register_command(
+    "wrap with indented sentence format (for markdown or latex).",
+    "wrap with indented sentence format (for markdown or latex).\n"
+    "Optional flag --cleanoo cleans latex exported from\n"
+    "OpenOffice/LibreOffice\n"
+    "Optional flag -i # specifies indentation level for subsequent\n"
+    "lines of a sentence (defaults to 4 -- e.g. for markdown you\n"
+    "will always want -i 0)",
+    help={
+        "filename": "Input file to wrap. Use '-' to read from stdin.",
+        "cleanoo": "Strip LibreOffice markup before wrapping.",
+        "i": "Indentation level for wrapped lines.",
+    },
+)
+def wr(filename, wrapnumber=45, punctuation_slop=20, cleanoo=False, i=-1):
+    indent_amount = i if i != -1 else 4
+    stupid_strip = cleanoo
+    if filename == "-":
+        filename = None
     # {{{ load the file
     if filename is not None:
         with open(filename, encoding="utf-8") as fp:
@@ -66,12 +79,14 @@ def run(
             # print("identified as markdown!!")
             filetype = "markdown"
         if filetype == "markdown":
-            indent_amount = 0
+            if i == -1:
+                indent_amount = 0
         # }}}
     else:
         sys.stdin.reconfigure(encoding="utf-8")
         fp = sys.stdin
         alltext = fp.read()
+        filetype = "latex"
     # }}}
     # {{{ strip stupid commands that appear in openoffice conversion
     if stupid_strip:
@@ -116,7 +131,7 @@ def run(
     # }}}
     alltext = alltext.split("\n\n")  # split paragraphs
     # interleave with blank strings that get turned into double newlines
-    alltext = [k for l in [[j, ""] for j in alltext] for k in l]
+    alltext = [k for l_inner in [[j, ""] for j in alltext] for k in l_inner]
     exclusion_idx = []
     for para_idx in range(len(alltext)):
         thispara_split = alltext[para_idx].split("\n")
@@ -126,7 +141,8 @@ def run(
                 # {{{ exclude section headers and environments
                 thisline = thispara_split[line_idx]
                 m = re.match(
-                    r"\\(?:section|subsection|subsubsection|paragraph|newcommand|input){",
+                    r"\\(?:section|subsection|subsubsection|paragraph|"
+                    + "newcommand|input){",
                     thisline,
                 )
                 if m:
@@ -134,9 +150,9 @@ def run(
                     remaining_in_para = "\n".join(thispara_split[line_idx:])
                     pos = match_paren(remaining_in_para, m.span()[-1], "{")
                     # to find the closing line, I need to find the line number
-                    # inside alltext[para_idx] that corresponds to the character position
-                    # pos.  Do this by counting the number of newlines between
-                    # the character len(m.group()) and pos
+                    # inside alltext[para_idx] that corresponds to the
+                    # character position pos.  Do this by counting the number
+                    # of newlines between the character len(m.group()) and pos
                     closing_line = (
                         remaining_in_para[m.span()[-1] : pos].count("\n")
                         + line_idx
@@ -153,7 +169,8 @@ def run(
                     if m:
                         # exclude everything until the end of the environment
                         # to do this, I need to make a new string that gives
-                        # everything from here until the end of alltext[para_idx]
+                        # everything from here until the end of
+                        # alltext[para_idx]
                         notfound = True
                         for closing_idx, closing_line in enumerate(
                             thispara_split[line_idx:]
@@ -196,18 +213,12 @@ def run(
                             exclusion_idx.append(
                                 (para_idx, starting_line, closing_line)
                             )
-                            # print("*" * 30, "excluding yaml header", "*" * 30)
-                            # print(
-                            #    thispara_split[
-                            #        starting_line : closing_line + 1
-                            #    ]
-                            # )
-                            # print("*" * 73)
                             break
                         j += 1
             while line_idx < len(thispara_split):
                 thisline = thispara_split[line_idx]
-                # {{{ do the same thing for markdown, where I exclude (1) headers (2) figures and (3) tables (4) font
+                # {{{ do the same thing for markdown, where I exclude (1)
+                #     headers (2) figures and (3) tables (4) font
                 m = re.match(r"#+\s.*", thisline)  # exclude headers
                 if m:
                     exclusion_idx.append((para_idx, line_idx, line_idx))
@@ -217,7 +228,8 @@ def run(
                 else:
                     m = re.search(r"!\[.*\]\(", thisline)  # exclude figures
                     if m:
-                        # {{{ find the closing ), as we did for latex commands above
+                        # {{{ find the closing ), as we did for latex commands
+                        #     above
                         remaining_in_para = "\n".join(
                             thispara_split[line_idx:]
                         )
@@ -232,9 +244,6 @@ def run(
                             (para_idx, line_idx, closing_line)
                         )
                         line_idx = closing_line
-                        # print("*" * 30, "excluding figure", "*" * 30)
-                        # print(thispara_split[starting_line : closing_line + 1])
-                        # print("*" * 73)
                         # }}}
                     else:
                         m = re.search(
@@ -275,7 +284,8 @@ def run(
                             )  # exclude equations
                             if m:
                                 starting_line = line_idx
-                                # {{{ find the closing $$, as we did for latex commands above
+                                # {{{ find the closing $$, as we did for latex
+                                #     commands above
                                 remaining_in_para = "\n".join(
                                     thispara_split[line_idx:]
                                 )
@@ -292,9 +302,6 @@ def run(
                                     (para_idx, line_idx, closing_line)
                                 )
                                 line_idx = closing_line
-                                # print("*" * 30, "excluding equation", "*" * 30)
-                                # print(thispara_split[starting_line : closing_line + 1])
-                                # print("*" * 73)
                                 # }}}
                             else:
                                 m = re.search(
@@ -302,7 +309,8 @@ def run(
                                 )  # exclude equations
                                 if m:
                                     starting_line = line_idx
-                                    # {{{ find the closing $$, as we did for latex commands above
+                                    # {{{ find the closing $$, as we did for
+                                    #     latex commands above
                                     remaining_in_para = "\n".join(
                                         thispara_split[line_idx:]
                                     )
@@ -319,9 +327,6 @@ def run(
                                         (para_idx, line_idx, closing_line)
                                     )
                                     line_idx = closing_line
-                                    # print("*" * 30, "excluding code", "*" * 30)
-                                    # print(thispara_split[starting_line : closing_line + 1])
-                                    # print("*" * 73)
                                     # }}}
                                 else:
                                     m = re.search(
@@ -329,7 +334,8 @@ def run(
                                     )  # exclude things enclosed in tags
                                     if m:
                                         starting_line = line_idx
-                                        # {{{ find the closing $$, as we did for latex commands above
+                                        # {{{ find the closing $$, as we did
+                                        #     for latex commands above
                                         remaining_in_para = "\n".join(
                                             thispara_split[line_idx:]
                                         )
@@ -348,37 +354,7 @@ def run(
                                             (para_idx, line_idx, closing_line)
                                         )
                                         line_idx = closing_line
-                                        # print("*" * 30, "excluding tagged block", "*" * 30)
-                                        # print(thispara_split[starting_line : closing_line + 1])
-                                        # print("*" * 73)
                                         # }}}
-                                    # following seems to exclude everything
-                                    #else:
-                                    #    m = re.search(
-                                    #        r"^ *([*\-]|[0-9]+\.) +", thisline
-                                    #    )  # exclude lists
-                                    #    if m:
-                                    #        print("bullet",thisline)
-                                    #        starting_line = line_idx
-                                    #        stop_line = line_idx
-                                    #        while m:
-                                    #            line_idx += 1
-                                    #            if line_idx > len(thispara_split)-1:
-                                    #                line_idx -= 1
-                                    #                stop_line = line_idx
-                                    #                break
-                                    #            testline = thispara_split[line_idx]
-                                    #            m = re.search(
-                                    #                    f"^ {{{m.span()[1]-m.span()[0]}}}", testline
-                                    #                    )
-                                    #            if m:
-                                    #                stop_line = line_idx
-                                    #                print("continuation:", testline)
-                                    #            else:
-                                    #                line_idx -= 1
-                                    #        exclusion_idx.append(
-                                    #            (para_idx, starting_line, stop_line)
-                                    #        )
                 line_idx += 1
                 # }}}
     # print("all exclusions:", exclusion_idx)
@@ -394,8 +370,8 @@ def run(
             para_lines[start_excl : stop_excl + 1] = [
                 (False, j[1]) for j in para_lines[start_excl : stop_excl + 1]
             ]
-        # use join inside a list comprehension to gather contiguous chunks of True
-        # and False together
+        # use join inside a list comprehension to gather contiguous chunks of
+        # True and False together
         para_lines = [
             (key, "\n".join([j[1] for j in group]))
             for key, group in itertools.groupby(para_lines, lambda x: x[0])
@@ -403,7 +379,8 @@ def run(
         # print("here are the grouped para lines!----------------", para_lines)
         for notexcl, thiscontent in para_lines:
             if notexcl:
-                # {{{ here I need a trick to prevent including short abbreviations, etc
+                # {{{ here I need a trick to prevent including short
+                #     abbreviations, etc
                 tempsent = re.split(r"([^\.!?]{3}[\.!?])[ \n]", thiscontent)
                 # for j in tempsent:
                 #    #rint("--", j)
@@ -421,7 +398,9 @@ def run(
                 for this_sent in temp_paragraph:
                     thiscontent.extend(
                         re.split(
-                            r"(\\(?:begin|end|usepackage|newcommand|section|subsection|subsubsection|paragraph|input){[^}]*})",
+                            r"(\\(?:begin|end|usepackage|newcommand|section"
+                            + "|subsection|subsubsection|paragraph"
+                            + "|input){[^}]*})",
                             this_sent,
                         )
                     )
@@ -462,27 +441,33 @@ def run(
                 if filetype == "latex":
                     indentation = 0
                 while len(residual_sentence) > 0:
-                    numchars = (
-                        np.array(list(map(len, residual_sentence))) + 1
-                    )  # +1 for space
-                    cumsum_num = np.cumsum(numchars)
-                    nextline_upto = np.argmin(abs(cumsum_num - wrapnumber))  #
-                    #   the next line goes up to this position
-                    nextline_punct_upto = np.array([
-                        (
-                            cumsum_num[j]
-                            if (
-                                residual_sentence[j][-1]
-                                in [",", ";", ":", ")", "-"]
-                                and len(residual_sentence[j]) > 1
-                            )
-                            else 10000
-                        )
-                        for j in range(len(residual_sentence))
-                    ])
-                    if any(nextline_punct_upto < 10000):
-                        nextline_punct_upto = np.argmin(
-                            abs(nextline_punct_upto - wrapnumber)
+                    # Compute cumulative character counts without relying on
+                    # numpy.
+                    numchars = [len(word) + 1 for word in residual_sentence]
+                    cumsum_num = []
+                    running_total = 0
+                    for num in numchars:
+                        running_total += num
+                        cumsum_num.append(running_total)
+                    nextline_upto = min(
+                        range(len(cumsum_num)),
+                        key=lambda j: abs(cumsum_num[j] - wrapnumber),
+                    )
+                    nextline_punct_upto = []
+                    for j, word in enumerate(residual_sentence):
+                        if (
+                            word[-1] in [",", ";", ":", ")", "-"]
+                            and len(word) > 1
+                        ):
+                            nextline_punct_upto.append(cumsum_num[j])
+                        else:
+                            nextline_punct_upto.append(10000)
+                    if any(value < 10000 for value in nextline_punct_upto):
+                        nextline_punct_upto = min(
+                            range(len(nextline_punct_upto)),
+                            key=lambda j: abs(
+                                nextline_punct_upto[j] - wrapnumber
+                            ),
                         )
                         if nextline_punct_upto < nextline_upto:
                             if (
