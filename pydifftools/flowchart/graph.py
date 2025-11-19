@@ -328,7 +328,7 @@ def _node_text_with_due(node):
         unit = "DAY" if days_overdue == 1 else "DAYS"
         formatted = (
             f'<font point-size="12"><b>{days_overdue} {unit}'
-            + "OVERDUE</b></font>"
+            + " OVERDUE</b></font>"
         )
     else:
         formatted = date_formatter(due_date)
