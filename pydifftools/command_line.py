@@ -2,6 +2,16 @@
 
 import argparse
 import sys
+import os
+import gzip
+import time
+import subprocess
+import logging
+import re
+import nbformat
+import difflib
+import shutil
+from pathlib import Path, PurePosixPath
 from . import (
     check_numbers,
     match_spaces,
@@ -13,25 +23,12 @@ from .wrap_sentences import wr as wrap_sentences_wr  # registers wrap command
 from .separate_comments import tex_sepcomments
 from .unseparate_comments import tex_unsepcomments
 from .comment_functions import matchingbrackets
-from .copy_files import copy_image_files
+from .copy_image_files import copy_image_files
 from .searchacro import replace_acros
 from .rearrange_tex import run as rearrange_tex_run
 from .flowchart.watch_graph import wgrph
 from .notebook.tex_to_qmd import tex2qmd
 from .notebook.fast_build import qmdb, qmdinit
-import os
-import gzip
-import time
-import subprocess
-import logging
-import re
-try:
-    import nbformat
-except ImportError:
-    nbformat = None
-import difflib
-import shutil
-from pathlib import Path, PurePosixPath
 
 
 from .command_registry import _COMMAND_SPECS, register_command
@@ -729,13 +726,6 @@ def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
     parser = build_parser()
-    try:
-        import argcomplete
-    except ImportError:
-        argcomplete = None
-    # Autocompletion is optional; skip it when the helper package is absent.
-    if argcomplete is not None:
-        argcomplete.autocomplete(parser)
     if not argv:
         parser.print_help()
         return

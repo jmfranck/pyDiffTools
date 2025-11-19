@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Minimal build script using Pandoc instead of Quarto."""
 
+import argparse
 import hashlib
 import os
 import re
@@ -12,87 +13,28 @@ from pathlib import Path
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 import threading
 import shutil
-try:
-    import yaml
-except ImportError:
-    yaml = None
-
+import yaml
 from pydifftools.command_registry import register_command
-
-# Optional dependencies are loaded lazily so the module can be imported even
-# when some build tools are missing in minimal environments.
-try:
-    from watchdog.observers.polling import PollingObserver as Observer
-    from watchdog.events import FileSystemEventHandler
-except ImportError:
-    Observer = None
-
-    class FileSystemEventHandler(object):
-        pass
-
-try:
-    from selenium import webdriver
-    from selenium.common.exceptions import WebDriverException, NoSuchWindowException
-except ImportError:
-    webdriver = None
-    WebDriverException = Exception
-    NoSuchWindowException = Exception
-
-try:
-    from jinja2 import Environment, FileSystemLoader
-except ImportError:
-    Environment = None
-    FileSystemLoader = None
-
-try:
-    import nbformat
-    from nbconvert.preprocessors import ExecutePreprocessor
-    from nbconvert.preprocessors.execute import NotebookClient
-except ImportError:
-    nbformat = None
-    ExecutePreprocessor = None
-    NotebookClient = None
-
-if ExecutePreprocessor is None:
-    class ExecutePreprocessor(object):
-        pass
-
-if NotebookClient is None:
-    class NotebookClient(object):
-        pass
-
+from watchdog.observers.polling import PollingObserver as Observer
+from watchdog.events import FileSystemEventHandler
+from selenium import webdriver
+from selenium.common.exceptions import WebDriverException, NoSuchWindowException
+from jinja2 import Environment, FileSystemLoader
+import nbformat
+from nbconvert.preprocessors import ExecutePreprocessor
+from nbconvert.preprocessors.execute import NotebookClient
 import html as html_lib
-try:
-    from pygments import highlight
-    from pygments.lexers import PythonLexer
-except ImportError:
-    highlight = None
-    PythonLexer = None
+from pygments import highlight
+from pygments.lexers import PythonLexer
 from pygments.formatters import HtmlFormatter
+from ansi2html import Ansi2HTMLConverter
 
-# Convert ANSI escape codes in text to HTML. If the optional ansi2html
-# library is available, we use it to preserve colors. Otherwise, we fall
-# back to stripping the escape codes entirely and returning plain text.
-try:
-    from ansi2html import Ansi2HTMLConverter
+_ansi_conv = Ansi2HTMLConverter(inline=True)
 
-    _ansi_conv = Ansi2HTMLConverter(inline=True)
 
-    def _ansi_to_html(text: str, *, default_style: str | None = None) -> str:
-        """Return HTML for text that may contain ANSI escape codes."""
-        # ansi2html already escapes HTML characters as needed and inserts
-        # span tags for styling.
-        return f"<pre>{_ansi_conv.convert(text, full=False)}</pre>"
-
-except Exception:  # pragma: no cover - fallback when ansi2html is missing
-    import re
-
-    _ansi_escape = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
-
-    def _ansi_to_html(text: str, *, default_style: str | None = None) -> str:
-        clean = _ansi_escape.sub("", text)
-        style = f" style='{default_style}'" if default_style else ""
-        return f"<pre{style}>{html_lib.escape(clean)}</pre>"
+def _ansi_to_html(text: str, *, default_style: str | None = None) -> str:
+    """Return HTML for text that may contain ANSI escape codes."""
+    return f"<pre>{_ansi_conv.convert(text, full=False)}</pre>"
 
 
 class LoggingExecutePreprocessor(ExecutePreprocessor):
@@ -138,50 +80,27 @@ heading_pattern = re.compile(
 
 def load_rendered_files():
     text = Path("_quarto.yml").read_text()
-    if yaml is not None:
-        cfg = yaml.safe_load(text)
-        return list(cfg.get("project", {}).get("render", []))
-    # Fallback parser for environments without PyYAML: capture the entries
-    # indented beneath the ``render`` key.
-    renders = []
-    in_render = False
-    for line in text.splitlines():
-        if line.strip().startswith("render:"):
-            in_render = True
-            continue
-        if in_render:
-            if line.startswith("  -"):
-                renders.append(line.split("-", 1)[1].strip())
-            elif line and not line.startswith("  "):
-                break
-    return renders
+    cfg = yaml.safe_load(text)
+    return list(cfg.get("project", {}).get("render", []))
 
 
 def load_bibliography_csl():
     text = Path("_quarto.yml").read_text()
-    if yaml is not None:
-        cfg = yaml.safe_load(text)
-        bib = None
-        csl = None
-        if "bibliography" in cfg:
-            bib = cfg["bibliography"]
-        if "csl" in cfg:
-            csl = cfg["csl"]
-        fmt = cfg.get("format", {})
-        if isinstance(fmt, dict):
-            for v in fmt.values():
-                if isinstance(v, dict):
-                    bib = bib or v.get("bibliography")
-                    csl = csl or v.get("csl")
-        return bib, csl
+    cfg = yaml.safe_load(text)
     bib = None
     csl = None
-    for line in text.splitlines():
-        striped = line.strip()
-        if striped.startswith("bibliography:"):
-            bib = striped.split(":", 1)[1].strip()
-        if striped.startswith("csl:"):
-            csl = striped.split(":", 1)[1].strip()
+    if "bibliography" in cfg:
+        bib = cfg["bibliography"]
+    if "csl" in cfg:
+        csl = cfg["csl"]
+    fmt = cfg.get("format", {})
+    if isinstance(fmt, dict):
+        for v in fmt.values():
+            if isinstance(v, dict):
+                if bib is None and "bibliography" in v:
+                    bib = v["bibliography"]
+                if csl is None and "csl" in v:
+                    csl = v["csl"]
     return bib, csl
 
 
@@ -1307,8 +1226,6 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
 
 
 if __name__ == "__main__":
-    import argparse
-
     parser = argparse.ArgumentParser(description="Build site using Pandoc")
     parser.add_argument(
         "--watch", action="store_true", help="Watch files and serve site"

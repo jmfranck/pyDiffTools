@@ -11,7 +11,7 @@ readme = "README.rst"
 license = { file = "LICENSE.md" }
 dependencies = [
     "selenium",
-    "fuzzywuzzy",
+    "fuzzywuzzy[speedup]",
     "PyYAML>=6.0",
     "watchdog",
     "pydot",

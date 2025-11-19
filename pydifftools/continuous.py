@@ -1,23 +1,12 @@
-"""
-this requires geckodriver to be installed and available
-"""
+"""Continuous Pandoc build utility that requires geckodriver."""
 
 import time
 import subprocess, sys, os, re
+import selenium
+from selenium import webdriver
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 from .command_registry import register_command
-
-# These are set when the command is invoked so the module can load without
-# requiring Selenium or watchdog in environments that only need other CLI tools.
-selenium = None
-webdriver = None
-try:
-    from watchdog.events import FileSystemEventHandler
-    from watchdog.observers import Observer
-except ImportError:
-    Observer = None
-
-    class FileSystemEventHandler(object):
-        pass
 
 
 def run_pandoc(filename, html_file):
@@ -82,64 +71,43 @@ def run_pandoc(filename, html_file):
     return
 
 
-def watch(filename):
-    if webdriver is None:
-        # Ensure Selenium is available even if watch() is called directly.
-        import selenium as _selenium
-        from selenium import webdriver as _webdriver
+class Handler(FileSystemEventHandler):
+    def __init__(self, filename, observer):
+        self.observer = observer
+        self.filename = filename
+        self.html_file = filename.rsplit(".", 1)[0] + ".html"
+        self.init_firefox()
 
-        globals()["selenium"] = _selenium
-        globals()["webdriver"] = _webdriver
-    if Observer is None:
-        # Watchdog is optional at import time but required when running cpb.
-        try:
-            from watchdog.events import FileSystemEventHandler as _FileSystemEventHandler
-            from watchdog.observers import Observer as _Observer
-        except ImportError as exc:
-            raise ImportError("The cpb command requires watchdog to be installed") from exc
+    def init_firefox(self):
+        self.firefox = webdriver.Chrome()
+        run_pandoc(self.filename, self.html_file)
+        if not os.path.exists(self.html_file):
+            print("html doesn't exist")
+        self.append_autorefresh()
+        self.firefox.get("file://" + os.path.abspath(self.html_file))
 
-        globals()["FileSystemEventHandler"] = _FileSystemEventHandler
-        globals()["Observer"] = _Observer
-    class Handler(FileSystemEventHandler):
-        def __init__(self, filename, observer):
-            self.observer = observer
-            self.filename = filename
-            self.html_file = filename.rsplit(".", 1)[0] + ".html"
-            self.init_firefox()
-
-        def init_firefox(self):
-            # Launch the preview browser and build the initial HTML.
-            self.firefox = webdriver.Chrome()
+    def on_modified(self, event):
+        if os.path.normpath(os.path.abspath(event.src_path)) == os.path.normpath(
+            os.path.abspath(self.filename)
+        ):
             run_pandoc(self.filename, self.html_file)
-            if not os.path.exists(self.html_file):
-                print("html doesn't exist")
             self.append_autorefresh()
-            self.firefox.get("file://" + os.path.abspath(self.html_file))
+            try:
+                self.firefox.refresh()
+            except selenium.common.exceptions.WebDriverException:
+                print(
+                    "I'm quitting!! You probably suspended the computer, which"
+                    " seems to freak selenium out.  Just restart"
+                )
+                self.firefox.quit()
+                self.init_firefox()
 
-        def on_modified(self, event):
-            if os.path.normpath(os.path.abspath(event.src_path)) == os.path.normpath(
-                os.path.abspath(self.filename)
-            ):
-                run_pandoc(self.filename, self.html_file)
-                self.append_autorefresh()
-                try:
-                    self.firefox.refresh()
-                except selenium.common.exceptions.WebDriverException:
-                    print(
-                        "I'm quitting!! You probably suspended the computer, which"
-                        " seems to freak selenium out.  Just restart"
-                    )
-                    self.firefox.quit()
-                    self.init_firefox()
-            else:
-                pass
-
-        def append_autorefresh(self):
-            with open(self.html_file, "r", encoding="utf-8") as fp:
-                all_data = fp.read()
-            all_data = all_data.replace(
-                "</head>",
-                """
+    def append_autorefresh(self):
+        with open(self.html_file, "r", encoding="utf-8") as fp:
+            all_data = fp.read()
+        all_data = all_data.replace(
+            "</head>",
+            """
     <script id="MathJax-script" async src="MathJax-3.1.2/es5/tex-mml-chtml.js"></script>
     <script>
         // When the page is about to be unloaded, save the current scroll position
@@ -158,9 +126,12 @@ def watch(filename):
     </script>
 </head>
     """,
-            )
-            with open(self.html_file, "w", encoding="utf-8") as fp:
-                fp.write(all_data)
+        )
+        with open(self.html_file, "w", encoding="utf-8") as fp:
+            fp.write(all_data)
+
+
+def watch(filename):
     observer = Observer()
     event_handler = Handler(filename, observer)
     observer.schedule(event_handler, path=".", recursive=False)
@@ -173,7 +144,6 @@ def watch(filename):
         observer.stop()
 
     observer.join()
-    # print("returning from watch")
 
 
 @register_command(
@@ -181,13 +151,6 @@ def watch(filename):
     help={"filename": "Markdown or TeX file to watch for changes"},
 )
 def cpb(filename):
-    global selenium, webdriver
-    # Import Selenium lazily so the CLI can be imported without the dependency.
-    import selenium as _selenium
-    from selenium import webdriver as _webdriver
-
-    selenium = _selenium
-    webdriver = _webdriver
     watch(filename)
 
 
