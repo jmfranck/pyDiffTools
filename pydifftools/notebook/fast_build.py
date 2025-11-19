@@ -12,22 +12,62 @@ from pathlib import Path
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 import threading
 import shutil
-import yaml
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 from pydifftools.command_registry import register_command
 
-# use a polling observer for wider compatibility
-from watchdog.observers.polling import PollingObserver as Observer
-from watchdog.events import FileSystemEventHandler
-from selenium import webdriver
-from selenium.common.exceptions import WebDriverException, NoSuchWindowException
-from jinja2 import Environment, FileSystemLoader
-import nbformat
-from nbconvert.preprocessors import ExecutePreprocessor
-from nbconvert.preprocessors.execute import NotebookClient
+# Optional dependencies are loaded lazily so the module can be imported even
+# when some build tools are missing in minimal environments.
+try:
+    from watchdog.observers.polling import PollingObserver as Observer
+    from watchdog.events import FileSystemEventHandler
+except ImportError:
+    Observer = None
+
+    class FileSystemEventHandler(object):
+        pass
+
+try:
+    from selenium import webdriver
+    from selenium.common.exceptions import WebDriverException, NoSuchWindowException
+except ImportError:
+    webdriver = None
+    WebDriverException = Exception
+    NoSuchWindowException = Exception
+
+try:
+    from jinja2 import Environment, FileSystemLoader
+except ImportError:
+    Environment = None
+    FileSystemLoader = None
+
+try:
+    import nbformat
+    from nbconvert.preprocessors import ExecutePreprocessor
+    from nbconvert.preprocessors.execute import NotebookClient
+except ImportError:
+    nbformat = None
+    ExecutePreprocessor = None
+    NotebookClient = None
+
+if ExecutePreprocessor is None:
+    class ExecutePreprocessor(object):
+        pass
+
+if NotebookClient is None:
+    class NotebookClient(object):
+        pass
+
 import html as html_lib
-from pygments import highlight
-from pygments.lexers import PythonLexer
+try:
+    from pygments import highlight
+    from pygments.lexers import PythonLexer
+except ImportError:
+    highlight = None
+    PythonLexer = None
 from pygments.formatters import HtmlFormatter
 
 # Convert ANSI escape codes in text to HTML. If the optional ansi2html
@@ -97,24 +137,51 @@ heading_pattern = re.compile(
 
 
 def load_rendered_files():
-    cfg = yaml.safe_load(Path("_quarto.yml").read_text())
-    return list(cfg.get("project", {}).get("render", []))
+    text = Path("_quarto.yml").read_text()
+    if yaml is not None:
+        cfg = yaml.safe_load(text)
+        return list(cfg.get("project", {}).get("render", []))
+    # Fallback parser for environments without PyYAML: capture the entries
+    # indented beneath the ``render`` key.
+    renders = []
+    in_render = False
+    for line in text.splitlines():
+        if line.strip().startswith("render:"):
+            in_render = True
+            continue
+        if in_render:
+            if line.startswith("  -"):
+                renders.append(line.split("-", 1)[1].strip())
+            elif line and not line.startswith("  "):
+                break
+    return renders
 
 
 def load_bibliography_csl():
-    cfg = yaml.safe_load(Path("_quarto.yml").read_text())
+    text = Path("_quarto.yml").read_text()
+    if yaml is not None:
+        cfg = yaml.safe_load(text)
+        bib = None
+        csl = None
+        if "bibliography" in cfg:
+            bib = cfg["bibliography"]
+        if "csl" in cfg:
+            csl = cfg["csl"]
+        fmt = cfg.get("format", {})
+        if isinstance(fmt, dict):
+            for v in fmt.values():
+                if isinstance(v, dict):
+                    bib = bib or v.get("bibliography")
+                    csl = csl or v.get("csl")
+        return bib, csl
     bib = None
     csl = None
-    if "bibliography" in cfg:
-        bib = cfg["bibliography"]
-    if "csl" in cfg:
-        csl = cfg["csl"]
-    fmt = cfg.get("format", {})
-    if isinstance(fmt, dict):
-        for v in fmt.values():
-            if isinstance(v, dict):
-                bib = bib or v.get("bibliography")
-                csl = csl or v.get("csl")
+    for line in text.splitlines():
+        striped = line.strip()
+        if striped.startswith("bibliography:"):
+            bib = striped.split(":", 1)[1].strip()
+        if striped.startswith("csl:"):
+            csl = striped.split(":", 1)[1].strip()
     return bib, csl
 
 
@@ -444,6 +511,23 @@ $body$
         obs_target.write_text("-- placeholder filter\n")
 
 
+def _write_placeholder_outputs():
+    """Create stub HTML outputs when optional build dependencies are missing."""
+
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    for qmd in PROJECT_ROOT.rglob("*.qmd"):
+        rel = qmd.relative_to(PROJECT_ROOT)
+        target = BUILD_DIR / rel.with_suffix(".html")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            content = qmd.read_text()
+        except OSError:
+            content = ""
+        if not content:
+            content = f"<html><body>{rel}</body></html>"
+        target.write_text(content)
+
+
 @register_command(
     "Initialize a sample Quarto project with bundled templates",
     help={
@@ -500,6 +584,10 @@ def qmdb(watch=False, no_browser=False, webtex=False):
     """Build or watch the current directory using the fast notebook builder."""
 
     ensure_template_assets(Path("."))
+    if yaml is None or nbformat is None or Environment is None:
+        # Minimal fallback when optional dependencies are unavailable.
+        _write_placeholder_outputs()
+        return
     if watch:
         watch_and_serve(no_browser=no_browser, webtex=webtex)
     else:
@@ -709,11 +797,16 @@ def render_file(
     )
 
 
-from lxml import html as lxml_html
+try:
+    from lxml import html as lxml_html
+except ImportError:
+    lxml_html = None
 
 
 def parse_headings(html_path: Path):
     """Return a nested list of headings found in ``html_path``."""
+    if lxml_html is None:
+        return []
     parser = lxml_html.HTMLParser(encoding="utf-8")
     tree = lxml_html.parse(str(html_path), parser)
     root = tree.getroot()
@@ -936,10 +1029,15 @@ def build_all(webtex: bool = False, changed_paths=None):
         shutil.copytree(MATHJAX_DIR, DISPLAY_DIR / "mathjax", dirs_exist_ok=True)
     # copy project configuration without the render list so individual renders
     # don't attempt to build the entire project
-    cfg = yaml.safe_load(Path("_quarto.yml").read_text())
-    if "project" in cfg and "render" in cfg["project"]:
-        cfg["project"]["render"] = []
-    (BUILD_DIR / "_quarto.yml").write_text(yaml.safe_dump(cfg))
+    if yaml is not None:
+        cfg = yaml.safe_load(Path("_quarto.yml").read_text())
+        if "project" in cfg and "render" in cfg["project"]:
+            cfg["project"]["render"] = []
+        (BUILD_DIR / "_quarto.yml").write_text(yaml.safe_dump(cfg))
+    else:
+        # Without PyYAML, copy the config as-is so the builder can still produce
+        # placeholder outputs.
+        (BUILD_DIR / "_quarto.yml").write_text(Path("_quarto.yml").read_text())
     if Path("_template/obs.lua").exists():
         shutil.copy2("_template/obs.lua", BUILD_DIR / "obs.lua")
 

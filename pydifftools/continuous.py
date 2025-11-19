@@ -3,11 +3,21 @@ this requires geckodriver to be installed and available
 """
 
 import time
-from selenium import webdriver
-import selenium
-import subprocess, sys, os, psutil, re
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
+import subprocess, sys, os, re
+from .command_registry import register_command
+
+# These are set when the command is invoked so the module can load without
+# requiring Selenium or watchdog in environments that only need other CLI tools.
+selenium = None
+webdriver = None
+try:
+    from watchdog.events import FileSystemEventHandler
+    from watchdog.observers import Observer
+except ImportError:
+    Observer = None
+
+    class FileSystemEventHandler(object):
+        pass
 
 
 def run_pandoc(filename, html_file):
@@ -72,54 +82,64 @@ def run_pandoc(filename, html_file):
     return
 
 
-class Handler(FileSystemEventHandler):
-    def __init__(self, filename, observer):
-        self.observer = observer
-        self.filename = filename
-        self.html_file = filename.rsplit(".", 1)[0] + ".html"
-        # self.firefox = webbrowser.get('firefox')
-        # self.firefox = webdriver.Firefox() # requires geckodriver
-        self.init_firefox()
+def watch(filename):
+    if webdriver is None:
+        # Ensure Selenium is available even if watch() is called directly.
+        import selenium as _selenium
+        from selenium import webdriver as _webdriver
 
-    def init_firefox(self):
-        self.firefox = webdriver.Chrome()  # requires chromium
-        run_pandoc(self.filename, self.html_file)
-        if not os.path.exists(self.html_file):
-            print("html doesn't exist")
-        self.append_autorefresh()
-        # self.firefox.open_new_tab(self.html_file)
-        self.firefox.get("file://" + os.path.abspath(self.html_file))
+        globals()["selenium"] = _selenium
+        globals()["webdriver"] = _webdriver
+    if Observer is None:
+        # Watchdog is optional at import time but required when running cpb.
+        try:
+            from watchdog.events import FileSystemEventHandler as _FileSystemEventHandler
+            from watchdog.observers import Observer as _Observer
+        except ImportError as exc:
+            raise ImportError("The cpb command requires watchdog to be installed") from exc
 
-    def on_modified(self, event):
-        # print("modification event")
-        if os.path.normpath(
-            os.path.abspath(event.src_path)
-        ) == os.path.normpath(os.path.abspath(self.filename)):
-            # print("about to run pandoc")
+        globals()["FileSystemEventHandler"] = _FileSystemEventHandler
+        globals()["Observer"] = _Observer
+    class Handler(FileSystemEventHandler):
+        def __init__(self, filename, observer):
+            self.observer = observer
+            self.filename = filename
+            self.html_file = filename.rsplit(".", 1)[0] + ".html"
+            self.init_firefox()
+
+        def init_firefox(self):
+            # Launch the preview browser and build the initial HTML.
+            self.firefox = webdriver.Chrome()
             run_pandoc(self.filename, self.html_file)
+            if not os.path.exists(self.html_file):
+                print("html doesn't exist")
             self.append_autorefresh()
-            try:
-                self.firefox.refresh()
-            except selenium.common.exceptions.WebDriverException:
-                print(
-                    "I'm quitting!! You probably suspended the computer, which"
-                    " seems to freak selenium out.  Just restart"
-                )
-                self.firefox.quit()
-                self.init_firefox()
-            print("and refreshed!")
-        else:
-            # print("saw a change in",os.path.normpath(os.path.abspath(event.src_path)))
-            # print("not",os.path.normpath(os.path.abspath(self.filename)))
-            pass
+            self.firefox.get("file://" + os.path.abspath(self.html_file))
 
-    def append_autorefresh(self):
-        # print("about to add scripts")
-        with open(self.html_file, "r", encoding="utf-8") as fp:
-            all_data = fp.read()
-        all_data = all_data.replace(
-            "</head>",
-            """
+        def on_modified(self, event):
+            if os.path.normpath(os.path.abspath(event.src_path)) == os.path.normpath(
+                os.path.abspath(self.filename)
+            ):
+                run_pandoc(self.filename, self.html_file)
+                self.append_autorefresh()
+                try:
+                    self.firefox.refresh()
+                except selenium.common.exceptions.WebDriverException:
+                    print(
+                        "I'm quitting!! You probably suspended the computer, which"
+                        " seems to freak selenium out.  Just restart"
+                    )
+                    self.firefox.quit()
+                    self.init_firefox()
+            else:
+                pass
+
+        def append_autorefresh(self):
+            with open(self.html_file, "r", encoding="utf-8") as fp:
+                all_data = fp.read()
+            all_data = all_data.replace(
+                "</head>",
+                """
     <script id="MathJax-script" async src="MathJax-3.1.2/es5/tex-mml-chtml.js"></script>
     <script>
         // When the page is about to be unloaded, save the current scroll position
@@ -138,13 +158,9 @@ class Handler(FileSystemEventHandler):
     </script>
 </head>
     """,
-        )
-        with open(self.html_file, "w", encoding="utf-8") as fp:
-            fp.write(all_data)
-        # print("done adding")
-
-
-def watch(filename):
+            )
+            with open(self.html_file, "w", encoding="utf-8") as fp:
+                fp.write(all_data)
     observer = Observer()
     event_handler = Handler(filename, observer)
     observer.schedule(event_handler, path=".", recursive=False)
@@ -158,6 +174,21 @@ def watch(filename):
 
     observer.join()
     # print("returning from watch")
+
+
+@register_command(
+    "continuous pandoc build.  Like latexmk, but for markdown!",
+    help={"filename": "Markdown or TeX file to watch for changes"},
+)
+def cpb(filename):
+    global selenium, webdriver
+    # Import Selenium lazily so the CLI can be imported without the dependency.
+    import selenium as _selenium
+    from selenium import webdriver as _webdriver
+
+    selenium = _selenium
+    webdriver = _webdriver
+    watch(filename)
 
 
 if __name__ == "__main__":

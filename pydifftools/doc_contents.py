@@ -1,5 +1,4 @@
 from collections import OrderedDict
-from fuzzywuzzy import process
 
 
 class doc_contents_class(object):
@@ -95,6 +94,9 @@ class doc_contents_class(object):
         if not hitmarker:
             raise ValueError("somehow, there wasn't a * marker!")
         if title not in self.contents.keys():
+            # Import here so the CLI can load even when fuzzywuzzy is not installed.
+            from fuzzywuzzy import process
+
             best_match, match_quality = process.extractOne(title, self.contents.keys())
             yesorno = input(f"didn't find\n\t{title}\nin keys, maybe you want\n\t{best_match}\nsay y or n")
             if yesorno == 'y':

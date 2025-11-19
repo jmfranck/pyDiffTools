@@ -8,6 +8,7 @@ from . import (
     split_conflict,
     outline,
 )
+from .continuous import cpb
 from .wrap_sentences import wr as wrap_sentences_wr  # registers wrap command
 from .separate_comments import tex_sepcomments
 from .unseparate_comments import tex_unsepcomments
@@ -24,7 +25,10 @@ import time
 import subprocess
 import logging
 import re
-import nbformat
+try:
+    import nbformat
+except ImportError:
+    nbformat = None
 import difflib
 import shutil
 from pathlib import Path, PurePosixPath
@@ -272,14 +276,6 @@ def gensync(arguments):
         fp.write(new_synctex)
         fp.write(argument[1].replace())
         fp.close()
-
-
-@register_command("continuous pandoc build.  Like latexmk, but for markdown!")
-def cpb(arguments):
-    assert len(arguments) == 1
-    from .continuous import watch as continuous_watch
-
-    continuous_watch(arguments[0])
 
 
 @register_command("rearrange TeX file based on a .rrng plan")

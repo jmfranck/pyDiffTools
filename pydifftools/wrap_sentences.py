@@ -477,31 +477,27 @@ def wr(filename, wrapnumber=45, punctuation_slop=20, cleanoo=False, i=-1):
                 if filetype == "latex":
                     indentation = 0
                 while len(residual_sentence) > 0:
-                    lengths = [len(word) + 1 for word in residual_sentence]
+                    # Compute cumulative character counts without relying on numpy.
+                    numchars = [len(word) + 1 for word in residual_sentence]
                     cumsum_num = []
-                    total_chars = 0
-                    for length in lengths:
-                        total_chars += length
-                        cumsum_num.append(total_chars)
+                    running_total = 0
+                    for num in numchars:
+                        running_total += num
+                        cumsum_num.append(running_total)
                     nextline_upto = min(
                         range(len(cumsum_num)),
                         key=lambda j: abs(cumsum_num[j] - wrapnumber),
                     )
-                    punctuation_scores = []
-                    for idx, word in enumerate(residual_sentence):
+                    nextline_punct_upto = []
+                    for j, word in enumerate(residual_sentence):
                         if word[-1] in [",", ";", ":", ")", "-"] and len(word) > 1:
-                            punctuation_scores.append(cumsum_num[idx])
+                            nextline_punct_upto.append(cumsum_num[j])
                         else:
-                            punctuation_scores.append(None)
-                    if any(score is not None for score in punctuation_scores):
-                        distances = [
-                            abs(score - wrapnumber)
-                            if score is not None
-                            else float("inf")
-                            for score in punctuation_scores
-                        ]
+                            nextline_punct_upto.append(10000)
+                    if any(value < 10000 for value in nextline_punct_upto):
                         nextline_punct_upto = min(
-                            range(len(distances)), key=lambda j: distances[j]
+                            range(len(nextline_punct_upto)),
+                            key=lambda j: abs(nextline_punct_upto[j] - wrapnumber),
                         )
                         if nextline_punct_upto < nextline_upto:
                             if (
