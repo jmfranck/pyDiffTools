@@ -60,9 +60,6 @@ def match_paren(thistext, pos, opener="{"):
     },
 )
 def wr(filename, wrapnumber=45, punctuation_slop=20, cleanoo=False, i=-1):
-    # numpy is only needed when performing the wrap calculations; import it lazily
-    import numpy as np
-
     indent_amount = i if i != -1 else 4
     stupid_strip = cleanoo
     if filename == "-":
@@ -480,27 +477,31 @@ def wr(filename, wrapnumber=45, punctuation_slop=20, cleanoo=False, i=-1):
                 if filetype == "latex":
                     indentation = 0
                 while len(residual_sentence) > 0:
-                    numchars = (
-                        np.array(list(map(len, residual_sentence))) + 1
-                    )  # +1 for space
-                    cumsum_num = np.cumsum(numchars)
-                    nextline_upto = np.argmin(abs(cumsum_num - wrapnumber))  #
-                    #   the next line goes up to this position
-                    nextline_punct_upto = np.array([
-                        (
-                            cumsum_num[j]
-                            if (
-                                residual_sentence[j][-1]
-                                in [",", ";", ":", ")", "-"]
-                                and len(residual_sentence[j]) > 1
-                            )
-                            else 10000
-                        )
-                        for j in range(len(residual_sentence))
-                    ])
-                    if any(nextline_punct_upto < 10000):
-                        nextline_punct_upto = np.argmin(
-                            abs(nextline_punct_upto - wrapnumber)
+                    lengths = [len(word) + 1 for word in residual_sentence]
+                    cumsum_num = []
+                    total_chars = 0
+                    for length in lengths:
+                        total_chars += length
+                        cumsum_num.append(total_chars)
+                    nextline_upto = min(
+                        range(len(cumsum_num)),
+                        key=lambda j: abs(cumsum_num[j] - wrapnumber),
+                    )
+                    punctuation_scores = []
+                    for idx, word in enumerate(residual_sentence):
+                        if word[-1] in [",", ";", ":", ")", "-"] and len(word) > 1:
+                            punctuation_scores.append(cumsum_num[idx])
+                        else:
+                            punctuation_scores.append(None)
+                    if any(score is not None for score in punctuation_scores):
+                        distances = [
+                            abs(score - wrapnumber)
+                            if score is not None
+                            else float("inf")
+                            for score in punctuation_scores
+                        ]
+                        nextline_punct_upto = min(
+                            range(len(distances)), key=lambda j: distances[j]
                         )
                         if nextline_punct_upto < nextline_upto:
                             if (

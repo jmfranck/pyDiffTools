@@ -474,27 +474,6 @@ def qmdinit(path, force=False):
     MATHJAX_DIR = PROJECT_ROOT / "_template" / "mathjax"
     for child in source_root.iterdir():
         _copy_resource_tree(child, target / child.name, force)
-    quarto_config = target / "_quarto.yml"
-    # Patch the sample configuration so it relies on local placeholder files
-    # rather than the original absolute paths from the contributor's machine.
-    if quarto_config.exists():
-        config_text = quarto_config.read_text()
-        config_text = config_text.replace(
-            "/home/jmfranck/My Library.bib", "_template/library.bib"
-        )
-        config_text = config_text.replace(
-            "/home/jmfranck/notebook/emails/superscript_ref_short.csl",
-            "_template/style.csl",
-        )
-        quarto_config.write_text(config_text)
-    bib_target = target / "_template" / "library.bib"
-    if force or not bib_target.exists():
-        bib_target.parent.mkdir(parents=True, exist_ok=True)
-        bib_target.write_text("% placeholder bibliography\n")
-    csl_target = target / "_template" / "style.csl"
-    if force or not csl_target.exists():
-        csl_target.parent.mkdir(parents=True, exist_ok=True)
-        csl_target.write_text("<!-- placeholder CSL file -->\n")
     # Some expected render targets are not present in the checked-in example,
     # so create lightweight placeholders to keep the sample project runnable
     # in isolation.
