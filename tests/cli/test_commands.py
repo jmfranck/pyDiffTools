@@ -84,6 +84,7 @@ def test_qmdinit_and_qmdb(tmp_path):
         "-m",
         "pydifftools.command_line",
         "qmdb",
+        "--no-browser",
     ]
     proc_build = subprocess.run(
         cmd_build,
