@@ -1,4 +1,3 @@
-import pathlib
 import textwrap
 import yaml
 
@@ -6,15 +5,12 @@ from pydifftools.flowchart.graph import write_dot_from_yaml
 
 
 def test_multiline_strings_use_block_style(tmp_path):
-    yaml_text = textwrap.dedent(
-        """
+    yaml_text = textwrap.dedent("""
         nodes:
           Example:
-            children: []
-            parents: []
-            text: "Line one\\n \\n\\n <font point-size=\\"12\\">\\nSecond paragraph"
-        """
-    ).strip()
+            children: [] parents: [] text: "Line one\\n \\n\\n <font
+            point-size=\\"12\\">\\nSecond paragraph"
+        """).strip()
 
     yaml_path = tmp_path / "graph.yaml"
     yaml_path.write_text(yaml_text)
