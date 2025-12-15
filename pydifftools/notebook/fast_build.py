@@ -3,11 +3,13 @@
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import subprocess
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 import threading
@@ -35,7 +37,10 @@ _ansi_conv = Ansi2HTMLConverter(inline=True)
 
 def _ansi_to_html(text: str, *, default_style: str | None = None) -> str:
     """Return HTML for text that may contain ANSI escape codes."""
-    return f"<pre>{_ansi_conv.convert(text, full=False)}</pre>"
+    html = _ansi_conv.convert(text, full=False)
+    if default_style and "span class" not in html:
+        html = f'<span style="{default_style}">{html}</span>'
+    return f"<pre>{html}</pre>"
 
 
 class LoggingExecutePreprocessor(ExecutePreprocessor):
@@ -77,6 +82,105 @@ anchor_pattern = re.compile(r"\{#(sec|fig|tab):([A-Za-z0-9_-]+)\}")
 heading_pattern = re.compile(
     r"^(#+)\s+(.*?)\s*\{#(sec|fig|tab):([A-Za-z0-9_-]+)\}"
 )
+
+
+class RenderNotebook:
+    """Track trunks, branches, and leaves along with build state."""
+
+    def __init__(self, render_files, tree, include_map):
+        self.render_files = render_files
+        self.tree = tree
+        self.include_map = include_map
+        self.nodes = {}
+        self._build_nodes()
+
+    def _build_nodes(self):
+        for path in self.tree:
+            if path not in self.nodes:
+                if path in self.tree:
+                    children = list(self.tree[path])
+                else:
+                    children = []
+                if path in self.include_map:
+                    parents = list(self.include_map[path])
+                else:
+                    parents = []
+                self.nodes[path] = {
+                    "type": "trunk" if path in self.render_files else "branch",
+                    "children": children,
+                    "parents": parents,
+                    "has_notebook": False,
+                    "needs_build": False,
+                }
+        for path in list(self.nodes.keys()):
+            if (
+                not self.nodes[path]["children"]
+                and path not in self.render_files
+            ):
+                self.nodes[path]["type"] = "leaf"
+            src = PROJECT_ROOT / path
+            if src.exists():
+                text = src.read_text()
+                self.nodes[path]["has_notebook"] = bool(
+                    code_pattern.search(text)
+                )
+
+    def all_paths(self):
+        return list(self.nodes.keys())
+
+    def mark_outdated(self, checksums):
+        for path in self.nodes:
+            src = PROJECT_ROOT / path
+            if not src.exists():
+                self.nodes[path]["needs_build"] = False
+                continue
+            new_hash = self._hash_file(src)
+            if path in checksums:
+                old_hash = checksums[path]
+            else:
+                old_hash = None
+            self.nodes[path]["needs_build"] = new_hash != old_hash
+
+    def _hash_file(self, path):
+        data = path.read_bytes()
+        return hashlib.md5(data).hexdigest()
+
+    def stage_targets(self, changed_paths):
+        if changed_paths:
+            for path in changed_paths:
+                if path in self.nodes:
+                    self.nodes[path]["needs_build"] = True
+                    for parent in self.nodes[path]["parents"]:
+                        if parent in self.nodes:
+                            self.nodes[parent]["needs_build"] = True
+        return sorted([p for p, d in self.nodes.items() if d["needs_build"]])
+
+    def update_checksums(self, checksums):
+        for path, data in self.nodes.items():
+            if not data["needs_build"]:
+                continue
+            src = PROJECT_ROOT / path
+            if src.exists():
+                checksums[path] = self._hash_file(src)
+
+    def render_order(self):
+        return build_order(self.render_files, self.tree)
+
+
+def load_checksums():
+    path = BUILD_DIR / "checksums.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def save_checksums(checksums):
+    path = BUILD_DIR / "checksums.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(checksums, indent=2))
 
 
 def load_rendered_files():
@@ -500,23 +604,20 @@ def qmdinit(path, force=False):
     "Build Quarto-style projects with Pandoc and the fast builder (optionally"
     " watch)",
     help={
-        "watch": "Watch files and serve",
         "no_browser": "Do not launch a browser when using --watch",
         "webtex": "Use Pandoc's --webtex option instead of MathJax",
     },
 )
-def qmdb(watch=False, no_browser=False, webtex=False):
-    """Build or watch the current directory using the fast notebook builder."""
+def qmdb(no_browser=False, webtex=False):
+    """Build and watch the current directory using the fast notebook
+    builder."""
 
     ensure_template_assets(Path("."))
     if yaml is None or nbformat is None or Environment is None:
         # Minimal fallback when optional dependencies are unavailable.
         _write_placeholder_outputs()
         return
-    if watch:
-        watch_and_serve(no_browser=no_browser, webtex=webtex)
-    else:
-        build_all(webtex=webtex)
+    watch_and_serve(no_browser=no_browser, webtex=webtex)
 
 
 def ensure_pandoc_available():
@@ -869,7 +970,15 @@ def postprocess_html(html_path: Path, include_root: Path, resource_root: Path):
             else:
                 parent = node.getparent()
                 if parent is not None:
+                    placeholder = lxml_html.fragment_fromstring(
+                        '<div style="color:red;font-weight:bold">'
+                        f"Waiting for pandoc on {target_rel} to complete..."
+                        "</div>",
+                        create_parent=False,
+                    )
+                    idx = parent.index(node)
                     parent.remove(node)
+                    parent.insert(idx, placeholder)
                     progress = True
         if not progress:
             break
@@ -928,12 +1037,26 @@ def substitute_code_placeholders(
             idx = int(node.get("data-index", "0"))
         except ValueError:
             idx = 0
-        html = outputs.get((src, idx), "")
-        code = codes.get((src, idx), "")
+        if (src, idx) in outputs:
+            html = outputs[(src, idx)]
+        else:
+            html = ""
+        if (src, idx) in codes:
+            code = codes[(src, idx)]
+        else:
+            code = ""
         code_html = highlight(code, PythonLexer(), formatter)
-        frags = lxml_html.fragments_fromstring(code_html) + (
-            lxml_html.fragments_fromstring(html) if html else []
-        )
+        frags = lxml_html.fragments_fromstring(code_html)
+        if html:
+            frags += lxml_html.fragments_fromstring(html)
+        else:
+            waiting = lxml_html.fragment_fromstring(
+                '<div style="color:red;font-weight:bold">'
+                f"Running notebook {src}..."
+                "</div>",
+                create_parent=False,
+            )
+            frags.append(waiting)
         parent = node.getparent()
         if parent is None:
             continue
@@ -973,12 +1096,15 @@ def build_all(webtex: bool = False, changed_paths=None):
     if Path("_template/obs.lua").exists():
         shutil.copy2("_template/obs.lua", BUILD_DIR / "obs.lua")
 
+    checksums = load_checksums()
+
     render_files = load_rendered_files()
     bibliography, csl = load_bibliography_csl()
     tree, roots, include_map = analyze_includes(render_files)
+    graph = RenderNotebook(render_files, tree, include_map)
+    graph.mark_outdated(checksums)
     anchors = collect_anchors(render_files, include_map)
 
-    files = all_files(render_files, tree)
     if changed_paths:
         normalized = set()
         for path in changed_paths:
@@ -992,12 +1118,7 @@ def build_all(webtex: bool = False, changed_paths=None):
             if rel.suffix != ".qmd":
                 continue
             normalized.add(rel.as_posix())
-        stage_set = {f for f in normalized if f in files}
-        # make sure direct changes to a render file are captured even if the
-        # include map has not seen it yet
-        for rel in normalized:
-            if rel not in stage_set and (PROJECT_ROOT / rel).exists():
-                stage_set.add(rel)
+        stage_set = set(graph.stage_targets(normalized))
         display_targets = collect_render_targets(
             stage_set, include_map, render_files
         )
@@ -1011,37 +1132,38 @@ def build_all(webtex: bool = False, changed_paths=None):
                 "include_map": include_map,
             }
     else:
-        stage_set = set()
-        # only rebuild staged HTML when the source is newer or the staged
-        # fragment is missing so existing work in _build can be reused on
-        # startup
-        for f in files:
-            src_path = PROJECT_ROOT / f
-            html_path = (BUILD_DIR / f).with_suffix(".html")
-            if not html_path.exists():
-                stage_set.add(f)
-                continue
-            try:
-                src_time = src_path.stat().st_mtime
-                html_time = html_path.stat().st_mtime
-            except FileNotFoundError:
-                stage_set.add(f)
-                continue
-            if src_time > html_time:
-                stage_set.add(f)
+        stage_set = set(graph.stage_targets(None))
         display_targets = set(render_files)
 
     stage_files = sorted(stage_set)
     # phase 1: rebuild the modified sources into the staging tree
     code_blocks = mirror_and_modify(stage_files, anchors, roots)
-    order = build_order(render_files, tree)
-    for f in order:
-        if f not in stage_set:
-            continue
-        fragment = f not in render_files
-        render_file(
-            Path(f), BUILD_DIR / f, fragment, bibliography, csl, webtex
-        )
+    order = graph.render_order()
+    render_targets = [f for f in order if f in stage_set]
+    if render_targets:
+        workers = max(1, min(len(render_targets), 4))
+        tasks = []
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for f in render_targets:
+                fragment = f not in render_files
+                future = pool.submit(
+                    render_file,
+                    Path(f),
+                    BUILD_DIR / f,
+                    fragment,
+                    bibliography,
+                    csl,
+                    webtex,
+                )
+                tasks.append((f, future))
+            for future in as_completed([t[1] for t in tasks]):
+                for pair in tasks:
+                    if pair[1] is future:
+                        print(f"Pandoc finished for {pair[0]}")
+                        break
+
+    graph.update_checksums(checksums)
+    save_checksums(checksums)
 
     outputs = {}
     code_map = {}
@@ -1056,9 +1178,16 @@ def build_all(webtex: bool = False, changed_paths=None):
     # phase 3: assemble the served pages from staged fragments
     for target in sorted(display_targets):
         src_html = (BUILD_DIR / target).with_suffix(".html")
-        if not src_html.exists():
-            continue
         dest_html = (DISPLAY_DIR / target).with_suffix(".html")
+        if not src_html.exists():
+            dest_html.parent.mkdir(parents=True, exist_ok=True)
+            dest_html.write_text(
+                "<html><body><div style='color:red;font-weight:bold'>"
+                f"Waiting for pandoc on {target} to complete..."
+                "</div>"
+                "</body></html>"
+            )
+            continue
         dest_html.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src_html, dest_html)
         # build includes using staged fragments and rewrite math assets to the
@@ -1070,12 +1199,14 @@ def build_all(webtex: bool = False, changed_paths=None):
         html_file = (DISPLAY_DIR / qmd).with_suffix(".html")
         if html_file.exists():
             sections = parse_headings(html_file)
-            pages.append({
-                "file": qmd,
-                "href": html_file.name,
-                "title": read_title(Path(qmd)),
-                "sections": sections,
-            })
+            pages.append(
+                {
+                    "file": qmd,
+                    "href": html_file.name,
+                    "title": read_title(Path(qmd)),
+                    "sections": sections,
+                }
+            )
 
     for page in pages:
         html_file = (DISPLAY_DIR / page["file"]).with_suffix(".html")
@@ -1161,6 +1292,11 @@ def _serve_forever(httpd: ThreadingHTTPServer):
 
 def watch_and_serve(no_browser: bool = False, webtex: bool = False):
     state = build_all(webtex=webtex)
+    if no_browser:
+        # In headless scenarios we only need the build artifacts and can exit
+        # immediately instead of launching a server loop that waits for a
+        # browser connection.
+        return state
     port = 8000
     render_files = state["render_files"]
 
@@ -1255,9 +1391,6 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Build site using Pandoc")
     parser.add_argument(
-        "--watch", action="store_true", help="Watch files and serve site"
-    )
-    parser.add_argument(
         "--no-browser",
         action="store_true",
         help="Do not open a browser when using --watch",
@@ -1268,7 +1401,4 @@ if __name__ == "__main__":
         help="Use Pandoc's --webtex option instead of MathJax",
     )
     args = parser.parse_args()
-    if args.watch:
-        watch_and_serve(no_browser=args.no_browser, webtex=args.webtex)
-    else:
-        build_all(webtex=args.webtex)
+    watch_and_serve(no_browser=args.no_browser, webtex=args.webtex)
