@@ -39,7 +39,7 @@ def _ansi_to_html(text: str, *, default_style: str | None = None) -> str:
     """Return HTML for text that may contain ANSI escape codes."""
     html = _ansi_conv.convert(text, full=False)
     if default_style and "span class" not in html:
-        html = f"<span style=\"{default_style}\">{html}</span>"
+        html = f'<span style="{default_style}">{html}</span>'
     return f"<pre>{html}</pre>"
 
 
@@ -113,12 +113,17 @@ class RenderNotebook:
                     "needs_build": False,
                 }
         for path in list(self.nodes.keys()):
-            if not self.nodes[path]["children"] and path not in self.render_files:
+            if (
+                not self.nodes[path]["children"]
+                and path not in self.render_files
+            ):
                 self.nodes[path]["type"] = "leaf"
             src = PROJECT_ROOT / path
             if src.exists():
                 text = src.read_text()
-                self.nodes[path]["has_notebook"] = bool(code_pattern.search(text))
+                self.nodes[path]["has_notebook"] = bool(
+                    code_pattern.search(text)
+                )
 
     def all_paths(self):
         return list(self.nodes.keys())
@@ -604,7 +609,8 @@ def qmdinit(path, force=False):
     },
 )
 def qmdb(no_browser=False, webtex=False):
-    """Build and watch the current directory using the fast notebook builder."""
+    """Build and watch the current directory using the fast notebook
+    builder."""
 
     ensure_template_assets(Path("."))
     if yaml is None or nbformat is None or Environment is None:
@@ -1099,7 +1105,6 @@ def build_all(webtex: bool = False, changed_paths=None):
     graph.mark_outdated(checksums)
     anchors = collect_anchors(render_files, include_map)
 
-    files = graph.all_paths()
     if changed_paths:
         normalized = set()
         for path in changed_paths:
@@ -1178,7 +1183,9 @@ def build_all(webtex: bool = False, changed_paths=None):
             dest_html.parent.mkdir(parents=True, exist_ok=True)
             dest_html.write_text(
                 "<html><body><div style='color:red;font-weight:bold'>"
-                f"Waiting for pandoc on {target} to complete..." "</div>" "</body></html>"
+                f"Waiting for pandoc on {target} to complete..."
+                "</div>"
+                "</body></html>"
             )
             continue
         dest_html.parent.mkdir(parents=True, exist_ok=True)
@@ -1192,12 +1199,14 @@ def build_all(webtex: bool = False, changed_paths=None):
         html_file = (DISPLAY_DIR / qmd).with_suffix(".html")
         if html_file.exists():
             sections = parse_headings(html_file)
-            pages.append({
-                "file": qmd,
-                "href": html_file.name,
-                "title": read_title(Path(qmd)),
-                "sections": sections,
-            })
+            pages.append(
+                {
+                    "file": qmd,
+                    "href": html_file.name,
+                    "title": read_title(Path(qmd)),
+                    "sections": sections,
+                }
+            )
 
     for page in pages:
         html_file = (DISPLAY_DIR / page["file"]).with_suffix(".html")

@@ -50,7 +50,9 @@ def test_wgrph_missing_file(tmp_path):
 
 def test_tex2qmd_cli(tmp_path):
     env = _make_cli_env(tmp_path)
-    sample = Path(__file__).resolve().parents[1] / "fixtures" / "tex" / "sample.tex"
+    sample = (
+        Path(__file__).resolve().parents[1] / "fixtures" / "tex" / "sample.tex"
+    )
     target = tmp_path / "example.tex"
     target.write_text(sample.read_text())
     cmd = [
@@ -60,7 +62,9 @@ def test_tex2qmd_cli(tmp_path):
         "tex2qmd",
         str(target),
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=tmp_path)
+    proc = subprocess.run(
+        cmd, capture_output=True, text=True, env=env, cwd=tmp_path
+    )
     assert proc.returncode == 0
     assert target.with_suffix(".qmd").exists()
 
@@ -75,9 +79,13 @@ def test_qmdinit_and_qmdb(tmp_path):
         "qmdinit",
         str(project_dir),
     ]
-    proc_init = subprocess.run(cmd_init, capture_output=True, text=True, env=env)
+    proc_init = subprocess.run(
+        cmd_init, capture_output=True, text=True, env=env
+    )
     assert proc_init.returncode == 0
-    mathjax = project_dir / "_template" / "mathjax" / "es5" / "tex-mml-chtml.js"
+    mathjax = (
+        project_dir / "_template" / "mathjax" / "es5" / "tex-mml-chtml.js"
+    )
     assert mathjax.exists()
     cmd_build = [
         sys.executable,
