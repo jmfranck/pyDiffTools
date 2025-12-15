@@ -9,6 +9,7 @@ from . import (
     split_conflict,
     wrap_sentences,
     outline,
+    update_check,
 )
 from .separate_comments import tex_sepcomments
 from .unseparate_comments import tex_unsepcomments
@@ -886,6 +887,25 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> None:
     if argv is None:
         argv = sys.argv[1:]
+    # Run the PyPI update check once per UTC day so users see a notice but
+    # startup stays fast when offline. The date is stored in the
+    # PYDIFFTOOLS_UPDATE_CHECK_LAST_RAN_UTC_DATE environment variable.
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    already_checked_today = (
+        "PYDIFFTOOLS_UPDATE_CHECK_LAST_RAN_UTC_DATE" in os.environ
+        and os.environ["PYDIFFTOOLS_UPDATE_CHECK_LAST_RAN_UTC_DATE"] == today
+    )
+    if not already_checked_today:
+        os.environ["PYDIFFTOOLS_UPDATE_CHECK_LAST_RAN_UTC_DATE"] = today
+        current_version, latest_version, is_outdated = update_check.check_update(
+            "pyDiffTools"
+        )
+        if is_outdated and latest_version is not None:
+            print(
+                "A new pyDiffTools version is available "
+                f"(installed {current_version}, latest {latest_version}).",
+                file=sys.stderr,
+            )
     parser = build_parser()
     argcomplete.autocomplete(parser)
     if not argv:
