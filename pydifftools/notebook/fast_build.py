@@ -1037,19 +1037,23 @@ def substitute_code_placeholders(
             idx = int(node.get("data-index", "0"))
         except ValueError:
             idx = 0
-        if (src, idx) in outputs:
-            html = outputs[(src, idx)]
-        else:
+        missing_output = (src, idx) not in outputs
+        if missing_output:
             html = ""
+        else:
+            html = outputs[(src, idx)]
         if (src, idx) in codes:
             code = codes[(src, idx)]
         else:
             code = ""
         code_html = highlight(code, PythonLexer(), formatter)
         frags = lxml_html.fragments_fromstring(code_html)
-        if html:
+        if not missing_output and html:
             frags += lxml_html.fragments_fromstring(html)
-        else:
+        elif missing_output:
+            # Only show the placeholder when the notebook output entry is absent
+            # so executed cells that intentionally produce no output simply
+            # render the source code.
             waiting = lxml_html.fragment_fromstring(
                 '<div style="color:red;font-weight:bold">'
                 f"Running notebook {src}..."
