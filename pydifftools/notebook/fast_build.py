@@ -1201,13 +1201,27 @@ def build_all(webtex: bool = False, changed_paths=None):
     pages = []
     for qmd in render_files:
         html_file = (DISPLAY_DIR / qmd).with_suffix(".html")
+        source_path = PROJECT_ROOT / qmd
+        if not source_path.exists():
+            # Make it obvious which path is missing and keep the display tree
+            # consistent by creating a placeholder page until pandoc produces
+            # the real output.
+            placeholder = (
+                "<html><body><div style='color:red;font-weight:bold'>"
+                f"Missing source file {source_path}"
+                "</div></body></html>"
+            )
+            html_file.parent.mkdir(parents=True, exist_ok=True)
+            html_file.write_text(placeholder)
+            print(f"Cannot read title; missing source: {source_path}")
+            continue
         if html_file.exists():
             sections = parse_headings(html_file)
             pages.append(
                 {
                     "file": qmd,
                     "href": html_file.name,
-                    "title": read_title(Path(qmd)),
+                    "title": read_title(source_path),
                     "sections": sections,
                 }
             )
