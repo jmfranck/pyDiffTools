@@ -34,7 +34,8 @@ def run_pandoc(filename, html_file):
         else:
             raise ValueError(
                 f"You have more than one (or no) {k} file in this directory!"
-                " Get rid of all but one! of " + "and".join(localfiles[k])
+                " Get rid of all but one! of "
+                + "and".join(localfiles[k])
             )
     command = [
         "pandoc",
@@ -157,5 +158,5 @@ def cpb(filename):
 
 if __name__ == "__main__":
     filename = sys.argv[1]
-    watch(filename)
+    cpb(filename)
     # Open the HTML file in the default web browser
