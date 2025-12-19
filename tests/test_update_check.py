@@ -1,58 +1,9 @@
-import importlib.util
 import json
 import io
 import os
-import sys
 import time
-import types
 import urllib.error
 
-# Provide a tiny numpy stub so importing the CLI module does not require heavy
-# deps when running the tests in isolation.
-if "numpy" not in sys.modules and importlib.util.find_spec("numpy") is None:
-    numpy_stub = types.ModuleType("numpy")
-    numpy_stub.array = lambda *args, **kwargs: []
-    numpy_stub.cumsum = lambda *args, **kwargs: []
-    numpy_stub.argmin = lambda *args, **kwargs: 0
-    sys.modules["numpy"] = numpy_stub
-
-# Avoid side effects from modules that alter stdout during import when loading
-# the CLI for these tests.
-if "pydifftools.separate_comments" not in sys.modules:
-    separate_stub = types.ModuleType("pydifftools.separate_comments")
-
-    def tex_sepcomments(*args, **kwargs):
-        return None
-
-    separate_stub.tex_sepcomments = tex_sepcomments
-    sys.modules["pydifftools.separate_comments"] = separate_stub
-
-if "pydifftools.unseparate_comments" not in sys.modules:
-    unseparate_stub = types.ModuleType("pydifftools.unseparate_comments")
-
-    def tex_unsepcomments(*args, **kwargs):
-        return None
-
-    unseparate_stub.tex_unsepcomments = tex_unsepcomments
-    sys.modules["pydifftools.unseparate_comments"] = unseparate_stub
-
-if "pydifftools.continuous" not in sys.modules:
-    continuous_stub = types.ModuleType("pydifftools.continuous")
-
-    def watch(*args, **kwargs):
-        return None
-
-    continuous_stub.watch = watch
-    sys.modules["pydifftools.continuous"] = continuous_stub
-
-if "argcomplete" not in sys.modules:
-    argcomplete_stub = types.ModuleType("argcomplete")
-
-    def autocomplete(parser):
-        return None
-
-    argcomplete_stub.autocomplete = autocomplete
-    sys.modules["argcomplete"] = argcomplete_stub
 
 from pydifftools import update_check
 from pydifftools import command_line
