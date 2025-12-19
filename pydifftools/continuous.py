@@ -32,7 +32,8 @@ def run_pandoc(filename, html_file):
         else:
             raise ValueError(
                 f"You have more than one (or no) {k} file in this directory!"
-                " Get rid of all but one! of " + "and".join(localfiles[k])
+                " Get rid of all but one! of "
+                + "and".join(localfiles[k])
             )
     command = [
         "pandoc",
@@ -99,7 +100,7 @@ class Handler(FileSystemEventHandler):
             self.append_autorefresh()
             try:
                 self.firefox.refresh()
-            except selenium.common.exceptions.WebDriverException:
+            except WebDriverException:
                 print(
                     "I'm quitting!! You probably suspended the computer, which"
                     " seems to freak selenium out.  Just restart"
