@@ -239,6 +239,9 @@ def format_tags(text: str, indent_str: str = "  ") -> str:
                     out.append(line)
             prev_tag = None
     formatted = "".join(out)
+    # Ensure a full blank line after err blocks so pandoc treats them as
+    # standalone HTML blocks even when followed by inline elements like <br/>.
+    formatted = re.sub(r"</err>\n(?!\s*\n)", "</err>\n\n", formatted)
     return re.sub(r"[ \t]+(?=\n)", "", formatted)
 
 
