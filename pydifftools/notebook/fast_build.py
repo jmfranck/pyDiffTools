@@ -257,7 +257,6 @@ def execute_code_blocks(
             continue
         codes = [c for c, _ in cells]
         md5s = [m for _, m in cells]
-
         # Split execution into separate notebooks whenever a cell begins with
         # ``%reset -f`` so that changing code after a reset only reruns the
         # affected portion instead of the entire file.
@@ -316,7 +315,6 @@ def execute_code_blocks(
                                 )
                             ]
                 nbformat.write(nb, nb_path)
-
             for offset, cell in enumerate(nb.cells):
                 html = outputs_to_html(cell.get("outputs", []))
                 idx = group_indices[offset]

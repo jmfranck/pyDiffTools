@@ -222,8 +222,11 @@ def format_tags(text: str, indent_str: str = "  ") -> str:
             out.append(indent_str * indent + "</err>\n")
             prev_tag = "</err>"
         else:
-            # Keep err contents tight while forcing a blank line after closing
-            # tags so pandoc treats the debug block as a standalone HTML block.
+            # Keep err contents tight while
+            # forcing a blank line after
+            # closing tags so pandoc treats
+            # the debug block as a standalone
+            # HTML block.
             if prev_tag == "<err>" and part.startswith("\n"):
                 part = part[1:]
             if prev_tag == "</err>" and not part.startswith("\n"):

@@ -136,7 +136,11 @@ position
             fp.write(all_data)
 
 
-def watch(filename):
+@register_command(
+    "continuous pandoc build.  Like latexmk, but for markdown!",
+    help={"filename": "Markdown or TeX file to watch for changes"},
+)
+def cpb(filename):
     observer = Observer()
     event_handler = Handler(filename, observer)
     observer.schedule(event_handler, path=".", recursive=False)
@@ -149,14 +153,6 @@ def watch(filename):
         observer.stop()
 
     observer.join()
-
-
-@register_command(
-    "continuous pandoc build.  Like latexmk, but for markdown!",
-    help={"filename": "Markdown or TeX file to watch for changes"},
-)
-def cpb(filename):
-    watch(filename)
 
 
 if __name__ == "__main__":
