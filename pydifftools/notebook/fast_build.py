@@ -257,47 +257,71 @@ def execute_code_blocks(
             continue
         codes = [c for c, _ in cells]
         md5s = [m for _, m in cells]
-        combined = "".join(md5s).encode()
-        nb_hash = hashlib.md5(combined).hexdigest()
-        nb_path = NOTEBOOK_CACHE_DIR / f"{nb_hash}.ipynb"
-        if nb_path.exists():
-            print(f"Reading cached output for {src} from {nb_path}!")
-            nb = nbformat.read(nb_path, as_version=4)
-        else:
-            print(f"Generating notebook for {src} at {nb_path}:")
-            nb = nbformat.v4.new_notebook()
-            nb.cells = [nbformat.v4.new_code_cell(c) for c in codes]
-            ep = LoggingExecutePreprocessor(
-                kernel_name="python3", timeout=10800, allow_errors=True
-            )
-            try:
-                ep.preprocess(
-                    nb, {"metadata": {"path": str(Path(src).parent)}}
+
+        # Split execution into separate notebooks whenever a cell begins with
+        # ``%reset -f`` so that changing code after a reset only reruns the
+        # affected portion instead of the entire file.
+        groups = []
+        current_codes = []
+        current_md5s = []
+        current_indices = []
+        for idx, code in enumerate(codes, start=1):
+            stripped = code.lstrip()
+            if current_codes and stripped.startswith("%reset -f"):
+                groups.append((current_indices, current_codes, current_md5s))
+                current_codes = []
+                current_md5s = []
+                current_indices = []
+            current_codes.append(code)
+            current_md5s.append(md5s[idx - 1])
+            current_indices.append(idx)
+        if current_codes:
+            groups.append((current_indices, current_codes, current_md5s))
+
+        for group_indices, group_codes, group_md5s in groups:
+            hash_input = (src + ":" + "".join(group_md5s)).encode()
+            nb_hash = hashlib.md5(hash_input).hexdigest()
+            nb_path = NOTEBOOK_CACHE_DIR / f"{nb_hash}.ipynb"
+            if nb_path.exists():
+                print(f"Reading cached output for {src} from {nb_path}!")
+                nb = nbformat.read(nb_path, as_version=4)
+            else:
+                print(f"Generating notebook for {src} at {nb_path}:")
+                nb = nbformat.v4.new_notebook()
+                nb.cells = [nbformat.v4.new_code_cell(c) for c in group_codes]
+                ep = LoggingExecutePreprocessor(
+                    kernel_name="python3", timeout=10800, allow_errors=True
                 )
-            except Exception as e:
-                tb = traceback.format_exc()
-                if nb.cells:
-                    nb.cells[0].outputs = [
-                        nbformat.v4.new_output(
-                            output_type="error",
-                            ename=type(e).__name__,
-                            evalue=str(e),
-                            traceback=tb.splitlines(),
-                        )
-                    ]
-                    for cell in nb.cells[1:]:
-                        cell.outputs = [
+                try:
+                    ep.preprocess(
+                        nb, {"metadata": {"path": str(Path(src).parent)}}
+                    )
+                except Exception as e:
+                    tb = traceback.format_exc()
+                    if nb.cells:
+                        nb.cells[0].outputs = [
                             nbformat.v4.new_output(
-                                output_type="stream",
-                                name="stderr",
-                                text="previous cell failed to execute\n",
+                                output_type="error",
+                                ename=type(e).__name__,
+                                evalue=str(e),
+                                traceback=tb.splitlines(),
                             )
                         ]
-            nbformat.write(nb, nb_path)
-        for idx, cell in enumerate(nb.cells, start=1):
-            html = outputs_to_html(cell.get("outputs", []))
-            outputs[(src, idx)] = html
-            code_map[(src, idx)] = codes[idx - 1]
+                        for cell in nb.cells[1:]:
+                            cell.outputs = [
+                                nbformat.v4.new_output(
+                                    output_type="stream",
+                                    name="stderr",
+                                    text="previous cell failed to execute\n",
+                                )
+                            ]
+                nbformat.write(nb, nb_path)
+
+            for offset, cell in enumerate(nb.cells):
+                html = outputs_to_html(cell.get("outputs", []))
+                idx = group_indices[offset]
+                outputs[(src, idx)] = html
+                code_map[(src, idx)] = codes[idx - 1]
     return outputs, code_map
 
 
