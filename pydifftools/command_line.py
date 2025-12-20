@@ -17,7 +17,7 @@ from . import (
     outline,
     update_check,
 )
-from .continuous import cpb
+import pydifftools.continuous as _continuous
 from .wrap_sentences import wr as wrap_sentences_wr  # registers wrap command
 from .separate_comments import tex_sepcomments
 from .unseparate_comments import tex_unsepcomments
@@ -31,6 +31,15 @@ from .notebook.fast_build import qmdb, qmdinit
 
 
 from .command_registry import _COMMAND_SPECS, register_command
+
+
+# Continuous pandoc build can be stubbed in tests; ensure a callable exists even
+# when the stub omits the cpb symbol.
+if hasattr(_continuous, "cpb"):
+    cpb = _continuous.cpb
+else:
+    def cpb(filename):
+        _continuous.watch(filename)
 
 
 def printed_exec(cmd):

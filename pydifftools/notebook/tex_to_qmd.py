@@ -222,8 +222,12 @@ def format_tags(text: str, indent_str: str = "  ") -> str:
             out.append(indent_str * indent + "</err>\n")
             prev_tag = "</err>"
         else:
-            if prev_tag in ("<err>", "</err>") and part.startswith("\n"):
+            # Keep err contents tight while forcing a blank line after closing
+            # tags so pandoc treats the debug block as a standalone HTML block.
+            if prev_tag == "<err>" and part.startswith("\n"):
                 part = part[1:]
+            if prev_tag == "</err>" and not part.startswith("\n"):
+                part = "\n" + part
             lines = part.splitlines(True)
             for line in lines:
                 if line.strip():
@@ -232,6 +236,9 @@ def format_tags(text: str, indent_str: str = "  ") -> str:
                     out.append(line)
             prev_tag = None
     formatted = "".join(out)
+    # Ensure a full blank line after err blocks so pandoc treats them as
+    # standalone HTML blocks even when followed by inline elements like <br/>.
+    formatted = re.sub(r"</err>\n(?!\s*\n)", "</err>\n\n", formatted)
     return re.sub(r"[ \t]+(?=\n)", "", formatted)
 
 
