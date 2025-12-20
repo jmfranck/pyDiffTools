@@ -4,12 +4,6 @@ from pathlib import Path
 from typing import Dict, Any
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import (
-    WebDriverException,
-    NoSuchWindowException,
-)
 from pydifftools.command_registry import register_command
 from .graph import write_dot_from_yaml
 
@@ -103,6 +97,21 @@ class GraphEventHandler(FileSystemEventHandler):
     },
 )
 def wgrph(yaml, wrap_width=55):
+    # Selenium is only required when actually launching the watcher, so it is
+    # imported here to avoid breaking the command-line tools when the optional
+    # dependency is not installed.
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
+        from selenium.common.exceptions import (
+            WebDriverException,
+            NoSuchWindowException,
+        )
+    except ImportError as exc:
+        raise ImportError(
+            "The 'watch_graph' command requires the 'selenium' package."
+        ) from exc
+
     yaml_file = Path(yaml)
     if not yaml_file.exists():
         raise FileNotFoundError(f"YAML file not found: {yaml_file}")

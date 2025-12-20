@@ -29,7 +29,6 @@ from .flowchart.watch_graph import wgrph
 from .notebook.tex_to_qmd import tex2qmd
 from .notebook.fast_build import qmdb, qmdinit
 
-
 from .command_registry import _COMMAND_SPECS, register_command
 
 

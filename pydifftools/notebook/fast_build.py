@@ -16,13 +16,28 @@ import threading
 import shutil
 import yaml
 from pydifftools.command_registry import register_command
-from watchdog.observers.polling import PollingObserver as Observer
 from watchdog.events import FileSystemEventHandler
-from selenium import webdriver
-from selenium.common.exceptions import (
-    WebDriverException,
-    NoSuchWindowException,
-)
+
+# Optional dependencies used for live file watching and browser refreshes are
+# loaded lazily so importing this module does not fail when they are absent.
+try:
+    from watchdog.observers.polling import PollingObserver as Observer
+except Exception:
+    Observer = None
+
+try:
+    from selenium import webdriver
+    from selenium.common import exceptions as selenium_ex
+except Exception:
+    webdriver = None
+    selenium_ex = None
+
+if selenium_ex:
+    WebDriverException = selenium_ex.WebDriverException
+    NoSuchWindowException = selenium_ex.NoSuchWindowException
+else:
+    WebDriverException = None
+    NoSuchWindowException = None
 from jinja2 import Environment, FileSystemLoader
 import nbformat
 from nbconvert.preprocessors import ExecutePreprocessor
@@ -1230,6 +1245,10 @@ class BrowserReloader:
         self.init_browser()
 
     def init_browser(self):
+        if webdriver is None:
+            raise ImportError(
+                "Browser refresh support requires the optional 'selenium' package."
+            )
         try:
             self.browser = webdriver.Chrome()
         except Exception:
@@ -1365,6 +1384,11 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
         refresher = Dummy()
     else:
         refresher = BrowserReloader(url)
+    if Observer is None:
+        raise ImportError(
+            "File watching requires the optional 'watchdog' package."
+        )
+
     observer = Observer()
 
     def rebuild(path):

@@ -1,8 +1,4 @@
 import re
-import sys
-import codecs
-
-sys.stdout = codecs.getwriter("utf-8")(sys.stdout.detach())
 from .comment_functions import generate_alphabetnumber, matchingbrackets
 
 
