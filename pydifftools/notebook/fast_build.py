@@ -17,27 +17,9 @@ import shutil
 import yaml
 from pydifftools.command_registry import register_command
 from watchdog.events import FileSystemEventHandler
-
-# Optional dependencies used for live file watching and browser refreshes are
-# loaded lazily so importing this module does not fail when they are absent.
-try:
-    from watchdog.observers.polling import PollingObserver as Observer
-except Exception:
-    Observer = None
-
-try:
-    from selenium import webdriver
-    from selenium.common import exceptions as selenium_ex
-except Exception:
-    webdriver = None
-    selenium_ex = None
-
-if selenium_ex:
-    WebDriverException = selenium_ex.WebDriverException
-    NoSuchWindowException = selenium_ex.NoSuchWindowException
-else:
-    WebDriverException = None
-    NoSuchWindowException = None
+from watchdog.observers.polling import PollingObserver as Observer
+from selenium import webdriver
+from selenium.common.exceptions import WebDriverException, NoSuchWindowException
 from jinja2 import Environment, FileSystemLoader
 import nbformat
 from nbconvert.preprocessors import ExecutePreprocessor
