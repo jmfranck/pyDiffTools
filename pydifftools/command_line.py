@@ -29,7 +29,6 @@ from .flowchart.watch_graph import wgrph
 from .notebook.tex_to_qmd import tex2qmd
 from .notebook.fast_build import qmdb, qmdinit
 
-
 from .command_registry import _COMMAND_SPECS, register_command
 
 
@@ -120,7 +119,8 @@ def look_for_pdf(directory, origbasename):
 def nb2py(arguments):
     assert arguments[0].endswith(".ipynb"), (
         "this is supposed to be called with a .ipynb file argument! (arguments"
-        " are %s)" % repr(arguments)
+        " are %s)"
+        % repr(arguments)
     )
     nb = nbformat.read(arguments[0], nbformat.NO_CONVERT)
     last_was_markdown = False
@@ -177,7 +177,8 @@ def py2nb(arguments):
     assert len(arguments) == 1, "py2nb should only be called with one argument"
     assert arguments[0].endswith(".py"), (
         "this is supposed to be called with a .py file argument! (arguments"
-        " are %s)" % repr(arguments)
+        " are %s)"
+        % repr(arguments)
     )
     with open(arguments[0], encoding="utf-8") as fpin:
         text = fpin.read()
@@ -233,15 +234,13 @@ def py2nb(arguments):
     nbook = nbformat.v3.reads_py(text)
 
     nbook = nbformat.v4.upgrade(nbook)  # Upgrade nbformat.v3 to nbformat.v4
-    nbook.metadata.update(
-        {
-            "kernelspec": {
-                "name": "Python [Anaconda2]",
-                "display_name": "Python [Anaconda2]",
-                "language": "python",
-            }
+    nbook.metadata.update({
+        "kernelspec": {
+            "name": "Python [Anaconda2]",
+            "display_name": "Python [Anaconda2]",
+            "language": "python",
         }
-    )
+    })
 
     jsonform = nbformat.v4.writes(nbook) + "\n"
     with open(
@@ -732,8 +731,8 @@ def main(argv=None):
     )
     if not already_checked_today:
         os.environ["PYDIFFTOOLS_UPDATE_CHECK_LAST_RAN_UTC_DATE"] = today
-        current_version, latest_version, is_outdated = update_check.check_update(
-            "pyDiffTools"
+        current_version, latest_version, is_outdated = (
+            update_check.check_update("pyDiffTools")
         )
         if is_outdated and latest_version is not None:
             print(

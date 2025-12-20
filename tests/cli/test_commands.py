@@ -1,11 +1,8 @@
-import importlib.util
 import os
 import subprocess
 import sys
 import time
-import types
 from pathlib import Path
-from pydifftools import command_line
 
 
 def _make_cli_env(tmp_path):
@@ -24,8 +21,7 @@ def _make_cli_env(tmp_path):
         "def argmin(*args, **kwargs):\n    return 0\n"
     )
     (stub_dir / "psutil.py").write_text("pass\n")
-    bib_path = Path("/home/jmfranck/My Library.bib")
-    bib_path.parent.mkdir(parents=True, exist_ok=True)
+    bib_path = Path("~/testlib.bib").expanduser()
     bib_path.write_text("@book{dummy, title={Dummy}}\n")
     pandoc_script = bin_dir / "pandoc"
     pandoc_script.write_text(
