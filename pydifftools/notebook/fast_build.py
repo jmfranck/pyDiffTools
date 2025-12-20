@@ -240,32 +240,29 @@ def outputs_to_html(outputs: list[dict]) -> str:
 NOTEBOOK_CACHE_DIR = Path("_nbcache")
 
 
-def execute_code_blocks(
-    blocks: dict[str, list[tuple[str, str]]],
-) -> tuple[dict[tuple[str, int], str], dict[tuple[str, int], str]]:
-    """Run code blocks as Jupyter notebooks with caching.
-
-    Returns a tuple ``(outputs, code_map)`` where ``outputs`` maps each
-    ``(source file, index)`` to the executed HTML output and ``code_map`` maps
-    the same key to the original code string.
-    """
+def execute_code_blocks(blocks):
+    """Run code blocks as Jupyter notebooks with caching."""
     NOTEBOOK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    outputs: dict[tuple[str, int], str] = {}
-    code_map: dict[tuple[str, int], str] = {}
+    outputs = {}
+    code_map = {}
+    jobs = []
+
+    # Collect notebook chunks so we can present progress like (1/3).
     for src, cells in blocks.items():
         if not cells:
             continue
         codes = [c for c, _ in cells]
         md5s = [m for _, m in cells]
-        # Split execution into separate notebooks whenever a cell begins with
-        # ``%reset -f`` so that changing code after a reset only reruns the
-        # affected portion instead of the entire file.
         groups = []
         current_codes = []
         current_md5s = []
         current_indices = []
         for idx, code in enumerate(codes, start=1):
             stripped = code.lstrip()
+            # Split execution into separate notebooks whenever a cell
+            # begins with ``%reset -f`` so that changing code after a
+            # reset only reruns the affected portion instead of the entire
+            # file.
             if current_codes and stripped.startswith("%reset -f"):
                 groups.append((current_indices, current_codes, current_md5s))
                 current_codes = []
@@ -277,49 +274,67 @@ def execute_code_blocks(
         if current_codes:
             groups.append((current_indices, current_codes, current_md5s))
 
-        for group_indices, group_codes, group_md5s in groups:
-            hash_input = (src + ":" + "".join(group_md5s)).encode()
-            nb_hash = hashlib.md5(hash_input).hexdigest()
-            nb_path = NOTEBOOK_CACHE_DIR / f"{nb_hash}.ipynb"
-            if nb_path.exists():
-                print(f"Reading cached output for {src} from {nb_path}!")
-                nb = nbformat.read(nb_path, as_version=4)
-            else:
-                print(f"Generating notebook for {src} at {nb_path}:")
-                nb = nbformat.v4.new_notebook()
-                nb.cells = [nbformat.v4.new_code_cell(c) for c in group_codes]
-                ep = LoggingExecutePreprocessor(
-                    kernel_name="python3", timeout=10800, allow_errors=True
-                )
-                try:
-                    ep.preprocess(
-                        nb, {"metadata": {"path": str(Path(src).parent)}}
-                    )
-                except Exception as e:
-                    tb = traceback.format_exc()
-                    if nb.cells:
-                        nb.cells[0].outputs = [
+        total_groups = len(groups)
+        for group_idx, data in enumerate(groups, start=1):
+            jobs.append((src, total_groups, group_idx, data, codes))
+
+    def run_job(job):
+        src, total_groups, group_idx, group_data, codes = job
+        group_indices, group_codes, group_md5s = group_data
+        hash_input = (src + ":" + "".join(group_md5s)).encode()
+        nb_hash = hashlib.md5(hash_input).hexdigest()
+        nb_path = NOTEBOOK_CACHE_DIR / f"{nb_hash}.ipynb"
+        if nb_path.exists():
+            print(f"Reading cached output for {src} from {nb_path}!")
+            nb = nbformat.read(nb_path, as_version=4)
+        else:
+            # Report progress with the chunk count for this source.
+            print(
+                f"Generating notebook ({group_idx}/{total_groups}) "
+                f"for {src} at {nb_path}:"
+            )
+            nb = nbformat.v4.new_notebook()
+            nb.cells = [nbformat.v4.new_code_cell(c) for c in group_codes]
+            ep = LoggingExecutePreprocessor(
+                kernel_name="python3", timeout=10800, allow_errors=True
+            )
+            try:
+                ep.preprocess(nb, {"metadata": {"path": str(Path(src).parent)}})
+            except Exception as e:
+                tb = traceback.format_exc()
+                if nb.cells:
+                    nb.cells[0].outputs = [
+                        nbformat.v4.new_output(
+                            output_type="error",
+                            ename=type(e).__name__,
+                            evalue=str(e),
+                            traceback=tb.splitlines(),
+                        )
+                    ]
+                    for cell in nb.cells[1:]:
+                        cell.outputs = [
                             nbformat.v4.new_output(
-                                output_type="error",
-                                ename=type(e).__name__,
-                                evalue=str(e),
-                                traceback=tb.splitlines(),
+                                output_type="stream",
+                                name="stderr",
+                                text="previous cell failed to execute\n",
                             )
                         ]
-                        for cell in nb.cells[1:]:
-                            cell.outputs = [
-                                nbformat.v4.new_output(
-                                    output_type="stream",
-                                    name="stderr",
-                                    text="previous cell failed to execute\n",
-                                )
-                            ]
-                nbformat.write(nb, nb_path)
+            nbformat.write(nb, nb_path)
+
+        return src, group_indices, nb, codes
+
+    # Execute notebook chunks concurrently so long-running groups do not block.
+    max_workers = max(1, min(len(jobs), 4))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [pool.submit(run_job, job) for job in jobs]
+        for future in as_completed(futures):
+            src, group_indices, nb, codes = future.result()
             for offset, cell in enumerate(nb.cells):
                 html = outputs_to_html(cell.get("outputs", []))
                 idx = group_indices[offset]
                 outputs[(src, idx)] = html
                 code_map[(src, idx)] = codes[idx - 1]
+
     return outputs, code_map
 
 
@@ -1073,9 +1088,9 @@ def substitute_code_placeholders(
         if not missing_output and html:
             frags += lxml_html.fragments_fromstring(html)
         elif missing_output:
-            # Only show the placeholder when the notebook output entry is
-            # absent so executed cells that intentionally produce no output
-            # simply render the source code.
+            # Only show the placeholder when the notebook output entry is absent
+            # so executed cells that intentionally produce no output simply
+            # render the source code.
             waiting = lxml_html.fragment_fromstring(
                 '<div style="color:red;font-weight:bold">'
                 f"Running notebook {src}..."
@@ -1164,6 +1179,16 @@ def build_all(webtex: bool = False, changed_paths=None):
     stage_files = sorted(stage_set)
     # phase 1: rebuild the modified sources into the staging tree
     code_blocks = mirror_and_modify(stage_files, anchors, roots)
+
+    # Start notebook execution immediately so it can run while pandoc renders.
+    notebook_executor = None
+    notebook_future = None
+    outputs = {}
+    code_map = {}
+    if code_blocks:
+        notebook_executor = ThreadPoolExecutor(max_workers=1)
+        notebook_future = notebook_executor.submit(execute_code_blocks, code_blocks)
+
     order = graph.render_order()
     render_targets = [f for f in order if f in stage_set]
     if render_targets:
@@ -1191,11 +1216,12 @@ def build_all(webtex: bool = False, changed_paths=None):
     graph.update_checksums(checksums)
     save_checksums(checksums)
 
-    outputs = {}
-    code_map = {}
-    # phase 2: execute notebooks and insert code output for the staged pages
-    if code_blocks:
-        outputs, code_map = execute_code_blocks(code_blocks)
+    # phase 2: insert whatever notebook output is available into staged pages
+    if notebook_future and notebook_future.done():
+        outputs, code_map = notebook_future.result()
+        notebook_executor.shutdown(wait=False)
+        notebook_executor = None
+        notebook_future = None
     for f in stage_files:
         html_file = (BUILD_DIR / f).with_suffix(".html")
         if html_file.exists():
@@ -1220,17 +1246,37 @@ def build_all(webtex: bool = False, changed_paths=None):
         # display tree that the web server presents.
         postprocess_html(dest_html, BUILD_DIR, DISPLAY_DIR)
 
+    # phase 4: wait for notebooks to finish, then refresh staged and served
+    # pages with the completed outputs so the browser updates when work ends.
+    if notebook_future:
+        outputs, code_map = notebook_future.result()
+        notebook_executor.shutdown(wait=False)
+        for f in stage_files:
+            html_file = (BUILD_DIR / f).with_suffix(".html")
+            if html_file.exists():
+                substitute_code_placeholders(html_file, outputs, code_map)
+        for target in sorted(display_targets):
+            src_html = (BUILD_DIR / target).with_suffix(".html")
+            dest_html = (DISPLAY_DIR / target).with_suffix(".html")
+            if not src_html.exists():
+                continue
+            dest_html.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_html, dest_html)
+            postprocess_html(dest_html, BUILD_DIR, DISPLAY_DIR)
+
     pages = []
     for qmd in render_files:
         html_file = (DISPLAY_DIR / qmd).with_suffix(".html")
         if html_file.exists():
             sections = parse_headings(html_file)
-            pages.append({
-                "file": qmd,
-                "href": html_file.name,
-                "title": read_title(Path(qmd)),
-                "sections": sections,
-            })
+            pages.append(
+                {
+                    "file": qmd,
+                    "href": html_file.name,
+                    "title": read_title(Path(qmd)),
+                    "sections": sections,
+                }
+            )
 
     for page in pages:
         html_file = (DISPLAY_DIR / page["file"]).with_suffix(".html")
