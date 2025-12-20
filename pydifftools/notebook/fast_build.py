@@ -19,7 +19,10 @@ from pydifftools.command_registry import register_command
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers.polling import PollingObserver as Observer
 from selenium import webdriver
-from selenium.common.exceptions import WebDriverException, NoSuchWindowException
+from selenium.common.exceptions import (
+    WebDriverException,
+    NoSuchWindowException,
+)
 from jinja2 import Environment, FileSystemLoader
 import nbformat
 from nbconvert.preprocessors import ExecutePreprocessor
@@ -1048,9 +1051,9 @@ def substitute_code_placeholders(
         if not missing_output and html:
             frags += lxml_html.fragments_fromstring(html)
         elif missing_output:
-            # Only show the placeholder when the notebook output entry is absent
-            # so executed cells that intentionally produce no output simply
-            # render the source code.
+            # Only show the placeholder when the notebook output entry is
+            # absent so executed cells that intentionally produce no output
+            # simply render the source code.
             waiting = lxml_html.fragment_fromstring(
                 '<div style="color:red;font-weight:bold">'
                 f"Running notebook {src}..."
@@ -1200,14 +1203,12 @@ def build_all(webtex: bool = False, changed_paths=None):
         html_file = (DISPLAY_DIR / qmd).with_suffix(".html")
         if html_file.exists():
             sections = parse_headings(html_file)
-            pages.append(
-                {
-                    "file": qmd,
-                    "href": html_file.name,
-                    "title": read_title(Path(qmd)),
-                    "sections": sections,
-                }
-            )
+            pages.append({
+                "file": qmd,
+                "href": html_file.name,
+                "title": read_title(Path(qmd)),
+                "sections": sections,
+            })
 
     for page in pages:
         html_file = (DISPLAY_DIR / page["file"]).with_suffix(".html")
@@ -1229,7 +1230,8 @@ class BrowserReloader:
     def init_browser(self):
         if webdriver is None:
             raise ImportError(
-                "Browser refresh support requires the optional 'selenium' package."
+                "Browser refresh support requires the optional 'selenium'"
+                " package."
             )
         try:
             self.browser = webdriver.Chrome()

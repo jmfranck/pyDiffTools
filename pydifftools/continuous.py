@@ -99,7 +99,7 @@ class Handler(FileSystemEventHandler):
             self.append_autorefresh()
             try:
                 self.firefox.refresh()
-            except selenium.common.exceptions.WebDriverException:
+            except WebDriverException:
                 print(
                     "I'm quitting!! You probably suspended the computer, which"
                     " seems to freak selenium out.  Just restart"

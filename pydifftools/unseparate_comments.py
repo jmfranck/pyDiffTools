@@ -1,5 +1,5 @@
 import re
-from .comment_functions import generate_alphabetnumber, matchingbrackets
+from .comment_functions import matchingbrackets
 
 
 def tex_unsepcomments(texfile):
@@ -45,7 +45,8 @@ def tex_unsepcomments(texfile):
             starthighlight, b = matchingbrackets(content, a, "{")
             highlight = content[starthighlight + 1 : b]
             print(
-                "found command \\%s with highlight {%s} and going to add content {%s}"
+                "found command \\%s with highlight {%s} and going to add"
+                " content {%s}"
                 % (list_of_commands[j], highlight, list_of_content[j])
             )
             if len(highlight) > 0:
