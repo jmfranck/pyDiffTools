@@ -70,6 +70,21 @@ def run_pandoc(filename, html_file):
         with open(html_file, "w", encoding="utf-8") as fp:
             fp.write(text)
         # }}}
+    with open(html_file, encoding="utf-8") as fp:
+        text = fp.read()
+    style_block = (
+        '\n<style id="pydifftools-hide-low-headers">\n'
+        "h5, h6 { display: none; }\n"
+        "</style>\n"
+    )
+    if style_block not in text:
+        # hide organizational headers while keeping higher levels visible
+        if "</head>" in text:
+            text = text.replace("</head>", style_block + "</head>", 1)
+        else:
+            text = style_block + text
+        with open(html_file, "w", encoding="utf-8") as fp:
+            fp.write(text)
     return
 
 
@@ -84,6 +99,7 @@ class Handler(FileSystemEventHandler):
         # apparently, selenium breaks stdin/out for tests, so it must be
         # imported here
         from selenium import webdriver
+
         self.firefox = webdriver.Chrome()
         run_pandoc(self.filename, self.html_file)
         if not os.path.exists(self.html_file):
@@ -93,6 +109,7 @@ class Handler(FileSystemEventHandler):
 
     def on_modified(self, event):
         from selenium.common.exceptions import WebDriverException
+
         if os.path.normpath(
             os.path.abspath(event.src_path)
         ) == os.path.normpath(os.path.abspath(self.filename)):
