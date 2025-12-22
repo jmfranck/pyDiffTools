@@ -4,7 +4,6 @@ import sys
 import time
 from pathlib import Path
 
-
 def _make_cli_env(tmp_path):
     repo_root = Path(__file__).resolve().parents[2]
     env = os.environ.copy()

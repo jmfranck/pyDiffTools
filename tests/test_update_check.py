@@ -4,7 +4,6 @@ import os
 import time
 import urllib.error
 
-
 from pydifftools import update_check
 from pydifftools import command_line
 
