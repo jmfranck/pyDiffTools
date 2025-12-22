@@ -1,8 +1,8 @@
-import pathlib
 import textwrap
 import yaml
 
 from pydifftools.flowchart.graph import write_dot_from_yaml
+
 
 def test_multiline_strings_use_block_style(tmp_path):
     # Replaced invalid single-line block YAML with valid multi-line YAML
@@ -11,7 +11,8 @@ def test_multiline_strings_use_block_style(tmp_path):
           Example:
             children: []
             parents: []
-            text: "Line one\\n \\n\\n <font point-size=\\"12\\">\\nSecond paragraph"
+            text: "Line one\\n \\n\\n <font point-size=\\"12\\">\\nSecond para\
+graph"
         """).strip()
 
     yaml_path = tmp_path / "graph.yaml"
