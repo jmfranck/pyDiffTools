@@ -1051,9 +1051,9 @@ def substitute_code_placeholders(
         if not missing_output and html:
             frags += lxml_html.fragments_fromstring(html)
         elif missing_output:
-            # Only show the placeholder when the notebook output entry is absent
-            # so executed cells that intentionally produce no output simply
-            # render the source code.
+            # Only show the placeholder when the notebook output entry is
+            # absent so executed cells that intentionally produce no output
+            # simply render the source code.
             waiting = lxml_html.fragment_fromstring(
                 '<div style="color:red;font-weight:bold">'
                 f"Running notebook {src}..."
@@ -1217,14 +1217,12 @@ def build_all(webtex: bool = False, changed_paths=None):
             continue
         if html_file.exists():
             sections = parse_headings(html_file)
-            pages.append(
-                {
-                    "file": qmd,
-                    "href": html_file.name,
-                    "title": read_title(source_path),
-                    "sections": sections,
-                }
-            )
+            pages.append({
+                "file": qmd,
+                "href": html_file.name,
+                "title": read_title(source_path),
+                "sections": sections,
+            })
 
     for page in pages:
         html_file = (DISPLAY_DIR / page["file"]).with_suffix(".html")
