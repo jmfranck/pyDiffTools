@@ -85,6 +85,14 @@ def test_tex2qmd_cli(tmp_path):
     proc = subprocess.run(
         cmd, capture_output=True, text=True, env=env, cwd=tmp_path
     )
+    # --- NEW DEBUGGING LINES ---
+    if proc.returncode != 0:
+        print("--- Subprocess STDOUT ---")
+        print(proc.stdout)
+        print("--- Subprocess STDERR ---")
+        print(proc.stderr)
+        print("-------------------------")
+    # ---------------------------
     assert proc.returncode == 0
     assert target.with_suffix(".qmd").exists()
 
