@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 from pydifftools.continuous import run_pandoc
 
+
 def _make_cli_env(tmp_path):
     repo_root = Path(__file__).resolve().parents[2]
     env = os.environ.copy()
@@ -26,18 +27,16 @@ def _make_cli_env(tmp_path):
     bib_path.write_text("@book{dummy, title={Dummy}}\n")
     pandoc_script = bin_dir / "pandoc"
     pandoc_script.write_text(
-        "#!/usr/bin/env python3\n"
-        "import sys, pathlib\n"
-        "args = sys.argv[1:]\n"
-        "out_index = args.index('-o') + 1 if '-o' in args else None\n"
-        "out = args[out_index] if out_index is not None else 'out.html'\n"
-        "inputs = [j for j in args if not j.startswith('-') and j != out]\n"
-        "src = inputs[-1] if inputs else ''\n"
-        "data = pathlib.Path(src).read_text() if src else ''\n"
-        "html = '<html><head><title>stub</title></head><body>' + data + '</body></html>'\n"
-        "path = pathlib.Path(out)\n"
-        "path.parent.mkdir(parents=True, exist_ok=True)\n"
-        "path.write_text(html)\n"
+        "#!/usr/bin/env python3\nimport sys, pathlib\nargs ="
+        " sys.argv[1:]\nout_index = args.index('-o') + 1 if '-o' in args else"
+        " None\nout = args[out_index] if out_index is not None else"
+        " 'out.html'\ninputs = [j for j in args if not j.startswith('-') and j"
+        " != out]\nsrc = inputs[-1] if inputs else ''\ndata ="
+        " pathlib.Path(src).read_text() if src else ''\nhtml ="
+        " '<html><head><title>stub</title></head><body>' + data +"
+        " '</body></html>'\npath ="
+        " pathlib.Path(out)\npath.parent.mkdir(parents=True,"
+        " exist_ok=True)\npath.write_text(html)\n"
     )
     pandoc_script.chmod(0o755)
     crossref_script = bin_dir / "pandoc-crossref"
@@ -129,7 +128,9 @@ def test_qmdinit_and_qmdb(tmp_path):
 
 def test_markdown_outline_reorder(tmp_path):
     env = _make_cli_env(tmp_path)
-    sample = Path(__file__).resolve().parents[1] / "fixtures" / "md" / "sample.md"
+    sample = (
+        Path(__file__).resolve().parents[1] / "fixtures" / "md" / "sample.md"
+    )
     target = tmp_path / "sample.md"
     target.write_text(sample.read_text())
     cmd_extract = [
@@ -139,7 +140,9 @@ def test_markdown_outline_reorder(tmp_path):
         "xomd",
         str(target),
     ]
-    proc_extract = subprocess.run(cmd_extract, capture_output=True, text=True, env=env)
+    proc_extract = subprocess.run(
+        cmd_extract, capture_output=True, text=True, env=env
+    )
     assert proc_extract.returncode == 0
     outline_path = tmp_path / "sample_outline.md"
     assert outline_path.exists()
@@ -157,7 +160,9 @@ def test_markdown_outline_reorder(tmp_path):
         "xomdreorder",
         str(target),
     ]
-    proc_reorder = subprocess.run(cmd_reorder, capture_output=True, text=True, env=env)
+    proc_reorder = subprocess.run(
+        cmd_reorder, capture_output=True, text=True, env=env
+    )
     assert proc_reorder.returncode == 0
     content = target.read_text()
     assert content.index("## Second Topic") < content.index("## First Topic")

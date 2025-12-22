@@ -34,7 +34,8 @@ class doc_contents_class(object):
             }
         # map indentation back to section type for outline parsing
         self.inv_prefix = {
-            (level - 1) * "\t": section for section, level in self.level_numbers.items()
+            (level - 1) * "\t": section
+            for section, level in self.level_numbers.items()
         }
         self.format_type = format_type
 
@@ -50,7 +51,7 @@ class doc_contents_class(object):
         "set the info from a pickle"
         self.contents = d["contents"]
         self.types = d["types"]
-        self._aliases = {} # doesn't exist, but still needed
+        self._aliases = {}  # doesn't exist, but still needed
         self._reordering_started = False
         self._processed_titles = []
         if "format_type" in d:
@@ -73,9 +74,12 @@ class doc_contents_class(object):
 
     def __str__(self):
         if len(self._processed_titles) > 0:
-            raise ValueError("the following section"
-            " titles were not utilized -- this program is"
-            " for reordering, not dropping!:\n"+str(self._processed_titles))
+            raise ValueError(
+                "the following section"
+                " titles were not utilized -- this program is"
+                " for reordering, not dropping!:\n"
+                + str(self._processed_titles)
+            )
         retval = ""
         for j in self.contents.keys():
             if self.types[j] != "header":
@@ -103,8 +107,9 @@ class doc_contents_class(object):
 
     def outline_in_order(self, thisline):
         if not self._reordering_started:
-            self._processed_titles = [j for j in self.contents.keys()
-                    if self.types[j] != 'header']
+            self._processed_titles = [
+                j for j in self.contents.keys() if self.types[j] != "header"
+            ]
             self._reordering_started = True
         ilevel = 0
         spacelevel = 0
@@ -125,10 +130,15 @@ class doc_contents_class(object):
         if not hitmarker:
             raise ValueError("somehow, there wasn't a * marker!")
         if title not in self.contents.keys():
-            best_match, match_quality = process.extractOne(title, self.contents.keys())
-            yesorno = input(f"didn't find\n\t{title}\nin keys, maybe you want\n\t{best_match}\nsay y or n")
-            if yesorno == 'y':
-                self._aliases[best_match] = title # will be replaced later
+            best_match, match_quality = process.extractOne(
+                title, self.contents.keys()
+            )
+            yesorno = input(
+                f"didn't find\n\t{title}\nin keys, maybe you"
+                f" want\n\t{best_match}\nsay y or n"
+            )
+            if yesorno == "y":
+                self._aliases[best_match] = title  # will be replaced later
                 title = best_match
             else:
                 raise ValueError("problem with replacement")

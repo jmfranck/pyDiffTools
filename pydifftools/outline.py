@@ -88,13 +88,15 @@ def xo(arguments):
 
 
 @register_command(
-    "Save markdown file as outline, with filename_outline.pickle storing content",
+    "Save markdown file as outline, with filename_outline.pickle storing"
+    " content",
     " and filename_outline.md giving outline.",
 )
 def xomd(arguments):
     assert len(arguments) == 1
     filename = arguments[0]
-    # read a markdown file and capture headings while keeping content for reordering
+    # read a markdown file and capture headings while keeping content for
+    # reordering
     basename = filename.replace(".md", "")
     header_re = re.compile(r"^(#{1,6})\s+(.*)")
     underline_re = {
