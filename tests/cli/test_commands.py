@@ -6,7 +6,6 @@ from pathlib import Path
 from unittest.mock import patch
 from pydifftools.continuous import run_pandoc
 
-
 def _make_cli_env(tmp_path):
     repo_root = Path(__file__).resolve().parents[2]
     env = os.environ.copy()
@@ -25,20 +24,6 @@ def _make_cli_env(tmp_path):
     (stub_dir / "psutil.py").write_text("pass\n")
     bib_path = Path("~/testlib.bib").expanduser()
     bib_path.write_text("@book{dummy, title={Dummy}}\n")
-    pandoc_script = bin_dir / "pandoc"
-    pandoc_script.write_text(
-        "#!/usr/bin/env python3\nimport sys, pathlib\nargs ="
-        " sys.argv[1:]\nout_index = args.index('-o') + 1 if '-o' in args else"
-        " None\nout = args[out_index] if out_index is not None else"
-        " 'out.html'\ninputs = [j for j in args if not j.startswith('-') and j"
-        " != out]\nsrc = inputs[-1] if inputs else ''\ndata ="
-        " pathlib.Path(src).read_text() if src else ''\nhtml ="
-        " '<html><head><title>stub</title></head><body>' + data +"
-        " '</body></html>'\npath ="
-        " pathlib.Path(out)\npath.parent.mkdir(parents=True,"
-        " exist_ok=True)\npath.write_text(html)\n"
-    )
-    pandoc_script.chmod(0o755)
     crossref_script = bin_dir / "pandoc-crossref"
     crossref_script.write_text(
         "#!/usr/bin/env python3\nimport sys\n"
@@ -179,10 +164,26 @@ def test_markdown_outline_reorder(tmp_path):
 
 def test_cpb_hides_low_headers(tmp_path):
     env = _make_cli_env(tmp_path)
+    # Add a citation to the markdown to
+    # prevent CiteprocParseError
+    markdown_content = (
+        "# Visible\n\n"
+        "This text includes a reference [@dummy_ref].\n\n"
+        "##### Hidden Header\nBody text.\n"
+    )
     markdown_file = tmp_path / "notes.md"
-    markdown_file.write_text("# Visible\n\n##### Hidden Header\nBody text.\n")
-    (tmp_path / "references.bib").write_text("")
-    (tmp_path / "style.csl").write_text("")
+    markdown_file.write_text(markdown_content)
+    
+    # Provide minimal valid BibTeX content
+    # (must match the reference key)
+    (tmp_path / "references.bib").write_text(
+        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
+    )
+    # Provide minimal valid CSL XML content
+    (tmp_path / "style.csl").write_text(
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<style xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
+    )
     html_file = tmp_path / "notes.html"
     cwd = os.getcwd()
     os.chdir(tmp_path)
