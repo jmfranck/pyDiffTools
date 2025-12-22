@@ -2,6 +2,8 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
+from pydifftools.continuous import run_pandoc
 
 
 def _make_cli_env(tmp_path):
@@ -14,12 +16,15 @@ def _make_cli_env(tmp_path):
         "#!/usr/bin/env python3\n"
         "import sys, pathlib\n"
         "args = sys.argv[1:]\n"
-        "out = args[args.index('-o') + 1] if '-o' in args else 'out.html'\n"
-        "src = args[0] if args else ''\n"
+        "out_index = args.index('-o') + 1 if '-o' in args else None\n"
+        "out = args[out_index] if out_index is not None else 'out.html'\n"
+        "inputs = [j for j in args if not j.startswith('-') and j != out]\n"
+        "src = inputs[-1] if inputs else ''\n"
         "data = pathlib.Path(src).read_text() if src else ''\n"
+        "html = '<html><head><title>stub</title></head><body>' + data + '</body></html>'\n"
         "path = pathlib.Path(out)\n"
         "path.parent.mkdir(parents=True, exist_ok=True)\n"
-        "path.write_text(data or '<html><body>stub</body></html>')\n"
+        "path.write_text(html)\n"
     )
     pandoc_script.chmod(0o755)
     crossref_script = bin_dir / "pandoc-crossref"
@@ -95,3 +100,59 @@ def test_qmdinit_and_qmdb(tmp_path):
     assert proc_build.returncode == 0
     built = project_dir / "_build" / "project1" / "subproject1" / "tasks.html"
     assert built.exists()
+
+
+def test_markdown_outline_reorder(tmp_path):
+    env = _make_cli_env(tmp_path)
+    sample = Path(__file__).resolve().parents[1] / "fixtures" / "md" / "sample.md"
+    target = tmp_path / "sample.md"
+    target.write_text(sample.read_text())
+    cmd_extract = [
+        sys.executable,
+        "-m",
+        "pydifftools.command_line",
+        "xomd",
+        str(target),
+    ]
+    proc_extract = subprocess.run(cmd_extract, capture_output=True, text=True, env=env)
+    assert proc_extract.returncode == 0
+    outline_path = tmp_path / "sample_outline.md"
+    assert outline_path.exists()
+    outline_path.write_text(
+        "*\tProject Notes\n"
+        "\t*\tSecond Topic\n"
+        "\t*\tDeep Dive\n"
+        "\t\t\t\t*\tHidden Notes\n"
+        "\t*\tFirst Topic\n"
+    )
+    cmd_reorder = [
+        sys.executable,
+        "-m",
+        "pydifftools.command_line",
+        "xomdreorder",
+        str(target),
+    ]
+    proc_reorder = subprocess.run(cmd_reorder, capture_output=True, text=True, env=env)
+    assert proc_reorder.returncode == 0
+    content = target.read_text()
+    assert content.index("## Second Topic") < content.index("## First Topic")
+    assert "##### Hidden Notes" in content
+
+
+def test_cpb_hides_low_headers(tmp_path):
+    env = _make_cli_env(tmp_path)
+    markdown_file = tmp_path / "notes.md"
+    markdown_file.write_text("# Visible\n\n##### Hidden Header\nBody text.\n")
+    (tmp_path / "references.bib").write_text("")
+    (tmp_path / "style.csl").write_text("")
+    html_file = tmp_path / "notes.html"
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with patch.dict(os.environ, env, clear=False):
+            run_pandoc(str(markdown_file), str(html_file))
+    finally:
+        os.chdir(cwd)
+    html_content = html_file.read_text()
+    assert "h5, h6 { display: none; }" in html_content
+    assert "h4" not in html_content.split("display:")[-1]

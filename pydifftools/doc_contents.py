@@ -3,21 +3,40 @@ from fuzzywuzzy import process
 
 
 class doc_contents_class(object):
-    prefix = {
-        "section": "",
-        "subsection": "\t",
-        "subsubsection": 2 * "\t",
-        "paragraph": 3 * "\t",
-    }
-    inv_prefix = {v: k for k, v in prefix.items()}
-
-    def __init__(self):
+    def __init__(self, format_type="latex"):
         self.contents = OrderedDict()
         self.contents["header"] = ""
         self.types = {}
         self.types["header"] = "header"
         self._reordering_started = False
         self._aliases = {}
+        self._processed_titles = []
+        self.set_format(format_type)
+
+    def set_format(self, format_type):
+        if format_type == "markdown":
+            # markdown levels go deeper, so include subparagraph mapping
+            self.level_numbers = {
+                "section": 1,
+                "subsection": 2,
+                "subsubsection": 3,
+                "paragraph": 4,
+                "subparagraph": 5,
+            }
+        else:
+            # default to latex behavior
+            self.level_numbers = {
+                "section": 1,
+                "subsection": 2,
+                "subsubsection": 3,
+                "paragraph": 4,
+                "subparagraph": 5,
+            }
+        # map indentation back to section type for outline parsing
+        self.inv_prefix = {
+            (level - 1) * "\t": section for section, level in self.level_numbers.items()
+        }
+        self.format_type = format_type
 
     def start_sec(self, thistype, thistitle):
         assert thistitle not in self.contents.keys(), (
@@ -33,6 +52,11 @@ class doc_contents_class(object):
         self.types = d["types"]
         self._aliases = {} # doesn't exist, but still needed
         self._reordering_started = False
+        self._processed_titles = []
+        if "format_type" in d:
+            self.set_format(d["format_type"])
+        else:
+            self.set_format("latex")
         return
 
     def __getstate__(self):
@@ -40,6 +64,7 @@ class doc_contents_class(object):
         return {
             "contents": self.contents,
             "types": self.types,
+            "format_type": self.format_type,
         }
 
     def __iadd__(self, value):
@@ -57,7 +82,11 @@ class doc_contents_class(object):
                 new_name = j
                 if j in self._aliases.keys():
                     new_name = self._aliases[j]
-                retval += f"\\{self.types[j]}{{{new_name}}}"
+                if self.format_type == "markdown":
+                    retval += "#" * self.level_numbers[self.types[j]]
+                    retval += f" {new_name}\n\n"
+                else:
+                    retval += f"\\{self.types[j]}{{{new_name}}}"
             retval += f"{self.contents[j]}"
         return retval
 
@@ -66,8 +95,9 @@ class doc_contents_class(object):
         retval = []
         for j in self.contents.keys():
             if self.types[j] != "header":
-                thistitle = (self.prefix[self.types[j]] + "\t").join(j.split("\n"))
-                retval.append(self.prefix[self.types[j]] + "*\t" + thistitle)
+                indent = (self.level_numbers[self.types[j]] - 1) * "\t"
+                thistitle = (indent + "\t").join(j.split("\n"))
+                retval.append(indent + "*\t" + thistitle)
         self._reordering_started = False
         return "\n".join(retval)
 

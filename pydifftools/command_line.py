@@ -687,15 +687,6 @@ def pmd(arguments):
     p1.wait()
 
 
-@register_command(
-    "Save tex file as outline, with filename_outline.pickle storing content"
-    " and filename_outline.md giving outline."
-)
-def xo(arguments):
-    assert len(arguments) == 1
-    outline.extract_outline(arguments[0])
-
-
 def build_parser():
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command")

@@ -71,6 +71,21 @@ def run_pandoc(filename, html_file):
         with open(html_file, "w", encoding="utf-8") as fp:
             fp.write(text)
         # }}}
+    with open(html_file, encoding="utf-8") as fp:
+        text = fp.read()
+    style_block = (
+        "\n<style id=\"pydifftools-hide-low-headers\">\n"
+        "h5, h6 { display: none; }\n"
+        "</style>\n"
+    )
+    if style_block not in text:
+        # hide organizational headers while keeping higher levels visible
+        if "</head>" in text:
+            text = text.replace("</head>", style_block + "</head>", 1)
+        else:
+            text = style_block + text
+        with open(html_file, "w", encoding="utf-8") as fp:
+            fp.write(text)
     return
 
 
