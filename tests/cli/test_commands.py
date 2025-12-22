@@ -164,8 +164,9 @@ def test_markdown_outline_reorder(tmp_path):
 
 def test_cpb_hides_low_headers(tmp_path):
     env = _make_cli_env(tmp_path)
-    # Add a citation to the markdown to
-    # prevent CiteprocParseError
+    
+    # 1. Provide Markdown with a citation to avoid 'No citation element'
+    # errors
     markdown_content = (
         "# Visible\n\n"
         "This text includes a reference [@dummy_ref].\n\n"
@@ -174,16 +175,35 @@ def test_cpb_hides_low_headers(tmp_path):
     markdown_file = tmp_path / "notes.md"
     markdown_file.write_text(markdown_content)
     
-    # Provide minimal valid BibTeX content
-    # (must match the reference key)
+    # 2. Provide minimal valid BibTeX content
     (tmp_path / "references.bib").write_text(
         "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
     )
-    # Provide minimal valid CSL XML content
-    (tmp_path / "style.csl").write_text(
+    
+    # 3. Provide a VALID minimal CSL file. 
+    # An empty <style> tag causes 'CiteprocParseError: No citation
+    # element present'.
+    csl_content = (
         '<?xml version="1.0" encoding="utf-8"?>\n'
-        '<style xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
+        '<style xmlns="http://purl.org/net/xbiblio/csl" version="1.0" class="in-text">\n'
+        '  <info>\n'
+        '    <title>Minimal</title>\n'
+        '    <id>minimal</id>\n'
+        '    <updated>2023-01-01T00:00:00Z</updated>\n'
+        '  </info>\n'
+        '  <citation>\n'
+        '    <layout>\n'
+        '      <text variable="title"/>\n'
+        '    </layout>\n'
+        '  </citation>\n'
+        '  <bibliography>\n'
+        '    <layout>\n'
+        '      <text variable="title"/>\n'
+        '    </layout>\n'
+        '  </bibliography>\n'
+        '</style>'
     )
+    (tmp_path / "style.csl").write_text(csl_content)
     html_file = tmp_path / "notes.html"
     cwd = os.getcwd()
     os.chdir(tmp_path)
