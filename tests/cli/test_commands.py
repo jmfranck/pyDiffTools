@@ -1,55 +1,8 @@
-import importlib.util
 import os
 import subprocess
 import sys
 import time
-import types
 from pathlib import Path
-
-# Provide a numpy stub so importing the CLI module does not pull heavy deps in
-# tests.
-if "numpy" not in sys.modules and importlib.util.find_spec("numpy") is None:
-    numpy_stub = types.ModuleType("numpy")
-    numpy_stub.array = lambda *args, **kwargs: []
-    numpy_stub.cumsum = lambda *args, **kwargs: []
-    numpy_stub.argmin = lambda *args, **kwargs: 0
-    sys.modules["numpy"] = numpy_stub
-
-if "pydifftools.separate_comments" not in sys.modules:
-    separate_stub = types.ModuleType("pydifftools.separate_comments")
-
-    def tex_sepcomments(*args, **kwargs):
-        return None
-
-    separate_stub.tex_sepcomments = tex_sepcomments
-    sys.modules["pydifftools.separate_comments"] = separate_stub
-
-if "pydifftools.unseparate_comments" not in sys.modules:
-    unseparate_stub = types.ModuleType("pydifftools.unseparate_comments")
-
-    def tex_unsepcomments(*args, **kwargs):
-        return None
-
-    unseparate_stub.tex_unsepcomments = tex_unsepcomments
-    sys.modules["pydifftools.unseparate_comments"] = unseparate_stub
-
-if "pydifftools.continuous" not in sys.modules:
-    continuous_stub = types.ModuleType("pydifftools.continuous")
-
-    def watch(*args, **kwargs):
-        return None
-
-    continuous_stub.watch = watch
-    sys.modules["pydifftools.continuous"] = continuous_stub
-
-if "argcomplete" not in sys.modules:
-    argcomplete_stub = types.ModuleType("argcomplete")
-
-    def autocomplete(parser):
-        return None
-
-    argcomplete_stub.autocomplete = autocomplete
-    sys.modules["argcomplete"] = argcomplete_stub
 
 def _make_cli_env(tmp_path):
     repo_root = Path(__file__).resolve().parents[2]
@@ -67,8 +20,7 @@ def _make_cli_env(tmp_path):
         "def argmin(*args, **kwargs):\n    return 0\n"
     )
     (stub_dir / "psutil.py").write_text("pass\n")
-    bib_path = Path("/home/jmfranck/My Library.bib")
-    bib_path.parent.mkdir(parents=True, exist_ok=True)
+    bib_path = Path("~/testlib.bib").expanduser()
     bib_path.write_text("@book{dummy, title={Dummy}}\n")
     pandoc_script = bin_dir / "pandoc"
     pandoc_script.write_text(
