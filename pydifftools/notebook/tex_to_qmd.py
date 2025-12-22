@@ -273,10 +273,11 @@ def tex2qmd(tex):
         # matches Quarto defaults, but fall back to a standalone pandoc
         # installation when Quarto is not on PATH.
         quarto = shutil.which("quarto")
+        pandoc = shutil.which("pandoc")
         if quarto:
             cmd = [quarto, "pandoc"]
         else:
-            cmd = ["pandoc"]
+            cmd = [pandoc]
         cmd += [
             pre_path,
             "-f",
