@@ -5,8 +5,6 @@ import subprocess
 import sys
 import os
 import re
-import selenium
-from selenium import webdriver
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from .command_registry import register_command
@@ -34,7 +32,8 @@ def run_pandoc(filename, html_file):
         else:
             raise ValueError(
                 f"You have more than one (or no) {k} file in this directory!"
-                " Get rid of all but one! of " + "and".join(localfiles[k])
+                " Get rid of all but one! of "
+                + "and".join(localfiles[k])
             )
     command = [
         "pandoc",
@@ -71,6 +70,21 @@ def run_pandoc(filename, html_file):
         with open(html_file, "w", encoding="utf-8") as fp:
             fp.write(text)
         # }}}
+    with open(html_file, encoding="utf-8") as fp:
+        text = fp.read()
+    style_block = (
+        '\n<style id="pydifftools-hide-low-headers">\n'
+        "h5, h6 { display: none; }\n"
+        "</style>\n"
+    )
+    if style_block not in text:
+        # hide organizational headers while keeping higher levels visible
+        if "</head>" in text:
+            text = text.replace("</head>", style_block + "</head>", 1)
+        else:
+            text = style_block + text
+        with open(html_file, "w", encoding="utf-8") as fp:
+            fp.write(text)
     return
 
 
@@ -82,6 +96,10 @@ class Handler(FileSystemEventHandler):
         self.init_firefox()
 
     def init_firefox(self):
+        # apparently, selenium breaks stdin/out for tests, so it must be
+        # imported here
+        from selenium import webdriver
+
         self.firefox = webdriver.Chrome()
         run_pandoc(self.filename, self.html_file)
         if not os.path.exists(self.html_file):
@@ -90,6 +108,8 @@ class Handler(FileSystemEventHandler):
         self.firefox.get("file://" + os.path.abspath(self.html_file))
 
     def on_modified(self, event):
+        from selenium.common.exceptions import WebDriverException
+
         if os.path.normpath(
             os.path.abspath(event.src_path)
         ) == os.path.normpath(os.path.abspath(self.filename)):
@@ -97,7 +117,7 @@ class Handler(FileSystemEventHandler):
             self.append_autorefresh()
             try:
                 self.firefox.refresh()
-            except selenium.common.exceptions.WebDriverException:
+            except WebDriverException:
                 print(
                     "I'm quitting!! You probably suspended the computer, which"
                     " seems to freak selenium out.  Just restart"
@@ -136,7 +156,11 @@ position
             fp.write(all_data)
 
 
-def watch(filename):
+@register_command(
+    "continuous pandoc build.  Like latexmk, but for markdown!",
+    help={"filename": "Markdown or TeX file to watch for changes"},
+)
+def cpb(filename):
     observer = Observer()
     event_handler = Handler(filename, observer)
     observer.schedule(event_handler, path=".", recursive=False)
@@ -151,15 +175,7 @@ def watch(filename):
     observer.join()
 
 
-@register_command(
-    "continuous pandoc build.  Like latexmk, but for markdown!",
-    help={"filename": "Markdown or TeX file to watch for changes"},
-)
-def cpb(filename):
-    watch(filename)
-
-
 if __name__ == "__main__":
     filename = sys.argv[1]
-    watch(filename)
+    cpb(filename)
     # Open the HTML file in the default web browser

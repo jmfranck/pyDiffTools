@@ -7,4 +7,5 @@ __all__ = [
     "wrap_sentences",
     "rearrange_tex",
     "outline",
+    "update_check",
 ]
