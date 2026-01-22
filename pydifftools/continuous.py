@@ -187,19 +187,56 @@ position
             fp.write(all_data)
 
     def forward_search(self, search_text):
-        # Use the browser's built-in find (Ctrl+F) to highlight the text.
+        # Use Chromium DevTools search to locate text and scroll it into view.
         if not search_text:
             return
-        from selenium.webdriver.common.keys import Keys
-
-        body_elements = self.firefox.find_elements("tag name", "body")
-        if len(body_elements) == 0:
-            print("forward search could not focus the page for:", search_text)
+        search_result = self.firefox.execute_cdp_cmd(
+            "DOM.performSearch",
+            {
+                "query": search_text,
+                "includeUserAgentShadowDOM": True,
+            },
+        )
+        if search_result["resultCount"] == 0:
+            print("forward search did not find text:", search_text)
+            self.firefox.execute_cdp_cmd(
+                "DOM.discardSearchResults",
+                {"searchId": search_result["searchId"]},
+            )
             return
-        body = body_elements[0]
-        body.send_keys(Keys.CONTROL, "f")
-        body.send_keys(search_text)
-        body.send_keys(Keys.ENTER)
+        search_nodes = self.firefox.execute_cdp_cmd(
+            "DOM.getSearchResults",
+            {
+                "searchId": search_result["searchId"],
+                "fromIndex": 0,
+                "toIndex": 1,
+            },
+        )
+        if len(search_nodes["nodeIds"]) == 0:
+            print("forward search did not find nodes for:", search_text)
+            self.firefox.execute_cdp_cmd(
+                "DOM.discardSearchResults",
+                {"searchId": search_result["searchId"]},
+            )
+            return
+        resolved_node = self.firefox.execute_cdp_cmd(
+            "DOM.resolveNode",
+            {"nodeId": search_nodes["nodeIds"][0]},
+        )
+        # Scroll the first matched node into view using the DevTools runtime.
+        self.firefox.execute_cdp_cmd(
+            "Runtime.callFunctionOn",
+            {
+                "objectId": resolved_node["object"]["objectId"],
+                "functionDeclaration": (
+                    "function(){this.scrollIntoView({block: 'center'});}"
+                ),
+            },
+        )
+        self.firefox.execute_cdp_cmd(
+            "DOM.discardSearchResults",
+            {"searchId": search_result["searchId"]},
+        )
 
 
 @register_command(
