@@ -10,6 +10,7 @@ import re
 import nbformat
 import difflib
 import shutil
+import socket
 from pathlib import Path
 from . import (
     match_spaces,
@@ -17,7 +18,7 @@ from . import (
     outline,
     update_check,
 )
-from .continuous import cpb
+from .continuous import cpb, FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT
 from .wrap_sentences import wr as wrap_sentences_wr  # registers wrap command
 from .separate_comments import tex_sepcomments
 from .unseparate_comments import tex_unsepcomments
@@ -459,6 +460,23 @@ def fs(arguments):
     if os.name == "posix":
         cmd = ["wmctrl", "-a", basename + ".pdf"]
         os.system(" ".join(cmd))
+
+
+@register_command(
+    "markdown forward search, use with cpb to jump to text in the browser"
+)
+def mfs(text):
+    # Send the requested search text to the cpb socket listener.
+    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        client.connect((FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT))
+    except OSError as exc:
+        raise RuntimeError(
+            "Could not connect to cpb forward search socket. "
+            "Start cpb in the markdown directory first."
+        ) from exc
+    client.sendall(text.encode("utf-8"))
+    client.close()
 
 
 @register_command("Convert xml to xlsx")

@@ -5,10 +5,41 @@ import subprocess
 import sys
 import os
 import re
+import socket
+import threading
+import queue
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from .command_registry import register_command
 
+FORWARD_SEARCH_HOST = "127.0.0.1"
+FORWARD_SEARCH_PORT = 51235
+
+
+def forward_search_listener(stop_event, search_queue):
+    # Listen for markdown forward-search requests and queue them for cpb.
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind((FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT))
+    server.listen(5)
+    server.settimeout(1.0)
+    while not stop_event.is_set():
+        try:
+            connection, _ = server.accept()
+        except socket.timeout:
+            continue
+        except OSError:
+            break
+        with connection:
+            payload = b""
+            while True:
+                chunk = connection.recv(4096)
+                if not chunk:
+                    break
+                payload += chunk
+        if payload:
+            search_queue.put(payload.decode("utf-8"))
+    server.close()
 
 def run_pandoc(filename, html_file):
     if os.path.exists("MathJax-3.1.2"):
@@ -155,6 +186,64 @@ position
         with open(self.html_file, "w", encoding="utf-8") as fp:
             fp.write(all_data)
 
+    def forward_search(self, search_text):
+        # Highlight and scroll to the first matching text in the browser.
+        if not search_text:
+            return
+        script = """
+            var searchText = arguments[0];
+            var bodyText = document.body ? document.body.innerText : "";
+            if (!bodyText) {
+                return false;
+            }
+            var index = bodyText.indexOf(searchText);
+            if (index === -1) {
+                return false;
+            }
+            var range = document.createRange();
+            var selection = window.getSelection();
+            selection.removeAllRanges();
+            var nodeStack = [document.body];
+            var node = null;
+            var charIndex = 0;
+            var start = null;
+            var end = null;
+            while (nodeStack.length) {
+                node = nodeStack.pop();
+                if (node.nodeType === 3) {
+                    var nextCharIndex = charIndex + node.length;
+                    if (!start && index >= charIndex && index < nextCharIndex) {
+                        start = {node: node, offset: index - charIndex};
+                    }
+                    if (start && index + searchText.length <= nextCharIndex) {
+                        end = {
+                            node: node,
+                            offset: index + searchText.length - charIndex
+                        };
+                        break;
+                    }
+                    charIndex = nextCharIndex;
+                } else {
+                    var i = node.childNodes.length;
+                    while (i--) {
+                        nodeStack.push(node.childNodes[i]);
+                    }
+                }
+            }
+            if (!start || !end) {
+                return false;
+            }
+            range.setStart(start.node, start.offset);
+            range.setEnd(end.node, end.offset);
+            selection.addRange(range);
+            var rect = range.getBoundingClientRect();
+            window.scrollBy(0, rect.top - window.innerHeight / 3);
+            return true;
+        """
+        found = self.firefox.execute_script(script, search_text)
+        if not found:
+            print("forward search did not find text:", search_text)
+
 
 @register_command(
     "continuous pandoc build.  Like latexmk, but for markdown!",
@@ -163,16 +252,30 @@ position
 def cpb(filename):
     observer = Observer()
     event_handler = Handler(filename, observer)
+    search_queue = queue.Queue()
+    stop_event = threading.Event()
+    socket_thread = threading.Thread(
+        target=forward_search_listener,
+        args=(stop_event, search_queue),
+        daemon=True,
+    )
+    socket_thread.start()
     observer.schedule(event_handler, path=".", recursive=False)
     observer.start()
 
     try:
         while True:
             time.sleep(1)
+            while not search_queue.empty():
+                search_text = search_queue.get().strip()
+                if search_text:
+                    event_handler.forward_search(search_text)
     except KeyboardInterrupt:
+        stop_event.set()
         observer.stop()
 
     observer.join()
+    socket_thread.join()
 
 
 if __name__ == "__main__":
