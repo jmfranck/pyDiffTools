@@ -350,13 +350,39 @@ def _node_text_with_due(node):
     return formatted
 
 
-def _node_label(text, wrap_width: int = 55) -> str:
+def _node_label(text, wrap_width=55):
     if text is None:
         return ""
     return _format_label(text, wrap_width)
 
 
-def yaml_to_dot(data: Dict[str, Any], *, wrap_width: int = 55) -> str:
+def _append_node(lines, indent, node_name, data, wrap_width, order_by_date,
+                 sort_order):
+    # Add a node line with an optional sort hint so Graphviz keeps date order.
+    if node_name in data["nodes"]:
+        label = _node_label(
+            _node_text_with_due(data["nodes"][node_name]), wrap_width
+        )
+    else:
+        label = ""
+    if label:
+        if order_by_date:
+            lines.append(
+                f"{indent}{node_name} [label={label},"
+                f" sortv={sort_order[node_name]}];"
+            )
+        else:
+            lines.append(f"{indent}{node_name} [label={label}];")
+    else:
+        if order_by_date:
+            lines.append(
+                f"{indent}{node_name} [sortv={sort_order[node_name]}];"
+            )
+        else:
+            lines.append(f"{indent}{node_name};")
+
+
+def yaml_to_dot(data, wrap_width=55, order_by_date=False):
     lines = [
         "digraph G {",
         "    graph [",
@@ -374,50 +400,127 @@ def yaml_to_dot(data: Dict[str, Any], *, wrap_width: int = 55) -> str:
         "    ];",
         "    node [shape=box,width=0.5];",
     ]
-    nodes = data.get("nodes", {})
-    styles = data.get("styles", {})
+    if "nodes" not in data:
+        data["nodes"] = {}
+    if "styles" not in data:
+        data["styles"] = {}
+    ordered_names = None
+    sort_order = None
+    if order_by_date:
+        # Order nodes by due date so the graph renders boxes in calendar order.
+        order_pairs = []
+        for name in data["nodes"]:
+            due_date = date.max
+            if (
+                "due" in data["nodes"][name]
+                and data["nodes"][name]["due"] is not None
+            ):
+                if str(data["nodes"][name]["due"]).strip():
+                    due_date = parse_due_string(
+                        str(data["nodes"][name]["due"]).strip()
+                    ).date()
+            elif (
+                "orig_due" in data["nodes"][name]
+                and data["nodes"][name]["orig_due"] is not None
+            ):
+                if str(data["nodes"][name]["orig_due"]).strip():
+                    due_date = parse_due_string(
+                        str(data["nodes"][name]["orig_due"]).strip()
+                    ).date()
+            order_pairs.append((due_date, name))
+        # Capture a stable order and use sort values so Graphviz keeps it.
+        ordered_names = [
+            name
+            for due_date, name in sorted(
+                order_pairs, key=lambda item: (item[0], item[1])
+            )
+        ]
+        sort_order = {name: index for index, name in enumerate(ordered_names)}
     handled = set()
-    # group nodes by their declared style
-    style_members: Dict[str, List[str]] = {}
-    for name, node in nodes.items():
-        style = node.get("style")
-        if style:
-            style_members.setdefault(style, []).append(name)
+    # Group nodes by their declared style so they share subgraph attributes.
+    style_members = {}
+    for name in data["nodes"]:
+        if "style" in data["nodes"][name] and data["nodes"][name]["style"]:
+            style_members.setdefault(
+                data["nodes"][name]["style"], []
+            ).append(name)
 
-    for style_name, style_def in styles.items():
-        members = style_members.get(style_name, [])
-        if not members:
+    for style_name in data["styles"]:
+        if style_name not in style_members:
+            continue
+        if ordered_names is not None:
+            if not any(
+                name in style_members[style_name] for name in ordered_names
+            ):
+                continue
+        elif not style_members[style_name]:
             continue
         lines.append(f"    subgraph {style_name} {{")
-        attrs = style_def.get("attrs", {})
-        node_attrs = attrs.get("node")
-        if isinstance(node_attrs, list):
-            node_attrs = node_attrs[0]
-        if node_attrs:
-            attr_str = ", ".join(f"{k}={v}" for k, v in node_attrs.items())
-            lines.append(f"        node [{attr_str}];")
-        for node_name in members:
-            node = nodes.get(node_name, {})
-            label = _node_label(_node_text_with_due(node), wrap_width)
-            if label:
-                lines.append(f"        {node_name} [label={label}];")
+        if (
+            "attrs" in data["styles"][style_name]
+            and "node" in data["styles"][style_name]["attrs"]
+        ):
+            if isinstance(data["styles"][style_name]["attrs"]["node"], list):
+                attr_str = ", ".join(
+                    f"{k}={v}"
+                    for k, v in data["styles"][style_name]["attrs"]["node"][0].items()
+                )
             else:
-                lines.append(f"        {node_name};")
-            handled.add(node_name)
+                attr_str = ", ".join(
+                    f"{k}={v}"
+                    for k, v in data["styles"][style_name]["attrs"]["node"].items()
+                )
+            lines.append(f"        node [{attr_str}];")
+        if ordered_names is not None:
+            for node_name in [
+                name
+                for name in ordered_names
+                if name in style_members[style_name]
+            ]:
+                _append_node(
+                    lines,
+                    "        ",
+                    node_name,
+                    data,
+                    wrap_width,
+                    order_by_date,
+                    sort_order,
+                )
+                handled.add(node_name)
+        else:
+            for node_name in style_members[style_name]:
+                _append_node(
+                    lines,
+                    "        ",
+                    node_name,
+                    data,
+                    wrap_width,
+                    order_by_date,
+                    sort_order,
+                )
+                handled.add(node_name)
         lines.append("    };")
 
-    for name, node in nodes.items():
+    if ordered_names is None:
+        ordered_names = list(data["nodes"].keys())
+    for name in ordered_names:
         if name in handled:
             continue
-        label = _node_label(_node_text_with_due(node), wrap_width)
-        if label:
-            lines.append(f"    {name} [label={label}];")
-        else:
-            lines.append(f"    {name};")
-    # Edges
-    for name, node in nodes.items():
-        for child in node.get("children", []):
-            lines.append(f"    {name} -> {child};")
+        _append_node(
+            lines,
+            "    ",
+            name,
+            data,
+            wrap_width,
+            order_by_date,
+            sort_order,
+        )
+    if not order_by_date:
+        # Edges are omitted when ordering by date so boxes stand alone.
+        for name in data["nodes"]:
+            if "children" in data["nodes"][name]:
+                for child in data["nodes"][name]["children"]:
+                    lines.append(f"    {name} -> {child};")
     lines.append("}")
     return "\n".join(lines)
 
@@ -436,15 +539,17 @@ def save_graph_yaml(path: str | Path, data: Dict[str, Any]) -> None:
 
 
 def write_dot_from_yaml(
-    yaml_path: str | Path,
-    dot_path: str | Path,
-    *,
-    update_yaml: bool = True,
-    wrap_width: int = 55,
-    old_data: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    yaml_path,
+    dot_path,
+    update_yaml=True,
+    wrap_width=55,
+    order_by_date=False,
+    old_data=None,
+):
     data = load_graph_yaml(str(yaml_path), old_data=old_data)
-    dot_str = yaml_to_dot(data, wrap_width=wrap_width)
+    dot_str = yaml_to_dot(
+        data, wrap_width=wrap_width, order_by_date=order_by_date
+    )
     Path(dot_path).write_text(dot_str)
     if update_yaml:
         save_graph_yaml(str(yaml_path), data)
