@@ -187,62 +187,19 @@ position
             fp.write(all_data)
 
     def forward_search(self, search_text):
-        # Highlight and scroll to the first matching text in the browser.
+        # Use the browser's built-in find (Ctrl+F) to highlight the text.
         if not search_text:
             return
-        script = """
-            var searchText = arguments[0];
-            var bodyText = document.body ? document.body.innerText : "";
-            if (!bodyText) {
-                return false;
-            }
-            var index = bodyText.indexOf(searchText);
-            if (index === -1) {
-                return false;
-            }
-            var range = document.createRange();
-            var selection = window.getSelection();
-            selection.removeAllRanges();
-            var nodeStack = [document.body];
-            var node = null;
-            var charIndex = 0;
-            var start = null;
-            var end = null;
-            while (nodeStack.length) {
-                node = nodeStack.pop();
-                if (node.nodeType === 3) {
-                    var nextCharIndex = charIndex + node.length;
-                    if (!start && index >= charIndex && index < nextCharIndex) {
-                        start = {node: node, offset: index - charIndex};
-                    }
-                    if (start && index + searchText.length <= nextCharIndex) {
-                        end = {
-                            node: node,
-                            offset: index + searchText.length - charIndex
-                        };
-                        break;
-                    }
-                    charIndex = nextCharIndex;
-                } else {
-                    var i = node.childNodes.length;
-                    while (i--) {
-                        nodeStack.push(node.childNodes[i]);
-                    }
-                }
-            }
-            if (!start || !end) {
-                return false;
-            }
-            range.setStart(start.node, start.offset);
-            range.setEnd(end.node, end.offset);
-            selection.addRange(range);
-            var rect = range.getBoundingClientRect();
-            window.scrollBy(0, rect.top - window.innerHeight / 3);
-            return true;
-        """
-        found = self.firefox.execute_script(script, search_text)
-        if not found:
-            print("forward search did not find text:", search_text)
+        from selenium.webdriver.common.keys import Keys
+
+        body_elements = self.firefox.find_elements("tag name", "body")
+        if len(body_elements) == 0:
+            print("forward search could not focus the page for:", search_text)
+            return
+        body = body_elements[0]
+        body.send_keys(Keys.CONTROL, "f")
+        body.send_keys(search_text)
+        body.send_keys(Keys.ENTER)
 
 
 @register_command(
