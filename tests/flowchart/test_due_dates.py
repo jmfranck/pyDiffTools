@@ -145,3 +145,47 @@ def test_due_overdue():
         " OVERDUE</b></font></font>"
         in dot
     )
+
+
+def test_due_within_week_is_orange():
+    # Due dates within the next week should be colored orange.
+    data = {
+        "nodes": {
+            "Task": {
+                "due": "2024-05-17",
+                "children": [],
+                "parents": [],
+            },
+        }
+    }
+
+    dot = yaml_to_dot(data)
+
+    assert '<font color="orange">5/17/24</font>' in dot
+
+
+def test_watch_graph_refuses_child_due_before_parent(tmp_path):
+    # Ensure watch_graph rendering refuses a child due date earlier than any parent.
+    yaml_path = tmp_path / "graph.yaml"
+    dot_path = tmp_path / "graph.dot"
+    yaml_path.write_text(
+        "\n".join(
+            [
+                "nodes:",
+                "  Parent:",
+                "    due: 2025-10-10",
+                "    children: [Child]",
+                "  Child:",
+                "    due: 2025-10-09",
+            ]
+        )
+        + "\n"
+    )
+
+    with pytest.raises(ValueError, match="Refusing to render watch_graph"):
+        graph.write_dot_from_yaml(
+            str(yaml_path),
+            str(dot_path),
+            update_yaml=False,
+            validate_due_dates=True,
+        )

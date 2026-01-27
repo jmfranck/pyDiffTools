@@ -338,8 +338,14 @@ def _node_text_with_due(node):
         )
         formatted = f"<i>{orig_str}</i>→{formatted}"
     # Completed tasks should show a green due date so the status is obvious at
-    # a glance.
-    due_color = "green" if is_completed else "red"
+    # a glance. Upcoming deadlines within the next week are orange to match the
+    # same visual emphasis used for overdue dates.
+    if is_completed:
+        due_color = "green"
+    elif due_date > today_date and (due_date - today_date).days <= 7:
+        due_color = "orange"
+    else:
+        due_color = "red"
     formatted = f'<font color="{due_color}">{formatted}</font>'
 
     if "text" in node and node["text"]:
@@ -442,8 +448,44 @@ def write_dot_from_yaml(
     update_yaml: bool = True,
     wrap_width: int = 55,
     old_data: Optional[Dict[str, Any]] = None,
+    validate_due_dates=False,
 ) -> Dict[str, Any]:
     data = load_graph_yaml(str(yaml_path), old_data=old_data)
+    if validate_due_dates:
+        # Enforce that no node's due date is earlier than any ancestor due date
+        # so dependency timelines remain coherent.
+        due_dates = {}
+        for name in data["nodes"]:
+            if "due" in data["nodes"][name] and data["nodes"][name]["due"] is not None:
+                due_text = str(data["nodes"][name]["due"]).strip()
+                if due_text:
+                    due_dates[name] = parse_due_string(due_text).date()
+        for name in due_dates:
+            parents_to_check = [
+                (parent, [parent]) for parent in data["nodes"][name]["parents"]
+            ]
+            seen_parents = set()
+            while parents_to_check:
+                parent, path = parents_to_check.pop()
+                if parent in seen_parents:
+                    continue
+                seen_parents.add(parent)
+                if parent in due_dates and due_dates[name] < due_dates[parent]:
+                    path_str = " -> ".join(path)
+                    raise ValueError(
+                        "Refusing to render watch_graph because node "
+                        f"'{name}' has due date {due_dates[name].isoformat()}, "
+                        "which is earlier than its ancestor "
+                        f"'{parent}' due date {due_dates[parent].isoformat()}. "
+                        "Parent chain checked: "
+                        f"{name} -> {path_str}. "
+                        "Update the node's due date or adjust the parent "
+                        "relationship so child due dates are not earlier than "
+                        "any ancestor."
+                    )
+                if parent in data["nodes"] and data["nodes"][parent]["parents"]:
+                    for grandparent in data["nodes"][parent]["parents"]:
+                        parents_to_check.append((grandparent, path + [grandparent]))
     dot_str = yaml_to_dot(data, wrap_width=wrap_width)
     Path(dot_path).write_text(dot_str)
     if update_yaml:
