@@ -437,22 +437,64 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
         ]
         sort_order = {name: index for index, name in enumerate(ordered_names)}
     handled = set()
-    if order_by_date:
-        # In date-ordered mode, ignore style subgraphs so ordering is global.
-        if ordered_names is None:
-            ordered_names = list(data["nodes"].keys())
-        for name in ordered_names:
+    # Group nodes by their declared style so they share subgraph attributes.
+    style_members = {}
+    for name in data["nodes"]:
+        if "style" in data["nodes"][name] and data["nodes"][name]["style"]:
+            style_members.setdefault(
+                data["nodes"][name]["style"], []
+            ).append(name)
+
+    for style_name in data["styles"]:
+        if style_name not in style_members:
+            continue
+        if not style_members[style_name]:
+            continue
+        lines.append(f"    subgraph {style_name} {{")
+        if (
+            "attrs" in data["styles"][style_name]
+            and "node" in data["styles"][style_name]["attrs"]
+        ):
+            if isinstance(data["styles"][style_name]["attrs"]["node"], list):
+                attr_str = ", ".join(
+                    f"{k}={v}"
+                    for k, v in data["styles"][style_name]["attrs"]["node"][0].items()
+                )
+            else:
+                attr_str = ", ".join(
+                    f"{k}={v}"
+                    for k, v in data["styles"][style_name]["attrs"]["node"].items()
+                )
+            lines.append(f"        node [{attr_str}];")
+        for node_name in style_members[style_name]:
             _append_node(
                 lines,
-                "    ",
-                name,
+                "        ",
+                node_name,
                 data,
                 wrap_width,
                 order_by_date,
                 sort_order,
             )
-            handled.add(name)
-        # Arrange nodes in a grid of roughly five columns, left to right.
+            handled.add(node_name)
+        lines.append("    };")
+
+    if ordered_names is None:
+        ordered_names = list(data["nodes"].keys())
+    for name in ordered_names:
+        if name in handled:
+            continue
+        _append_node(
+            lines,
+            "    ",
+            name,
+            data,
+            wrap_width,
+            order_by_date,
+            sort_order,
+        )
+    if order_by_date:
+        # Arrange nodes in a grid while preserving style subgraphs.
         column_count = 5
         for index in range(0, len(ordered_names), column_count):
             lines.append(
@@ -474,64 +516,6 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
                 f" {ordered_names[index + column_count]} [style=invis];"
             )
     else:
-        # Group nodes by their declared style so they share subgraph attributes.
-        style_members = {}
-        for name in data["nodes"]:
-            if "style" in data["nodes"][name] and data["nodes"][name]["style"]:
-                style_members.setdefault(
-                    data["nodes"][name]["style"], []
-                ).append(name)
-
-        for style_name in data["styles"]:
-            if style_name not in style_members:
-                continue
-            if not style_members[style_name]:
-                continue
-            lines.append(f"    subgraph {style_name} {{")
-            if (
-                "attrs" in data["styles"][style_name]
-                and "node" in data["styles"][style_name]["attrs"]
-            ):
-                if isinstance(
-                    data["styles"][style_name]["attrs"]["node"], list
-                ):
-                    attr_str = ", ".join(
-                        f"{k}={v}"
-                        for k, v in data["styles"][style_name]["attrs"]["node"][0].items()
-                    )
-                else:
-                    attr_str = ", ".join(
-                        f"{k}={v}"
-                        for k, v in data["styles"][style_name]["attrs"]["node"].items()
-                    )
-                lines.append(f"        node [{attr_str}];")
-            for node_name in style_members[style_name]:
-                _append_node(
-                    lines,
-                    "        ",
-                    node_name,
-                    data,
-                    wrap_width,
-                    order_by_date,
-                    sort_order,
-                )
-                handled.add(node_name)
-            lines.append("    };")
-
-        if ordered_names is None:
-            ordered_names = list(data["nodes"].keys())
-        for name in ordered_names:
-            if name in handled:
-                continue
-            _append_node(
-                lines,
-                "    ",
-                name,
-                data,
-                wrap_width,
-                order_by_date,
-                sort_order,
-            )
         # Edges are omitted when ordering by date so boxes stand alone.
         for name in data["nodes"]:
             if "children" in data["nodes"][name]:
