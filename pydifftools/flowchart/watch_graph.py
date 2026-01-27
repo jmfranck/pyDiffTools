@@ -39,6 +39,7 @@ def build_graph(
         wrap_width=wrap_width,
         order_by_date=order_by_date,
         old_data=prev_data,
+        validate_due_dates=True,
     )
     subprocess.run(
         ["dot", "-Tsvg", str(dot_file), "-o", str(svg_file)],
