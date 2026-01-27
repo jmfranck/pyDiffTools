@@ -362,7 +362,10 @@ def _normalize_graph_dates(data):
         return
     default_date = datetime(date.today().year, 1, 1)
     for name in data["nodes"]:
-        if "due" in data["nodes"][name] and data["nodes"][name]["due"] is not None:
+        if (
+            "due" in data["nodes"][name]
+            and data["nodes"][name]["due"] is not None
+        ):
             if str(data["nodes"][name]["due"]).strip():
                 parsed = parse_due_string(
                     str(data["nodes"][name]["due"]).strip(),
@@ -383,8 +386,9 @@ def _normalize_graph_dates(data):
                 )
 
 
-def _append_node(lines, indent, node_name, data, wrap_width, order_by_date,
-                 sort_order):
+def _append_node(
+    lines, indent, node_name, data, wrap_width, order_by_date, sort_order
+):
     # Add a node line with an optional sort hint so Graphviz keeps date order.
     if node_name in data["nodes"]:
         label = _node_label(
@@ -464,9 +468,9 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
         if order_by_date and name not in ordered_set:
             continue
         if "style" in data["nodes"][name] and data["nodes"][name]["style"]:
-            style_members.setdefault(
-                data["nodes"][name]["style"], []
-            ).append(name)
+            style_members.setdefault(data["nodes"][name]["style"], []).append(
+                name
+            )
 
     for style_name in data["styles"]:
         if style_name not in style_members:
@@ -481,12 +485,16 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
             if isinstance(data["styles"][style_name]["attrs"]["node"], list):
                 attr_str = ", ".join(
                     f"{k}={v}"
-                    for k, v in data["styles"][style_name]["attrs"]["node"][0].items()
+                    for k, v in data["styles"][style_name]["attrs"]["node"][
+                        0
+                    ].items()
                 )
             else:
                 attr_str = ", ".join(
                     f"{k}={v}"
-                    for k, v in data["styles"][style_name]["attrs"]["node"].items()
+                    for k, v in data["styles"][style_name]["attrs"][
+                        "node"
+                    ].items()
                 )
             lines.append(f"        node [{attr_str}];")
         for node_name in style_members[style_name]:
@@ -522,12 +530,10 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
         for index in range(0, len(ordered_names), column_count):
             lines.append(
                 "    { rank=same; "
-                + "; ".join(
-                    ordered_names[index:index + column_count]
-                )
+                + "; ".join(ordered_names[index : index + column_count])
                 + "; }"
             )
-            row_nodes = ordered_names[index:index + column_count]
+            row_nodes = ordered_names[index : index + column_count]
             for row_index in range(len(row_nodes) - 1):
                 lines.append(
                     f"    {row_nodes[row_index]} ->"
