@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
-from datetime import date
+from datetime import date, datetime
 
 import os
 import shutil
@@ -356,6 +356,33 @@ def _node_label(text, wrap_width=55):
     return _format_label(text, wrap_width)
 
 
+def _normalize_graph_dates(data):
+    # Normalize due dates to mm/dd/yy so the YAML is consistent across years.
+    if "nodes" not in data:
+        return
+    default_date = datetime(date.today().year, 1, 1)
+    for name in data["nodes"]:
+        if "due" in data["nodes"][name] and data["nodes"][name]["due"] is not None:
+            if str(data["nodes"][name]["due"]).strip():
+                parsed = parse_due_string(
+                    str(data["nodes"][name]["due"]).strip(),
+                    default=default_date,
+                )
+                data["nodes"][name]["due"] = parsed.date().strftime("%m/%d/%y")
+        if (
+            "orig_due" in data["nodes"][name]
+            and data["nodes"][name]["orig_due"] is not None
+        ):
+            if str(data["nodes"][name]["orig_due"]).strip():
+                parsed = parse_due_string(
+                    str(data["nodes"][name]["orig_due"]).strip(),
+                    default=default_date,
+                )
+                data["nodes"][name]["orig_due"] = parsed.date().strftime(
+                    "%m/%d/%y"
+                )
+
+
 def _append_node(lines, indent, node_name, data, wrap_width, order_by_date,
                  sort_order):
     # Add a node line with an optional sort hint so Graphviz keeps date order.
@@ -525,7 +552,9 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
     return "\n".join(lines)
 
 
-def save_graph_yaml(path: str | Path, data: Dict[str, Any]) -> None:
+def save_graph_yaml(path, data):
+    # Ensure stored dates are normalized before writing.
+    _normalize_graph_dates(data)
     with open(path, "w") as f:
         yaml.dump(
             data,
@@ -547,6 +576,8 @@ def write_dot_from_yaml(
     old_data=None,
 ):
     data = load_graph_yaml(str(yaml_path), old_data=old_data)
+    # Normalize dates before building DOT so ordering uses the stored format.
+    _normalize_graph_dates(data)
     dot_str = yaml_to_dot(
         data, wrap_width=wrap_width, order_by_date=order_by_date
     )
