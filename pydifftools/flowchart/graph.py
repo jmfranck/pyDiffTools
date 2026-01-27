@@ -433,11 +433,12 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
         data["styles"] = {}
     ordered_names = None
     sort_order = None
+    ordered_set = None
     if order_by_date:
         # Order nodes by due date so the graph renders boxes in calendar order.
         order_pairs = []
         for name in data["nodes"]:
-            due_date = date.max
+            # Exclude nodes without a due date from date-ordered display.
             if (
                 "due" in data["nodes"][name]
                 and data["nodes"][name]["due"] is not None
@@ -446,15 +447,7 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
                     due_date = parse_due_string(
                         str(data["nodes"][name]["due"]).strip()
                     ).date()
-            elif (
-                "orig_due" in data["nodes"][name]
-                and data["nodes"][name]["orig_due"] is not None
-            ):
-                if str(data["nodes"][name]["orig_due"]).strip():
-                    due_date = parse_due_string(
-                        str(data["nodes"][name]["orig_due"]).strip()
-                    ).date()
-            order_pairs.append((due_date, name))
+                    order_pairs.append((due_date, name))
         # Capture a stable order and use sort values so Graphviz keeps it.
         ordered_names = [
             name
@@ -463,10 +456,13 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
             )
         ]
         sort_order = {name: index for index, name in enumerate(ordered_names)}
+        ordered_set = set(ordered_names)
     handled = set()
     # Group nodes by their declared style so they share subgraph attributes.
     style_members = {}
     for name in data["nodes"]:
+        if order_by_date and name not in ordered_set:
+            continue
         if "style" in data["nodes"][name] and data["nodes"][name]["style"]:
             style_members.setdefault(
                 data["nodes"][name]["style"], []
