@@ -1,7 +1,6 @@
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict, Any
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from pydifftools.command_registry import register_command
@@ -27,16 +26,18 @@ def _reload_svg(driver, svg_file: Path) -> None:
 
 
 def build_graph(
-    yaml_file: Path,
-    dot_file: Path,
-    svg_file: Path,
-    wrap_width: int,
-    prev_data: Dict[str, Any] | None = None,
-) -> Dict[str, Any]:
+    yaml_file,
+    dot_file,
+    svg_file,
+    wrap_width,
+    order_by_date=False,
+    prev_data=None,
+):
     data = write_dot_from_yaml(
         str(yaml_file),
         str(dot_file),
         wrap_width=wrap_width,
+        order_by_date=order_by_date,
         old_data=prev_data,
         validate_due_dates=True,
     )
@@ -54,10 +55,10 @@ class GraphEventHandler(FileSystemEventHandler):
         dot_file,
         svg_file,
         driver,
-        wrap_width: int,
-        data: Dict[str, Any] | None,
-        *,
-        debounce: float = 0.25,
+        wrap_width,
+        data,
+        order_by_date=False,
+        debounce=0.25,
     ):
         self.yaml_file = Path(yaml_file)
         self.dot_file = Path(dot_file)
@@ -65,6 +66,7 @@ class GraphEventHandler(FileSystemEventHandler):
         self.driver = driver
         self.wrap_width = wrap_width
         self.data = data
+        self.order_by_date = order_by_date
         self.debounce = debounce
         self._last_handled = 0.0
         self._last_mtime = None
@@ -83,6 +85,7 @@ class GraphEventHandler(FileSystemEventHandler):
                 self.dot_file,
                 self.svg_file,
                 self.wrap_width,
+                self.order_by_date,
                 self.data,
             )
             _reload_svg(self.driver, self.svg_file)
@@ -95,9 +98,10 @@ class GraphEventHandler(FileSystemEventHandler):
     help={
         "yaml": "Path to the flowchart YAML file",
         "wrap_width": "Line wrap width used when generating node labels",
+        "d": "Render nodes by date without showing connections",
     },
 )
-def wgrph(yaml, wrap_width=55):
+def wgrph(yaml, wrap_width=55, d=False):
     # Selenium is only required when actually launching the watcher, so it is
     # imported here to avoid breaking the command-line tools when the optional
     # dependency is not installed.
@@ -121,7 +125,8 @@ def wgrph(yaml, wrap_width=55):
     svg_file = yaml_file.with_suffix(".svg")
     html_file = yaml_file.with_suffix(".html")
 
-    data = build_graph(yaml_file, dot_file, svg_file, wrap_width)
+    # Use date ordering when requested so boxes appear in calendar order.
+    data = build_graph(yaml_file, dot_file, svg_file, wrap_width, d)
     html_file.write_text(
         "<html><body style='margin:0'><embed id='svg-view'"
         " type='image/svg+xml'"
@@ -131,7 +136,7 @@ def wgrph(yaml, wrap_width=55):
     driver = webdriver.Chrome(options=options)
     driver.get(html_file.resolve().as_uri())
     event_handler = GraphEventHandler(
-        yaml_file, dot_file, svg_file, driver, wrap_width, data
+        yaml_file, dot_file, svg_file, driver, wrap_width, data, d
     )
     observer = Observer()
     observer.schedule(event_handler, yaml_file.parent, recursive=False)
