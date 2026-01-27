@@ -299,7 +299,9 @@ def execute_code_blocks(blocks):
                 kernel_name="python3", timeout=10800, allow_errors=True
             )
             try:
-                ep.preprocess(nb, {"metadata": {"path": str(Path(src).parent)}})
+                ep.preprocess(
+                    nb, {"metadata": {"path": str(Path(src).parent)}}
+                )
             except Exception as e:
                 tb = traceback.format_exc()
                 if nb.cells:
@@ -1187,7 +1189,9 @@ def build_all(webtex: bool = False, changed_paths=None):
     code_map = {}
     if code_blocks:
         notebook_executor = ThreadPoolExecutor(max_workers=1)
-        notebook_future = notebook_executor.submit(execute_code_blocks, code_blocks)
+        notebook_future = notebook_executor.submit(
+            execute_code_blocks, code_blocks
+        )
 
     order = graph.render_order()
     render_targets = [f for f in order if f in stage_set]
@@ -1283,12 +1287,14 @@ def build_all(webtex: bool = False, changed_paths=None):
             continue
         if html_file.exists():
             sections = parse_headings(html_file)
-            pages.append({
-                "file": qmd,
-                "href": html_file.name,
-                "title": read_title(source_path),
-                "sections": sections,
-            })
+            pages.append(
+                {
+                    "file": qmd,
+                    "href": html_file.name,
+                    "title": read_title(source_path),
+                    "sections": sections,
+                }
+            )
 
     for page in pages:
         html_file = (DISPLAY_DIR / page["file"]).with_suffix(".html")

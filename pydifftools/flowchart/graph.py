@@ -591,7 +591,10 @@ def write_dot_from_yaml(
         # so dependency timelines remain coherent.
         due_dates = {}
         for name in data["nodes"]:
-            if "due" in data["nodes"][name] and data["nodes"][name]["due"] is not None:
+            if (
+                "due" in data["nodes"][name]
+                and data["nodes"][name]["due"] is not None
+            ):
                 due_text = str(data["nodes"][name]["due"]).strip()
                 if due_text:
                     due_dates[name] = parse_due_string(due_text).date()
@@ -609,18 +612,23 @@ def write_dot_from_yaml(
                     path_str = " -> ".join(path)
                     raise ValueError(
                         "Refusing to render watch_graph because node "
-                        f"'{name}' has due date {due_dates[name].isoformat()}, "
-                        "which is earlier than its ancestor "
-                        f"'{parent}' due date {due_dates[parent].isoformat()}. "
-                        "Parent chain checked: "
+                        f"'{name}' has due date {due_dates[name].isoformat()},"
+                        " which is earlier than its ancestor "
+                        f"'{parent}' due date {due_dates[parent].isoformat()}."
+                        " Parent chain checked: "
                         f"{name} -> {path_str}. "
                         "Update the node's due date or adjust the parent "
                         "relationship so child due dates are not earlier than "
                         "any ancestor."
                     )
-                if parent in data["nodes"] and data["nodes"][parent]["parents"]:
+                if (
+                    parent in data["nodes"]
+                    and data["nodes"][parent]["parents"]
+                ):
                     for grandparent in data["nodes"][parent]["parents"]:
-                        parents_to_check.append((grandparent, path + [grandparent]))
+                        parents_to_check.append(
+                            (grandparent, path + [grandparent])
+                        )
     dot_str = yaml_to_dot(
         data, wrap_width=wrap_width, order_by_date=order_by_date
     )

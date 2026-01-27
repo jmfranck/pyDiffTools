@@ -33,7 +33,8 @@ def test_due_dates_render():
         }
     }
     dot = yaml_to_dot(data)
-    # The primary text should keep its formatting while the due date adds a new line.
+    # The primary text should keep its formatting while the due date adds a new
+    # line.
     assert (
         'Work item\n<br align="left"/>\n<font color="red">10/2/25</font>'
         in dot
@@ -142,8 +143,7 @@ def test_due_overdue():
 
     assert (
         '<font color="red"><font point-size="12"><b>2 DAYS'
-        " OVERDUE</b></font></font>"
-        in dot
+        " OVERDUE</b></font></font>" in dot
     )
 
 
@@ -165,7 +165,8 @@ def test_due_within_week_is_orange():
 
 
 def test_watch_graph_refuses_child_due_before_parent(tmp_path):
-    # Ensure watch_graph rendering refuses a child due date earlier than any parent.
+    # Ensure watch_graph rendering refuses a child due date earlier than any
+    # parent.
     yaml_path = tmp_path / "graph.yaml"
     dot_path = tmp_path / "graph.dot"
     yaml_path.write_text(
