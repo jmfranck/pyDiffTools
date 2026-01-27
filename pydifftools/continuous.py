@@ -5,10 +5,41 @@ import subprocess
 import sys
 import os
 import re
+import socket
+import threading
+import queue
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from .command_registry import register_command
 
+FORWARD_SEARCH_HOST = "127.0.0.1"
+FORWARD_SEARCH_PORT = 51235
+
+
+def forward_search_listener(stop_event, search_queue):
+    # Listen for markdown forward-search requests and queue them for cpb.
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind((FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT))
+    server.listen(5)
+    server.settimeout(1.0)
+    while not stop_event.is_set():
+        try:
+            connection, _ = server.accept()
+        except socket.timeout:
+            continue
+        except OSError:
+            break
+        with connection:
+            payload = b""
+            while True:
+                chunk = connection.recv(4096)
+                if not chunk:
+                    break
+                payload += chunk
+        if payload:
+            search_queue.put(payload.decode("utf-8"))
+    server.close()
 
 def run_pandoc(filename, html_file):
     if os.path.exists("MathJax-3.1.2"):
@@ -155,6 +186,58 @@ position
         with open(self.html_file, "w", encoding="utf-8") as fp:
             fp.write(all_data)
 
+    def forward_search(self, search_text):
+        # Use Chromium DevTools search to locate text and scroll it into view.
+        if not search_text:
+            return
+        search_result = self.firefox.execute_cdp_cmd(
+            "DOM.performSearch",
+            {
+                "query": search_text,
+                "includeUserAgentShadowDOM": True,
+            },
+        )
+        if search_result["resultCount"] == 0:
+            print("forward search did not find text:", search_text)
+            self.firefox.execute_cdp_cmd(
+                "DOM.discardSearchResults",
+                {"searchId": search_result["searchId"]},
+            )
+            return
+        search_nodes = self.firefox.execute_cdp_cmd(
+            "DOM.getSearchResults",
+            {
+                "searchId": search_result["searchId"],
+                "fromIndex": 0,
+                "toIndex": 1,
+            },
+        )
+        if len(search_nodes["nodeIds"]) == 0:
+            print("forward search did not find nodes for:", search_text)
+            self.firefox.execute_cdp_cmd(
+                "DOM.discardSearchResults",
+                {"searchId": search_result["searchId"]},
+            )
+            return
+        resolved_node = self.firefox.execute_cdp_cmd(
+            "DOM.resolveNode",
+            {"nodeId": search_nodes["nodeIds"][0]},
+        )
+        # Scroll the first matched node into view using the DevTools runtime.
+        self.firefox.execute_cdp_cmd(
+            "Runtime.callFunctionOn",
+            {
+                "objectId": resolved_node["object"]["objectId"],
+                "functionDeclaration": (
+                    "function(){this.scrollIntoView({block: 'center'});}"
+                ),
+            },
+        )
+        self.firefox.execute_cdp_cmd(
+            "DOM.discardSearchResults",
+            {"searchId": search_result["searchId"]},
+        )
+
 
 @register_command(
     "continuous pandoc build.  Like latexmk, but for markdown!",
@@ -163,16 +246,30 @@ position
 def cpb(filename):
     observer = Observer()
     event_handler = Handler(filename, observer)
+    search_queue = queue.Queue()
+    stop_event = threading.Event()
+    socket_thread = threading.Thread(
+        target=forward_search_listener,
+        args=(stop_event, search_queue),
+        daemon=True,
+    )
+    socket_thread.start()
     observer.schedule(event_handler, path=".", recursive=False)
     observer.start()
 
     try:
         while True:
             time.sleep(1)
+            while not search_queue.empty():
+                search_text = search_queue.get().strip()
+                if search_text:
+                    event_handler.forward_search(search_text)
     except KeyboardInterrupt:
+        stop_event.set()
         observer.stop()
 
     observer.join()
+    socket_thread.join()
 
 
 if __name__ == "__main__":
