@@ -1,4 +1,3 @@
-import sys, pathlib
 import re
 import yaml
 

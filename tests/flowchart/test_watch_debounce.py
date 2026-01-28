@@ -1,6 +1,4 @@
 import types
-import pathlib
-
 from pydifftools.flowchart import watch_graph
 
 
