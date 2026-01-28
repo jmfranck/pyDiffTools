@@ -8,3 +8,6 @@
   can be added to environment setup scripts.
 - Never skip tests for missing external tools. If a dependency is missing,
   allow the test to fail and include the exact install commands in the response.
+- When running tests in this repo, prepend the conda site-packages so pytest
+  can import conda-managed dependencies: use
+  `PYTHONPATH=/root/conda/lib/python3.12/site-packages pytest`.
