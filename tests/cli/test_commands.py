@@ -10,8 +10,6 @@ from pydifftools.continuous import run_pandoc
 def _make_cli_env(tmp_path):
     repo_root = Path(__file__).resolve().parents[2]
     env = os.environ.copy()
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
     stub_dir = tmp_path / "stubs"
     stub_dir.mkdir()
     (stub_dir / "argcomplete.py").write_text(
@@ -25,14 +23,17 @@ def _make_cli_env(tmp_path):
     (stub_dir / "psutil.py").write_text("pass\n")
     bib_path = Path("~/testlib.bib").expanduser()
     bib_path.write_text("@book{dummy, title={Dummy}}\n")
-    crossref_script = bin_dir / "pandoc-crossref"
-    crossref_script.write_text(
-        "#!/usr/bin/env python3\nimport sys\n"
-        "sys.stdout.write(sys.stdin.read())\n"
-    )
-    crossref_script.chmod(0o755)
-    env["PATH"] = f"{bin_dir}:{env['PATH']}"
-    env["PYTHONPATH"] = f"{stub_dir}:{repo_root}"
+    # Ensure CLI subprocesses can see conda-installed tools and libraries.
+    env["PATH"] = f"/root/conda/bin:{env['PATH']}"
+    if "PYTHONPATH" in env:
+        env["PYTHONPATH"] = (
+            f"{stub_dir}:{repo_root}:/root/conda/lib/python3.12/site-packages:"
+            f"{env['PYTHONPATH']}"
+        )
+    else:
+        env["PYTHONPATH"] = (
+            f"{stub_dir}:{repo_root}:/root/conda/lib/python3.12/site-packages"
+        )
     env["PYDIFFTOOLS_FAKE_MATHJAX"] = "1"
     env["PYDIFFTOOLS_UPDATE_CHECK_LAST_RAN_UTC_DATE"] = time.strftime(
         "%Y-%m-%d", time.gmtime()
