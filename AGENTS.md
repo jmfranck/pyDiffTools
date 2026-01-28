@@ -6,3 +6,5 @@
 - Tests may fail due to missing external tools only if the response includes
   the exact Unix command(s) needed to install the missing dependencies so they
   can be added to environment setup scripts.
+- Never skip tests for missing external tools. If a dependency is missing,
+  allow the test to fail and include the exact install commands in the response.

@@ -9,6 +9,7 @@ from selenium.webdriver.chrome.service import Service
 
 
 def test_svg_render(tmp_path):
+
     dot_file = tmp_path / 'graph.dot'
     svg_file = tmp_path / 'graph.svg'
     tmp_yaml = tmp_path / 'graph.yaml'

@@ -1,5 +1,6 @@
 import subprocess
 import time
+import shutil
 from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -33,6 +34,12 @@ def build_graph(
     order_by_date=False,
     prev_data=None,
 ):
+    # Graphviz is required for dot -> svg rendering.
+    if shutil.which("dot") is None:
+        raise RuntimeError(
+            "Graphviz is required to render flowcharts. Install it so the"
+            " 'dot' executable is available on your PATH."
+        )
     data = write_dot_from_yaml(
         str(yaml_file),
         str(dot_file),
@@ -114,7 +121,8 @@ def wgrph(yaml, wrap_width=55, d=False):
         )
     except ImportError as exc:
         raise ImportError(
-            "The 'watch_graph' command requires the 'selenium' package."
+            "The 'watch_graph' command requires the 'selenium' package to be"
+            " installed."
         ) from exc
 
     yaml_file = Path(yaml)
