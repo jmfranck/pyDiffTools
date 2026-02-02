@@ -11,7 +11,7 @@ def test_yaml_write_does_not_loop(tmp_path, monkeypatch):
     svg_file = tmp_path / 'graph.svg'
     calls = {'build': 0, 'reload': 0}
 
-    def fake_build(y, d, s, w, prev=None):
+    def fake_build(y, d, s, w, prev_data=None, *args):
         calls['build'] += 1
         return {}
 

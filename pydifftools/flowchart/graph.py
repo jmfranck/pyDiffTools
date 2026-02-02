@@ -308,7 +308,7 @@ def _node_text_with_due(node):
     due_date = parse_due_string(due_text).date()
     today_date = date.today()
 
-    # Render the actual due date in red, optionally showing an original date
+    # Render the actual due date in orange, optionally showing an original date
     # that slipped.  The original value is italicized so it stands out while
     # remaining inside the colored tag for continuity.
     def date_formatter(thedate):
@@ -343,9 +343,9 @@ def _node_text_with_due(node):
     if is_completed:
         due_color = "green"
     elif due_date > today_date and (due_date - today_date).days <= 7:
-        due_color = "orange"
-    else:
         due_color = "red"
+    else:
+        due_color = "orange"
     formatted = f'<font color="{due_color}">{formatted}</font>'
 
     if "text" in node and node["text"]:

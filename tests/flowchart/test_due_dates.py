@@ -36,11 +36,11 @@ def test_due_dates_render():
     # The primary text should keep its formatting while the due date adds a new
     # line.
     assert (
-        'Work item\n<br align="left"/>\n<font color="red">10/2/25</font>'
+        'Work item\n<br align="left"/>\n<font color="orange">10/2/25</font>'
         in dot
     )
-    # Nodes that only declare a due date still render the value in red.
-    assert 'Alt [label=<<font color="red">3/4/26</font>' in dot
+    # Nodes that only declare a due date still render the value in orange.
+    assert 'Alt [label=<<font color="orange">3/4/26</font>' in dot
 
 
 def test_completed_due_is_green():
@@ -106,7 +106,7 @@ def test_original_due_display():
 
     dot = yaml_to_dot(data)
 
-    assert '<font color="red"><i>9/15/25</i>→10/2/25</font>' in dot
+    assert '<font color="orange"><i>9/15/25</i>→10/2/25</font>' in dot
 
 
 def test_due_today():
@@ -123,7 +123,7 @@ def test_due_today():
     dot = yaml_to_dot(data)
 
     assert (
-        '<font color="red"><font point-size="12"><b>TODAY</b></font></font>'
+        '<font color="orange"><font point-size="12"><b>TODAY</b></font></font>'
         in dot
     )
 
@@ -142,13 +142,13 @@ def test_due_overdue():
     dot = yaml_to_dot(data)
 
     assert (
-        '<font color="red"><font point-size="12"><b>2 DAYS'
+        '<font color="orange"><font point-size="12"><b>2 DAYS'
         " OVERDUE</b></font></font>" in dot
     )
 
 
 def test_due_within_week_is_orange():
-    # Due dates within the next week should be colored orange.
+    # Due dates within the next week should be colored red.
     data = {
         "nodes": {
             "Task": {
@@ -161,7 +161,7 @@ def test_due_within_week_is_orange():
 
     dot = yaml_to_dot(data)
 
-    assert '<font color="orange">5/17/24</font>' in dot
+    assert '<font color="red">5/17/24</font>' in dot
 
 
 def test_watch_graph_refuses_child_due_before_parent(tmp_path):
