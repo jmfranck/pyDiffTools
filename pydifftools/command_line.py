@@ -10,6 +10,7 @@ import re
 import nbformat
 import difflib
 import shutil
+import importlib.util
 from pathlib import Path
 from . import (
     match_spaces,
@@ -30,6 +31,25 @@ from .notebook.tex_to_qmd import tex2qmd
 from .notebook.fast_build import qmdb, qmdinit
 
 from .command_registry import _COMMAND_SPECS, register_command
+
+_ARGCOMPLETE_SPEC = importlib.util.find_spec("argcomplete")
+if (
+    _ARGCOMPLETE_SPEC is not None
+    and _ARGCOMPLETE_SPEC.submodule_search_locations is not None
+):
+    _ARGCOMPLETE_COMPLETERS_SPEC = importlib.util.find_spec(
+        "argcomplete.completers"
+    )
+else:
+    _ARGCOMPLETE_COMPLETERS_SPEC = None
+if _ARGCOMPLETE_SPEC is not None:
+    import argcomplete
+else:
+    argcomplete = None
+if _ARGCOMPLETE_COMPLETERS_SPEC is not None:
+    from argcomplete.completers import FilesCompleter
+else:
+    FilesCompleter = None
 
 
 def printed_exec(cmd):
@@ -704,7 +724,16 @@ def build_parser():
         for argument in arguments:
             flags = argument["flags"]
             kwargs = dict(argument["kwargs"])
-            subparser.add_argument(*flags, **kwargs)
+            action = subparser.add_argument(*flags, **kwargs)
+            if (
+                FilesCompleter is not None
+                and name == "wgrph"
+                and action.dest == "yaml"
+            ):
+                # Provide YAML-only completions for the flowchart watcher.
+                action.completer = FilesCompleter(
+                    allowednames=["*.yaml", "*.yml"]
+                )
         subparser.set_defaults(_handler=spec["handler"])
     return parser
 
@@ -732,6 +761,9 @@ def main(argv=None):
                 file=sys.stderr,
             )
     parser = build_parser()
+    if argcomplete is not None:
+        # Enable argcomplete integration when the dependency is available.
+        argcomplete.autocomplete(parser)
     if not argv:
         parser.print_help()
         return

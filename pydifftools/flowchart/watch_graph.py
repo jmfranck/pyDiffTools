@@ -33,6 +33,7 @@ def build_graph(
     wrap_width,
     order_by_date=False,
     prev_data=None,
+    target_task=None,
 ):
     # Graphviz is required for dot -> svg rendering.
     if shutil.which("dot") is None:
@@ -47,6 +48,7 @@ def build_graph(
         order_by_date=order_by_date,
         old_data=prev_data,
         validate_due_dates=True,
+        filter_task=target_task,
     )
     subprocess.run(
         ["dot", "-Tsvg", str(dot_file), "-o", str(svg_file)],
@@ -65,6 +67,7 @@ class GraphEventHandler(FileSystemEventHandler):
         wrap_width,
         data,
         order_by_date=False,
+        target_task=None,
         debounce=0.25,
     ):
         self.yaml_file = Path(yaml_file)
@@ -74,6 +77,7 @@ class GraphEventHandler(FileSystemEventHandler):
         self.wrap_width = wrap_width
         self.data = data
         self.order_by_date = order_by_date
+        self.target_task = target_task
         self.debounce = debounce
         self._last_handled = 0.0
         self._last_mtime = None
@@ -94,6 +98,7 @@ class GraphEventHandler(FileSystemEventHandler):
                 self.wrap_width,
                 self.order_by_date,
                 self.data,
+                self.target_task,
             )
             _reload_svg(self.driver, self.svg_file)
             self._last_mtime = self.yaml_file.stat().st_mtime
@@ -106,9 +111,12 @@ class GraphEventHandler(FileSystemEventHandler):
         "yaml": "Path to the flowchart YAML file",
         "wrap_width": "Line wrap width used when generating node labels",
         "d": "Render nodes by date without showing connections",
+        "t": (
+            "Task name to focus on (show incomplete ancestor tasks only)"
+        ),
     },
 )
-def wgrph(yaml, wrap_width=55, d=False):
+def wgrph(yaml, wrap_width=55, d=False, t=None):
     # Selenium is only required when actually launching the watcher, so it is
     # imported here to avoid breaking the command-line tools when the optional
     # dependency is not installed.
@@ -134,7 +142,9 @@ def wgrph(yaml, wrap_width=55, d=False):
     html_file = yaml_file.with_suffix(".html")
 
     # Use date ordering when requested so boxes appear in calendar order.
-    data = build_graph(yaml_file, dot_file, svg_file, wrap_width, d)
+    # Render the initial graph, optionally restricting to incomplete ancestors
+    # of a target task.
+    data = build_graph(yaml_file, dot_file, svg_file, wrap_width, d, None, t)
     html_file.write_text(
         "<html><body style='margin:0'><embed id='svg-view'"
         " type='image/svg+xml'"
@@ -144,7 +154,7 @@ def wgrph(yaml, wrap_width=55, d=False):
     driver = webdriver.Chrome(options=options)
     driver.get(html_file.resolve().as_uri())
     event_handler = GraphEventHandler(
-        yaml_file, dot_file, svg_file, driver, wrap_width, data, d
+        yaml_file, dot_file, svg_file, driver, wrap_width, data, d, t
     )
     observer = Observer()
     observer.schedule(event_handler, yaml_file.parent, recursive=False)
