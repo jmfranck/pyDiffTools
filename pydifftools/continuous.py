@@ -5,12 +5,25 @@ import subprocess
 import sys
 import os
 import re
+import shutil
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from .command_registry import register_command
 
 
 def run_pandoc(filename, html_file):
+    # Pandoc and pandoc-crossref must be installed for HTML rendering.
+    if shutil.which("pandoc") is None:
+        raise RuntimeError(
+            "Pandoc must be installed to render HTML output. Install pandoc"
+            " so the 'pandoc' executable is available on your PATH."
+        )
+    if shutil.which("pandoc-crossref") is None:
+        raise RuntimeError(
+            "Pandoc-crossref must be installed to render HTML output. Install"
+            " pandoc-crossref so the 'pandoc-crossref' executable is available"
+            " on your PATH."
+        )
     if os.path.exists("MathJax-3.1.2"):
         has_local_jax = True
     else:
