@@ -100,7 +100,12 @@ def wgrph_task_completer(prefix, parsed_args, **kwargs):
         ):
             continue
         if name.lower().startswith(prefix_lower):
-            matches.append(name)
+            # Preserve case-insensitive matches even when the typed prefix
+            # doesn't match case so argcomplete still accepts the suggestion.
+            if name.startswith(prefix):
+                matches.append(name)
+            else:
+                matches.append(prefix + name[len(prefix) :])
     return matches
 
 

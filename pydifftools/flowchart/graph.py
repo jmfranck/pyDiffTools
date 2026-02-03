@@ -616,9 +616,23 @@ def write_dot_from_yaml(
     if filter_task is not None:
         # Limit the rendered graph to incomplete ancestors of the target task.
         if "nodes" not in data or filter_task not in data["nodes"]:
-            raise ValueError(
-                f"Task '{filter_task}' not found in flowchart YAML."
-            )
+            # Allow case-insensitive task lookup to align with CLI completion.
+            matches = [
+                name
+                for name in data["nodes"]
+                if name.lower() == filter_task.lower()
+            ]
+            if len(matches) == 1:
+                filter_task = matches[0]
+            elif len(matches) > 1:
+                raise ValueError(
+                    "Task name is ambiguous when compared case-insensitively: "
+                    f"'{filter_task}' matches {matches}."
+                )
+            else:
+                raise ValueError(
+                    f"Task '{filter_task}' not found in flowchart YAML."
+                )
         # Include the target task alongside its ancestors in the filtered view.
         ancestors = set([filter_task])
         parents_to_check = list(data["nodes"][filter_task]["parents"])
