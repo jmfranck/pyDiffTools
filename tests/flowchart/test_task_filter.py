@@ -29,9 +29,9 @@ def test_write_dot_filters_to_incomplete_ancestors(tmp_path):
     write_dot_from_yaml(yaml_path, dot_path, filter_task="target")
 
     dot_text = dot_path.read_text(encoding="utf-8")
-    assert "target" not in dot_text
+    assert "target" in dot_text
     assert "completed_parent" not in dot_text
     assert "parent1" in dot_text
     assert "grandparent" in dot_text
     assert "root" in dot_text
-    assert "parent1 -> target" not in dot_text
+    assert "parent1 -> target" in dot_text

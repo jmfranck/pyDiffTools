@@ -619,7 +619,8 @@ def write_dot_from_yaml(
             raise ValueError(
                 f"Task '{filter_task}' not found in flowchart YAML."
             )
-        ancestors = set()
+        # Include the target task alongside its ancestors in the filtered view.
+        ancestors = set([filter_task])
         parents_to_check = list(data["nodes"][filter_task]["parents"])
         while parents_to_check:
             parent = parents_to_check.pop()

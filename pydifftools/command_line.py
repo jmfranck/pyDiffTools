@@ -27,6 +27,7 @@ from .copy_files import copy_image_files
 from .searchacro import replace_acros
 from .rearrange_tex import run as rearrange_tex_run
 from .flowchart.watch_graph import wgrph
+from .flowchart.graph import load_graph_yaml
 from .notebook.tex_to_qmd import tex2qmd
 from .notebook.fast_build import qmdb, qmdinit
 
@@ -75,6 +76,32 @@ _ROOT = os.path.abspath(os.path.dirname(__file__))
 def get_data(path):
     "return vbs and js scripts saved as package data"
     return os.path.join(_ROOT, path)
+
+
+def wgrph_task_completer(prefix, parsed_args, **kwargs):
+    # Provide case-insensitive task name completions for wgrph -t.
+    if parsed_args is None or not hasattr(parsed_args, "yaml"):
+        return []
+    yaml_path = Path(parsed_args.yaml)
+    if not yaml_path.exists():
+        return []
+    try:
+        data = load_graph_yaml(str(yaml_path))
+    except Exception:
+        return []
+    if "nodes" not in data:
+        return []
+    prefix_lower = prefix.lower()
+    matches = []
+    for name in data["nodes"]:
+        if (
+            "style" in data["nodes"][name]
+            and data["nodes"][name]["style"] == "completed"
+        ):
+            continue
+        if name.lower().startswith(prefix_lower):
+            matches.append(name)
+    return matches
 
 
 def recursive_include_search(directory, basename, does_it_input):
@@ -734,6 +761,9 @@ def build_parser():
                 action.completer = FilesCompleter(
                     allowednames=["*.yaml", "*.yml"]
                 )
+            if name == "wgrph" and action.dest == "t":
+                # Offer case-insensitive completions for incomplete task names.
+                action.completer = wgrph_task_completer
         subparser.set_defaults(_handler=spec["handler"])
     return parser
 
