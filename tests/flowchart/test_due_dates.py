@@ -123,7 +123,7 @@ def test_due_today():
     dot = yaml_to_dot(data)
 
     assert (
-        '<font color="orange"><font point-size="12"><b>TODAY</b></font></font>'
+        '<font color="red"><font point-size="12"><b>TODAY</b></font></font>'
         in dot
     )
 
@@ -142,7 +142,7 @@ def test_due_overdue():
     dot = yaml_to_dot(data)
 
     assert (
-        '<font color="orange"><font point-size="12"><b>2 DAYS'
+        '<font color="red"><font point-size="12"><b>2 DAYS'
         " OVERDUE</b></font></font>" in dot
     )
 

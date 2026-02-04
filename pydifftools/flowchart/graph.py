@@ -324,7 +324,7 @@ def _node_text_with_due(node):
     # same visual emphasis used for overdue dates.
     if is_completed:
         due_color = "green"
-    elif due_date > today_date and (due_date - today_date).days <= 7:
+    elif (due_date - today_date).days <= 7:
         due_color = "red"
     else:
         due_color = "orange"
@@ -565,6 +565,7 @@ def write_dot_from_yaml(
     order_by_date=False,
     old_data=None,
     validate_due_dates=False,
+    filter_task=None,
 ):
     data = load_graph_yaml(str(yaml_path), old_data=old_data)
     _normalize_graph_dates(data)
@@ -611,8 +612,71 @@ def write_dot_from_yaml(
                         parents_to_check.append(
                             (grandparent, path + [grandparent])
                         )
+    data_for_dot = data
+    if filter_task is not None:
+        # Limit the rendered graph to incomplete ancestors of the target task.
+        if "nodes" not in data or filter_task not in data["nodes"]:
+            # Allow case-insensitive task lookup to align with CLI completion.
+            matches = [
+                name
+                for name in data["nodes"]
+                if name.lower() == filter_task.lower()
+            ]
+            if len(matches) == 1:
+                filter_task = matches[0]
+            elif len(matches) > 1:
+                raise ValueError(
+                    "Task name is ambiguous when compared case-insensitively: "
+                    f"'{filter_task}' matches {matches}."
+                )
+            else:
+                raise ValueError(
+                    f"Task '{filter_task}' not found in flowchart YAML."
+                )
+        # Include the target task alongside its ancestors in the filtered view.
+        ancestors = set([filter_task])
+        parents_to_check = list(data["nodes"][filter_task]["parents"])
+        while parents_to_check:
+            parent = parents_to_check.pop()
+            if parent in ancestors:
+                continue
+            ancestors.add(parent)
+            if (
+                parent in data["nodes"]
+                and "parents" in data["nodes"][parent]
+            ):
+                for grandparent in data["nodes"][parent]["parents"]:
+                    parents_to_check.append(grandparent)
+        incomplete_ancestors = set()
+        for name in ancestors:
+            if name not in data["nodes"]:
+                continue
+            if (
+                "style" in data["nodes"][name]
+                and data["nodes"][name]["style"] == "completed"
+            ):
+                continue
+            incomplete_ancestors.add(name)
+        data_for_dot = {"nodes": {}, "styles": {}}
+        if "styles" in data:
+            data_for_dot["styles"] = data["styles"]
+        for name in incomplete_ancestors:
+            data_for_dot["nodes"][name] = dict(data["nodes"][name])
+        for name in data_for_dot["nodes"]:
+            if "children" in data_for_dot["nodes"][name]:
+                data_for_dot["nodes"][name]["children"] = [
+                    child
+                    for child in data_for_dot["nodes"][name]["children"]
+                    if child in incomplete_ancestors
+                ]
+            if "parents" in data_for_dot["nodes"][name]:
+                data_for_dot["nodes"][name]["parents"] = [
+                    parent
+                    for parent in data_for_dot["nodes"][name]["parents"]
+                    if parent in incomplete_ancestors
+                ]
     dot_str = yaml_to_dot(
-        data, wrap_width=wrap_width, order_by_date=order_by_date
+        data_for_dot, wrap_width=wrap_width, order_by_date=order_by_date
     )
     Path(dot_path).write_text(dot_str)
     if update_yaml:
