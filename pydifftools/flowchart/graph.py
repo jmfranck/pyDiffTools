@@ -324,7 +324,7 @@ def _node_text_with_due(node):
     # same visual emphasis used for overdue dates.
     if is_completed:
         due_color = "green"
-    elif due_date > today_date and (due_date - today_date).days <= 7:
+    elif (due_date - today_date).days <= 7:
         due_color = "red"
     else:
         due_color = "orange"
