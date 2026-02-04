@@ -241,7 +241,6 @@ jobs:
   publish:
     name: Publish to PyPI
     needs: [build_dist]
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/master' && github.event_name == 'push') }}
     runs-on: ubuntu-latest
     steps:
       - name: Create output dir
