@@ -26,6 +26,23 @@ def _reload_svg(driver, svg_file: Path) -> None:
     )
 
 
+def start_chrome(webdriver, options, html_file):
+    # Launch Chrome and display the local SVG preview HTML file.
+    driver = webdriver.Chrome(options=options)
+    driver.get(html_file.resolve().as_uri())
+    return driver
+
+
+def close_chrome(driver):
+    # Close the Chrome window if it is still running.
+    if driver is None:
+        return
+    try:
+        driver.quit()
+    except Exception:
+        pass
+
+
 def build_graph(
     yaml_file,
     dot_file,
@@ -63,9 +80,12 @@ class GraphEventHandler(FileSystemEventHandler):
         yaml_file,
         dot_file,
         svg_file,
-        driver,
-        wrap_width,
-        data,
+        html_file=None,
+        driver=None,
+        options=None,
+        webdriver=None,
+        wrap_width=55,
+        data=None,
         order_by_date=False,
         target_task=None,
         debounce=0.25,
@@ -73,7 +93,10 @@ class GraphEventHandler(FileSystemEventHandler):
         self.yaml_file = Path(yaml_file)
         self.dot_file = Path(dot_file)
         self.svg_file = Path(svg_file)
+        self.html_file = None if html_file is None else Path(html_file)
         self.driver = driver
+        self.options = options
+        self.webdriver = webdriver
         self.wrap_width = wrap_width
         self.data = data
         self.order_by_date = order_by_date
@@ -91,16 +114,40 @@ class GraphEventHandler(FileSystemEventHandler):
             if now - self._last_handled < self.debounce:
                 return
             self._last_handled = now
-            self.data = build_graph(
-                self.yaml_file,
-                self.dot_file,
-                self.svg_file,
-                self.wrap_width,
-                self.order_by_date,
-                self.data,
-                self.target_task,
-            )
-            _reload_svg(self.driver, self.svg_file)
+            try:
+                self.data = build_graph(
+                    self.yaml_file,
+                    self.dot_file,
+                    self.svg_file,
+                    self.wrap_width,
+                    self.order_by_date,
+                    self.data,
+                    self.target_task,
+                )
+            except Exception:
+                # If the graph fails to build (e.g. invalid date), close the
+                # preview window until a clean rebuild occurs.
+                close_chrome(self.driver)
+                self.driver = None
+                self._last_mtime = self.yaml_file.stat().st_mtime
+                return
+            if self.driver is None:
+                # Restart the preview once the SVG successfully builds again.
+                if (
+                    self.webdriver is not None
+                    and self.options is not None
+                    and self.html_file is not None
+                ):
+                    self.driver = start_chrome(
+                        self.webdriver, self.options, self.html_file
+                    )
+                else:
+                    # Allow legacy/test usage without a live driver.
+                    _reload_svg(self.driver, self.svg_file)
+                    self._last_mtime = self.yaml_file.stat().st_mtime
+                    return
+            else:
+                _reload_svg(self.driver, self.svg_file)
             self._last_mtime = self.yaml_file.stat().st_mtime
 
 
@@ -151,28 +198,38 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
         f" src='{svg_file.name}?t={time.time()}'/></body></html>"
     )
     options = Options()
-    driver = webdriver.Chrome(options=options)
-    driver.get(html_file.resolve().as_uri())
+    driver = start_chrome(webdriver, options, html_file)
     event_handler = GraphEventHandler(
-        yaml_file, dot_file, svg_file, driver, wrap_width, data, d, t
+        yaml_file,
+        dot_file,
+        svg_file,
+        html_file,
+        driver,
+        options,
+        webdriver,
+        wrap_width,
+        data,
+        d,
+        t,
     )
     observer = Observer()
     observer.schedule(event_handler, yaml_file.parent, recursive=False)
     observer.start()
     try:
         while True:
+            if event_handler.driver is None:
+                time.sleep(1)
+                continue
             try:
-                _ = driver.window_handles
-                driver.execute_script("return 1")
+                _ = event_handler.driver.window_handles
+                event_handler.driver.execute_script("return 1")
             except (NoSuchWindowException, WebDriverException):
-                break
+                close_chrome(event_handler.driver)
+                event_handler.driver = None
             time.sleep(1)
     except KeyboardInterrupt:
         pass
     finally:
         observer.stop()
         observer.join()
-        try:
-            driver.quit()
-        except Exception:
-            pass
+        close_chrome(event_handler.driver)
