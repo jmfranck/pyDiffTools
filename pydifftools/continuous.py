@@ -190,6 +190,9 @@ position
         # Use Chromium DevTools search to locate text and scroll it into view.
         if not search_text:
             return
+        # Enable the DOM agent before searching to avoid inspector errors.
+        self.firefox.execute_cdp_cmd("DOM.enable", {})
+        self.firefox.execute_cdp_cmd("Runtime.enable", {})
         search_result = self.firefox.execute_cdp_cmd(
             "DOM.performSearch",
             {
