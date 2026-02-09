@@ -92,6 +92,8 @@ class RenderNotebook:
         self.tree = tree
         self.include_map = include_map
         self.nodes = {}
+        self.notebook_outputs = None
+        self.notebook_code_map = None
         self._build_nodes()
 
     def _build_nodes(self):
@@ -192,23 +194,49 @@ class RenderNotebook:
 
     def apply_notebook_outputs(
         self,
+        stage_files,
+        display_targets,
+        refresh_callback,
+    ):
+        """Insert stored notebook outputs and refresh display pages."""
+        if self.notebook_outputs is None or self.notebook_code_map is None:
+            return
+        for f in stage_files:
+            html_file = (BUILD_DIR / f).with_suffix(".html")
+            if html_file.exists():
+                substitute_code_placeholders(
+                    html_file,
+                    self.notebook_outputs,
+                    self.notebook_code_map,
+                )
+        for target in sorted(display_targets):
+            self.update_display_page(target)
+        self.refresh_if_ready(refresh_callback)
+
+    def record_notebook_outputs(self, outputs, code_map):
+        """Store notebook outputs for later substitution into HTML."""
+        self.notebook_outputs = outputs
+        self.notebook_code_map = code_map
+
+    def handle_notebook_future(
+        self,
         notebook_future,
         notebook_executor,
         stage_files,
         display_targets,
         refresh_callback,
     ):
-        """Insert notebook outputs and refresh display pages when ready."""
+        """Record notebook outputs and refresh display pages when ready."""
         outputs, code_map = notebook_future.result()
         if notebook_executor:
             notebook_executor.shutdown(wait=False)
-        for f in stage_files:
-            html_file = (BUILD_DIR / f).with_suffix(".html")
-            if html_file.exists():
-                substitute_code_placeholders(html_file, outputs, code_map)
-        for target in sorted(display_targets):
-            self.update_display_page(target)
-        self.refresh_if_ready(refresh_callback)
+        self.record_notebook_outputs(outputs, code_map)
+        print("Notebook execution complete; applying outputs.", flush=True)
+        self.apply_notebook_outputs(
+            stage_files,
+            display_targets,
+            refresh_callback,
+        )
 
 
 def load_checksums():
@@ -1271,7 +1299,7 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
 
     # phase 3: insert whatever notebook output is available into staged pages
     if notebook_future and notebook_future.done():
-        graph.apply_notebook_outputs(
+        graph.handle_notebook_future(
             notebook_future,
             notebook_executor,
             stage_files,
@@ -1290,11 +1318,18 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     for target in sorted(display_targets):
         graph.update_display_page(target)
     graph.refresh_if_ready(refresh_callback)
+    # If notebook outputs arrived before pandoc finished, apply them now that
+    # the HTML is available.
+    graph.apply_notebook_outputs(
+        stage_files,
+        display_targets,
+        refresh_callback,
+    )
 
     # phase 5: keep notebook execution asynchronous and refresh once complete.
     if notebook_future:
         notebook_future.add_done_callback(
-            lambda future: graph.apply_notebook_outputs(
+            lambda future: graph.handle_notebook_future(
                 future,
                 notebook_executor,
                 stage_files,
