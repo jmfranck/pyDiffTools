@@ -166,6 +166,50 @@ class RenderNotebook:
     def render_order(self):
         return build_order(self.render_files, self.tree)
 
+    def refresh_if_ready(self, refresh_callback):
+        """Refresh the browser if a callback was provided."""
+        if refresh_callback:
+            refresh_callback()
+
+    def update_display_page(self, target):
+        """Update a single display page or ensure a placeholder is present."""
+        src_html = (BUILD_DIR / target).with_suffix(".html")
+        dest_html = (DISPLAY_DIR / target).with_suffix(".html")
+        if not src_html.exists():
+            dest_html.parent.mkdir(parents=True, exist_ok=True)
+            dest_html.write_text(
+                "<html><body><div style='color:red;font-weight:bold'>"
+                f"Waiting for pandoc on {target} to complete..."
+                "</div>"
+                "</body></html>"
+            )
+            return
+        dest_html.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_html, dest_html)
+        # Build includes using staged fragments and rewrite math assets to the
+        # display tree that the web server presents.
+        postprocess_html(dest_html, BUILD_DIR, DISPLAY_DIR)
+
+    def apply_notebook_outputs(
+        self,
+        notebook_future,
+        notebook_executor,
+        stage_files,
+        display_targets,
+        refresh_callback,
+    ):
+        """Insert notebook outputs and refresh display pages when ready."""
+        outputs, code_map = notebook_future.result()
+        if notebook_executor:
+            notebook_executor.shutdown(wait=False)
+        for f in stage_files:
+            html_file = (BUILD_DIR / f).with_suffix(".html")
+            if html_file.exists():
+                substitute_code_placeholders(html_file, outputs, code_map)
+        for target in sorted(display_targets):
+            self.update_display_page(target)
+        self.refresh_if_ready(refresh_callback)
+
 
 def load_checksums():
     path = BUILD_DIR / "checksums.json"
@@ -1112,7 +1156,7 @@ def substitute_code_placeholders(
         tree.write(str(html_path), encoding="utf-8", method="html")
 
 
-def build_all(webtex: bool = False, changed_paths=None):
+def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     ensure_pandoc_available()
     ensure_pandoc_crossref()
     ensure_template_assets(PROJECT_ROOT)
@@ -1195,6 +1239,11 @@ def build_all(webtex: bool = False, changed_paths=None):
 
     order = graph.render_order()
     render_targets = [f for f in order if f in stage_set]
+    # phase 2: ensure display pages exist right away with placeholders so
+    # browsers can load content while pandoc runs.
+    for target in sorted(display_targets):
+        graph.update_display_page(target)
+    graph.refresh_if_ready(refresh_callback)
     if render_targets:
         workers = max(1, min(len(render_targets), 4))
         tasks = []
@@ -1220,53 +1269,39 @@ def build_all(webtex: bool = False, changed_paths=None):
     graph.update_checksums(checksums)
     save_checksums(checksums)
 
-    # phase 2: insert whatever notebook output is available into staged pages
+    # phase 3: insert whatever notebook output is available into staged pages
     if notebook_future and notebook_future.done():
-        outputs, code_map = notebook_future.result()
-        notebook_executor.shutdown(wait=False)
+        graph.apply_notebook_outputs(
+            notebook_future,
+            notebook_executor,
+            stage_files,
+            display_targets,
+            refresh_callback,
+        )
         notebook_executor = None
         notebook_future = None
-    for f in stage_files:
-        html_file = (BUILD_DIR / f).with_suffix(".html")
-        if html_file.exists():
-            substitute_code_placeholders(html_file, outputs, code_map)
-
-    # phase 3: assemble the served pages from staged fragments
-    for target in sorted(display_targets):
-        src_html = (BUILD_DIR / target).with_suffix(".html")
-        dest_html = (DISPLAY_DIR / target).with_suffix(".html")
-        if not src_html.exists():
-            dest_html.parent.mkdir(parents=True, exist_ok=True)
-            dest_html.write_text(
-                "<html><body><div style='color:red;font-weight:bold'>"
-                f"Waiting for pandoc on {target} to complete..."
-                "</div>"
-                "</body></html>"
-            )
-            continue
-        dest_html.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src_html, dest_html)
-        # build includes using staged fragments and rewrite math assets to the
-        # display tree that the web server presents.
-        postprocess_html(dest_html, BUILD_DIR, DISPLAY_DIR)
-
-    # phase 4: wait for notebooks to finish, then refresh staged and served
-    # pages with the completed outputs so the browser updates when work ends.
-    if notebook_future:
-        outputs, code_map = notebook_future.result()
-        notebook_executor.shutdown(wait=False)
+    else:
         for f in stage_files:
             html_file = (BUILD_DIR / f).with_suffix(".html")
             if html_file.exists():
                 substitute_code_placeholders(html_file, outputs, code_map)
-        for target in sorted(display_targets):
-            src_html = (BUILD_DIR / target).with_suffix(".html")
-            dest_html = (DISPLAY_DIR / target).with_suffix(".html")
-            if not src_html.exists():
-                continue
-            dest_html.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src_html, dest_html)
-            postprocess_html(dest_html, BUILD_DIR, DISPLAY_DIR)
+
+    # phase 4: assemble the served pages from staged fragments
+    for target in sorted(display_targets):
+        graph.update_display_page(target)
+    graph.refresh_if_ready(refresh_callback)
+
+    # phase 5: keep notebook execution asynchronous and refresh once complete.
+    if notebook_future:
+        notebook_future.add_done_callback(
+            lambda future: graph.apply_notebook_outputs(
+                future,
+                notebook_executor,
+                stage_files,
+                display_targets,
+                refresh_callback,
+            )
+        )
 
     pages = []
     for qmd in render_files:
@@ -1384,14 +1419,13 @@ def _serve_forever(httpd: ThreadingHTTPServer):
 
 
 def watch_and_serve(no_browser: bool = False, webtex: bool = False):
-    state = build_all(webtex=webtex)
     if no_browser:
         # In headless scenarios we only need the build artifacts and can exit
         # immediately instead of launching a server loop that waits for a
         # browser connection.
-        return state
+        return build_all(webtex=webtex)
     port = 8000
-    render_files = state["render_files"]
+    render_files = load_rendered_files()
 
     if render_files:
         start_page = Path(render_files[0]).with_suffix(".html").as_posix()
@@ -1445,15 +1479,12 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
     )
     Path(DISPLAY_DIR).mkdir(parents=True, exist_ok=True)
     threading.Thread(target=_serve_forever, args=(httpd,), daemon=True).start()
-    if no_browser:
-
-        class Dummy:
-            def refresh(self):
-                pass
-
-        refresher = Dummy()
-    else:
-        refresher = BrowserReloader(url)
+    refresher = BrowserReloader(url)
+    # Launch the initial build asynchronously so the browser opens immediately.
+    initial_executor = ThreadPoolExecutor(max_workers=1)
+    initial_future = initial_executor.submit(
+        build_all, webtex=webtex, refresh_callback=refresher.refresh
+    )
     if Observer is None:
         raise ImportError(
             "File watching requires the optional 'watchdog' package."
@@ -1462,19 +1493,30 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
     observer = Observer()
 
     def rebuild(path):
-        build_all(webtex=webtex, changed_paths=[path])
+        build_all(
+            webtex=webtex,
+            changed_paths=[path],
+            refresh_callback=refresher.refresh,
+        )
 
     handler = ChangeHandler(rebuild, refresher)
     observer.schedule(handler, str(PROJECT_ROOT), recursive=True)
     observer.start()
     try:
         while True:
+            if initial_future and initial_future.done():
+                initial_future.result()
+                initial_executor.shutdown(wait=False)
+                initial_future = None
             if not no_browser and not refresher.is_alive():
                 break
             time.sleep(1)
     except KeyboardInterrupt:
         pass
     finally:
+        if initial_future:
+            initial_future.result()
+            initial_executor.shutdown(wait=False)
         observer.stop()
         observer.join()
         httpd.shutdown()
