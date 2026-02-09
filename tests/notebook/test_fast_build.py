@@ -131,3 +131,18 @@ def test_postprocess_nested_includes(fb, tmp_path, monkeypatch):
     html = target.read_text()
     assert "LEAF" in html
     assert "data-include" not in html
+
+
+def test_navigation_persists_after_notebook_updates(fb):
+    fb.build_all()
+    render_files = fb.load_rendered_files()
+    assert render_files
+    target = (Path("_display") / render_files[0]).with_suffix(".html")
+    assert "on-this-page" in target.read_text()
+
+    tree, _, include_map = fb.analyze_includes(render_files)
+    graph = fb.RenderNotebook(render_files, tree, include_map)
+    graph.record_notebook_outputs({}, {})
+    graph.apply_notebook_outputs([], set(render_files), None)
+
+    assert "on-this-page" in target.read_text()

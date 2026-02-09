@@ -211,6 +211,7 @@ class RenderNotebook:
                 )
         for target in sorted(display_targets):
             self.update_display_page(target)
+        self.refresh_navigation()
         self.refresh_if_ready(refresh_callback)
 
     def record_notebook_outputs(self, outputs, code_map):
@@ -237,6 +238,41 @@ class RenderNotebook:
             display_targets,
             refresh_callback,
         )
+
+    def refresh_navigation(self):
+        """Rebuild navigation for rendered pages in the display tree."""
+        pages = []
+        for qmd in self.render_files:
+            html_file = (DISPLAY_DIR / qmd).with_suffix(".html")
+            source_path = PROJECT_ROOT / qmd
+            if not source_path.exists():
+                # Make it obvious which path is missing and keep the display
+                # tree consistent by creating a placeholder page until pandoc
+                # produces the real output.
+                placeholder = (
+                    "<html><body><div style='color:red;font-weight:bold'>"
+                    f"Missing source file {source_path}"
+                    "</div></body></html>"
+                )
+                html_file.parent.mkdir(parents=True, exist_ok=True)
+                html_file.write_text(placeholder)
+                print(f"Cannot read title; missing source: {source_path}")
+                continue
+            if html_file.exists():
+                sections = parse_headings(html_file)
+                pages.append(
+                    {
+                        "file": qmd,
+                        "href": html_file.name,
+                        "title": read_title(source_path),
+                        "sections": sections,
+                    }
+                )
+
+        for page in pages:
+            html_file = (DISPLAY_DIR / page["file"]).with_suffix(".html")
+            if html_file.exists():
+                add_navigation(html_file, pages, page["file"])
 
 
 def load_checksums():
@@ -1260,10 +1296,17 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     outputs = {}
     code_map = {}
     if code_blocks:
+        print(
+            f"Executing notebook blocks for {len(code_blocks)}"
+            " source files.",
+            flush=True,
+        )
         notebook_executor = ThreadPoolExecutor(max_workers=1)
         notebook_future = notebook_executor.submit(
             execute_code_blocks, code_blocks
         )
+    else:
+        print("No notebook code blocks detected.", flush=True)
 
     order = graph.render_order()
     render_targets = [f for f in order if f in stage_set]
@@ -1338,38 +1381,7 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
             )
         )
 
-    pages = []
-    for qmd in render_files:
-        html_file = (DISPLAY_DIR / qmd).with_suffix(".html")
-        source_path = PROJECT_ROOT / qmd
-        if not source_path.exists():
-            # Make it obvious which path is missing and keep the display tree
-            # consistent by creating a placeholder page until pandoc produces
-            # the real output.
-            placeholder = (
-                "<html><body><div style='color:red;font-weight:bold'>"
-                f"Missing source file {source_path}"
-                "</div></body></html>"
-            )
-            html_file.parent.mkdir(parents=True, exist_ok=True)
-            html_file.write_text(placeholder)
-            print(f"Cannot read title; missing source: {source_path}")
-            continue
-        if html_file.exists():
-            sections = parse_headings(html_file)
-            pages.append(
-                {
-                    "file": qmd,
-                    "href": html_file.name,
-                    "title": read_title(source_path),
-                    "sections": sections,
-                }
-            )
-
-    for page in pages:
-        html_file = (DISPLAY_DIR / page["file"]).with_suffix(".html")
-        if html_file.exists():
-            add_navigation(html_file, pages, page["file"])
+    graph.refresh_navigation()
 
     return {
         "render_files": render_files,
@@ -1480,27 +1492,11 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
             if not rel:
                 rel = ""
             display_root = DISPLAY_DIR.resolve()
-            build_root = BUILD_DIR.resolve()
-            if rel == "_build":
-                return str(build_root)
-            if rel.startswith("_build/"):
-                inner = rel.split("/", 1)[1]
-                candidate = (BUILD_DIR / inner).resolve()
-                if (
-                    str(candidate).startswith(str(build_root))
-                    and candidate.exists()
-                ):
-                    return str(candidate)
             display_candidate = (DISPLAY_DIR / rel).resolve()
             if display_candidate.exists() and str(
                 display_candidate
             ).startswith(str(display_root)):
                 return str(display_candidate)
-            build_candidate = (BUILD_DIR / rel).resolve()
-            if build_candidate.exists() and str(build_candidate).startswith(
-                str(build_root)
-            ):
-                return str(build_candidate)
             return super().translate_path(path)
 
     try:
@@ -1508,10 +1504,7 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
     except OSError as exc:  # pragma: no cover - depends on local environment
         print(f"Could not start server on port {port}: {exc}")
         return
-    print(
-        f"Serving {DISPLAY_DIR} with fallback to {BUILD_DIR} at"
-        f" http://localhost:{port}"
-    )
+    print(f"Serving {DISPLAY_DIR} at http://localhost:{port}")
     Path(DISPLAY_DIR).mkdir(parents=True, exist_ok=True)
     threading.Thread(target=_serve_forever, args=(httpd,), daemon=True).start()
     refresher = BrowserReloader(url)
