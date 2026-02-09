@@ -187,59 +187,29 @@ position
             fp.write(all_data)
 
     def forward_search(self, search_text):
-        # Use Chromium DevTools search to locate text and scroll it into view.
+        # Use the browser's built-in window.find to locate the text.
         if not search_text:
             return
-        # Enable the DOM agent before searching to avoid inspector errors.
-        self.firefox.execute_cdp_cmd("DOM.enable", {})
-        self.firefox.execute_cdp_cmd("Runtime.enable", {})
-        search_result = self.firefox.execute_cdp_cmd(
-            "DOM.performSearch",
-            {
-                "query": search_text,
-                "includeUserAgentShadowDOM": True,
-            },
+        found = self.firefox.execute_script(
+            """
+            var searchText = arguments[0];
+            if (!window.find) {
+                return false;
+            }
+            var didFind = window.find(searchText);
+            if (didFind && window.getSelection) {
+                var selection = window.getSelection();
+                if (selection.rangeCount > 0) {
+                    var rect = selection.getRangeAt(0).getBoundingClientRect();
+                    window.scrollBy(0, rect.top - window.innerHeight / 3);
+                }
+            }
+            return didFind;
+            """,
+            search_text,
         )
-        if search_result["resultCount"] == 0:
+        if not found:
             print("forward search did not find text:", search_text)
-            self.firefox.execute_cdp_cmd(
-                "DOM.discardSearchResults",
-                {"searchId": search_result["searchId"]},
-            )
-            return
-        search_nodes = self.firefox.execute_cdp_cmd(
-            "DOM.getSearchResults",
-            {
-                "searchId": search_result["searchId"],
-                "fromIndex": 0,
-                "toIndex": 1,
-            },
-        )
-        if len(search_nodes["nodeIds"]) == 0:
-            print("forward search did not find nodes for:", search_text)
-            self.firefox.execute_cdp_cmd(
-                "DOM.discardSearchResults",
-                {"searchId": search_result["searchId"]},
-            )
-            return
-        resolved_node = self.firefox.execute_cdp_cmd(
-            "DOM.resolveNode",
-            {"nodeId": search_nodes["nodeIds"][0]},
-        )
-        # Scroll the first matched node into view using the DevTools runtime.
-        self.firefox.execute_cdp_cmd(
-            "Runtime.callFunctionOn",
-            {
-                "objectId": resolved_node["object"]["objectId"],
-                "functionDeclaration": (
-                    "function(){this.scrollIntoView({block: 'center'});}"
-                ),
-            },
-        )
-        self.firefox.execute_cdp_cmd(
-            "DOM.discardSearchResults",
-            {"searchId": search_result["searchId"]},
-        )
 
 
 @register_command(
