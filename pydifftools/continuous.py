@@ -5,6 +5,7 @@ import subprocess
 import sys
 import os
 import re
+import shutil
 import socket
 import threading
 import queue
@@ -210,6 +211,21 @@ position
         )
         if not found:
             print("forward search did not find text:", search_text)
+        # Bring the browser window to the foreground in Linux window managers.
+        if os.name == "posix" and shutil.which("wmctrl"):
+            window_title = self.firefox.execute_script("return document.title;")
+            if window_title:
+                # Try common Chromium title forms used by desktop environments.
+                for title_candidate in [
+                    window_title,
+                    window_title + " - Google Chrome",
+                    window_title + " - Chromium",
+                    window_title + " - Chrome",
+                ]:
+                    subprocess.run(
+                        ["wmctrl", "-a", title_candidate],
+                        check=False,
+                    )
 
 
 @register_command(
