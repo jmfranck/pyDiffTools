@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-from jupyter_client.kernelspec import KernelSpecManager
 
 import pydifftools.notebook.fast_build as fast_build
 
@@ -132,13 +131,18 @@ def test_navigation_persists_after_notebook_updates(fb):
 
 
 def test_async_notebook_outputs_replace_placeholder(fb):
-    # Ensure the python3 kernel is available so notebook execution runs.
-    kernel_specs = KernelSpecManager().find_kernel_specs()
-    if "python3" not in kernel_specs:
-        raise AssertionError(
-            "python3 kernel spec is missing; install ipykernel and register"
-            " the kernel to run notebook execution tests."
-        )
+    # Slow notebook execution in a controlled way so the test can reliably
+    # observe the red placeholder first and then the final output.
+    def delayed_execute_code_blocks(blocks):
+        time.sleep(2)
+        outputs = {}
+        code_map = {}
+        for src in blocks:
+            outputs[(src, 1)] = "<pre>NOTEBOOK_OUTPUT_MARKER</pre>"
+            code_map[(src, 1)] = "import time"
+        return outputs, code_map
+
+    fb.execute_code_blocks = delayed_execute_code_blocks
 
     qmd = Path("async_test.qmd")
     qmd.write_text(
@@ -152,9 +156,8 @@ def test_async_notebook_outputs_replace_placeholder(fb):
     config = yaml.safe_load(Path("_quarto.yml").read_text())
     if "project" not in config:
         config["project"] = {}
-    if "render" not in config["project"]:
-        config["project"]["render"] = []
-    config["project"]["render"].append("async_test.qmd")
+    # Keep this render list focused so the test validates a single async page.
+    config["project"]["render"] = ["async_test.qmd"]
     Path("_quarto.yml").write_text(yaml.safe_dump(config))
 
     # Trigger the build in the background so we can observe the placeholder
@@ -163,29 +166,34 @@ def test_async_notebook_outputs_replace_placeholder(fb):
     build_thread.start()
 
     display_file = Path("_display/async_test.html")
-    # Ensure the initial placeholder appears while the build is still running
-    # so we know the pipeline is streaming results.
+    # Poll the display output and require the expected sequence: placeholder
+    # first, then final notebook output.
     placeholder_seen = False
-    placeholder_deadline = time.time() + 4
-    while time.time() < placeholder_deadline and build_thread.is_alive():
-        if display_file.exists():
-            html = display_file.read_text()
-            if "Running notebook async_test.qmd" in html:
-                placeholder_seen = True
-                break
-        time.sleep(0.2)
-
-    build_thread.join()
-    deadline = time.time() + 4
     found_output = False
+    deadline = time.time() + 4
     while time.time() < deadline:
         if display_file.exists():
             html = display_file.read_text()
-            if "Running notebook async_test.qmd" not in html:
-                if "async done" in html:
+            if "Running notebook" in html:
+                placeholder_seen = True
+            if placeholder_seen and "Running notebook" not in html:
+                if "NOTEBOOK_OUTPUT_MARKER" in html:
                     found_output = True
                     break
         time.sleep(0.5)
+
+    build_thread.join()
+
+    # The build thread may finish just before the callback writes refreshed
+    # output, so allow a short follow-up window to observe the final page.
+    output_deadline = time.time() + 4
+    while not found_output and time.time() < output_deadline:
+        if display_file.exists():
+            html = display_file.read_text()
+            if "NOTEBOOK_OUTPUT_MARKER" in html and "Running notebook" not in html:
+                found_output = True
+                break
+        time.sleep(0.2)
 
     assert placeholder_seen
     assert found_output

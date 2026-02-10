@@ -209,6 +209,12 @@ class RenderNotebook:
         """Insert stored notebook outputs and refresh display pages."""
         if self.notebook_outputs is None or self.notebook_code_map is None:
             return
+        print(
+            "Applying notebook outputs to "
+            f"{len(stage_files)} staged file(s) and "
+            f"{len(display_targets)} display page(s).",
+            flush=True,
+        )
         for f in stage_files:
             html_file = (BUILD_DIR / f).with_suffix(".html")
             if html_file.exists():
@@ -1240,13 +1246,13 @@ def substitute_code_placeholders(
                 create_parent=False,
             )
             frags.append(waiting)
-        parent = node.getparent()
-        if parent is None:
-            continue
-        pos = parent.index(node)
-        parent.remove(node)
-        for frag in reversed(frags):
-            parent.insert(pos, frag)
+        # Keep the data-script marker node in place so later async passes can
+        # replace the temporary "Running notebook ..." block with final output.
+        node.text = None
+        for child in list(node):
+            node.remove(child)
+        for frag in frags:
+            node.append(frag)
         changed = True
     if changed:
         tree.write(str(html_path), encoding="utf-8", method="html")
@@ -1319,6 +1325,21 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
         display_targets = set(render_files)
 
     stage_files = sorted(stage_set)
+    # Log the exact file sets to make async build/debug behavior obvious.
+    print(
+        "Build plan: "
+        f"{len(stage_files)} staged file(s), "
+        f"{len(display_targets)} display target(s).",
+        flush=True,
+    )
+    if stage_files:
+        print("Stage files: " + ", ".join(stage_files), flush=True)
+    if display_targets:
+        print(
+            "Display targets: " + ", ".join(sorted(display_targets)),
+            flush=True,
+        )
+
     # phase 1: rebuild the modified sources into the staging tree
     code_blocks = mirror_and_modify(stage_files, anchors, roots)
 
@@ -1372,6 +1393,10 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
 
     # phase 3: insert whatever notebook output is available into staged pages
     if notebook_future and notebook_future.done():
+        print(
+            "Notebook execution finished before phase 3; applying outputs now.",
+            flush=True,
+        )
         graph.handle_notebook_future(
             notebook_future,
             notebook_executor,
@@ -1382,6 +1407,12 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
         notebook_executor = None
         notebook_future = None
     else:
+        if notebook_future:
+            print(
+                "Notebook execution still running during phase 3; "
+                "writing temporary placeholders.",
+                flush=True,
+            )
         for f in stage_files:
             html_file = (BUILD_DIR / f).with_suffix(".html")
             if html_file.exists():
@@ -1401,6 +1432,11 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
 
     # phase 5: keep notebook execution asynchronous and refresh once complete.
     if notebook_future:
+        print(
+            "Notebook execution still running after phase 4; "
+            "registering async completion callback.",
+            flush=True,
+        )
         notebook_future.add_done_callback(
             lambda future: graph.handle_notebook_future(
                 future,
