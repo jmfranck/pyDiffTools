@@ -176,6 +176,68 @@ class RenderNotebook:
     def render_order(self):
         return build_order(self.render_files, self.tree)
 
+    def _lineage_paths(self):
+        """Return leaf->...->trunk paths for logging build state."""
+        lines = []
+        seen = set()
+        for trunk in self.render_files:
+            stack = [(trunk, [trunk])]
+            while stack:
+                node, chain = stack.pop()
+                if node in self.nodes and self.nodes[node]["children"]:
+                    for child in self.nodes[node]["children"]:
+                        stack.append((child, [child] + chain))
+                else:
+                    key = tuple(chain)
+                    if key not in seen:
+                        seen.add(key)
+                        lines.append(chain)
+        return lines
+
+    def log_tree_status(
+        self,
+        phase_label,
+        pandoc_pending,
+        notebook_pending,
+    ):
+        """Print tree status as leaf->branch->trunk lines with p/j/i flags."""
+        print(f"Build tree status ({phase_label}):", flush=True)
+        lines = self._lineage_paths()
+        if not lines:
+            print("  <no render tree paths>", flush=True)
+            return
+        for chain in lines:
+            parts = []
+            for node in chain:
+                if node not in self.nodes:
+                    continue
+                if node in pandoc_pending:
+                    pandoc_state = "no"
+                else:
+                    pandoc_state = "yes"
+                if self.nodes[node]["has_notebook"]:
+                    if node in notebook_pending:
+                        notebook_state = "no"
+                    else:
+                        notebook_state = "yes"
+                else:
+                    notebook_state = "n/a"
+                if self.nodes[node]["children"]:
+                    include_state = "yes"
+                    for child in self.nodes[node]["children"]:
+                        if child in pandoc_pending:
+                            include_state = "no"
+                            break
+                else:
+                    include_state = "n/a"
+                parts.append(
+                    f"{node} ({self.nodes[node]['type']}; "
+                    f"p: {pandoc_state}, j: {notebook_state}, "
+                    f"i: {include_state})"
+                )
+            if parts:
+                print("  " + " --> ".join(parts), flush=True)
+
     def refresh_if_ready(self, refresh_callback):
         """Refresh the browser if a callback was provided."""
         if refresh_callback:
@@ -251,6 +313,11 @@ class RenderNotebook:
             stage_files,
             display_targets,
             refresh_callback,
+        )
+        self.log_tree_status(
+            "after notebook completion",
+            set(),
+            set(),
         )
 
     def refresh_navigation(self):
@@ -1314,6 +1381,17 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
         for rel in stage_set:
             if rel in render_files:
                 display_targets.add(rel)
+        if not stage_set and display_targets:
+            # If a render target is impacted but no file is currently marked
+            # stale, force a rebuild for that target so placeholders can be
+            # replaced and async notebook outputs can flow through.
+            print(
+                "No staged files were marked stale for changed paths; "
+                "forcing stage rebuild for impacted display targets.",
+                flush=True,
+            )
+            for target in sorted(display_targets):
+                stage_set.add(target)
         if not stage_set and not display_targets:
             return {
                 "render_files": render_files,
@@ -1339,6 +1417,12 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
             "Display targets: " + ", ".join(sorted(display_targets)),
             flush=True,
         )
+    pending_notebook = set()
+    graph.log_tree_status(
+        "before rebuild",
+        set(stage_files),
+        pending_notebook,
+    )
 
     # phase 1: rebuild the modified sources into the staging tree
     code_blocks = mirror_and_modify(stage_files, anchors, roots)
@@ -1349,6 +1433,12 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     outputs = {}
     code_map = {}
     if code_blocks:
+        pending_notebook = set(code_blocks.keys())
+        graph.log_tree_status(
+            "after notebook job submission",
+            set(stage_files),
+            pending_notebook,
+        )
         print(
             f"Executing notebook blocks for {len(code_blocks)}"
             " source files.",
@@ -1404,6 +1494,7 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
             display_targets,
             refresh_callback,
         )
+        pending_notebook = set()
         notebook_executor = None
         notebook_future = None
     else:
@@ -1446,6 +1537,12 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
                 refresh_callback,
             )
         )
+
+    graph.log_tree_status(
+        "after synchronous phases",
+        set(),
+        pending_notebook,
+    )
 
     graph.refresh_navigation()
 
