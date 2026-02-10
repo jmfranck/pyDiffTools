@@ -197,3 +197,71 @@ def test_async_notebook_outputs_replace_placeholder(fb):
 
     assert placeholder_seen
     assert found_output
+
+
+def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(fb, capsys):
+    # Build once so checksums reflect a clean tree and the second build starts
+    # from a "0 staged files" state.
+    qmd = Path("async_pending.qmd")
+    qmd.write_text(
+        "# Async pending test\n\n"
+        "```{python}\n"
+        "import time\n"
+        "time.sleep(2)\n"
+        "print('async pending done')\n"
+        "```\n"
+    )
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    if "project" not in config:
+        config["project"] = {}
+    config["project"]["render"] = ["async_pending.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+    fb.build_all()
+
+    # Simulate the failing state: stale staged/display HTML still contains a
+    # pending notebook marker from a prior run.
+    pending_html = (
+        "<html><body>"
+        '<div id="on-this-page">outline</div>'
+        '<div data-script="async_pending.qmd" data-index="1"></div>'
+        "</body></html>"
+    )
+    Path("_build/async_pending.html").write_text(pending_html)
+    Path("_display/async_pending.html").write_text(pending_html)
+
+    def delayed_execute_code_blocks(blocks):
+        time.sleep(2)
+        outputs = {}
+        code_map = {}
+        for src in blocks:
+            outputs[(src, 1)] = "<pre>PENDING_REBUILD_OUTPUT</pre>"
+            code_map[(src, 1)] = "import time"
+        return outputs, code_map
+
+    fb.execute_code_blocks = delayed_execute_code_blocks
+    fb.build_all()
+
+    logs = capsys.readouterr().out
+    assert "Build plan: 1 staged file(s), 1 display target(s)." in logs
+    assert "forcing stage rebuild for notebook targets" in logs
+
+    build_html = ""
+    display_html = ""
+    deadline = time.time() + 4
+    while time.time() < deadline:
+        build_html = Path("_build/async_pending.html").read_text()
+        display_html = Path("_display/async_pending.html").read_text()
+        if (
+            "PENDING_REBUILD_OUTPUT" in build_html
+            and "PENDING_REBUILD_OUTPUT" in display_html
+            and "Running notebook" not in build_html
+            and "Running notebook" not in display_html
+        ):
+            break
+        time.sleep(0.2)
+
+    assert "PENDING_REBUILD_OUTPUT" in build_html
+    assert "PENDING_REBUILD_OUTPUT" in display_html
+    assert "Running notebook" not in build_html
+    assert "Running notebook" not in display_html
+    assert "on-this-page" in display_html

@@ -238,6 +238,23 @@ class RenderNotebook:
             if parts:
                 print("  " + " --> ".join(parts), flush=True)
 
+    def notebook_pending_targets(self, candidates):
+        """Return notebook targets whose staged HTML still has pending markers."""
+        pending = set()
+        for path in candidates:
+            if path not in self.nodes:
+                continue
+            if not self.nodes[path]["has_notebook"]:
+                continue
+            html_file = (BUILD_DIR / path).with_suffix(".html")
+            if not html_file.exists():
+                pending.add(path)
+                continue
+            html_text = html_file.read_text()
+            if "data-script=" in html_text or "Running notebook " in html_text:
+                pending.add(path)
+        return pending
+
     def refresh_if_ready(self, refresh_callback):
         """Refresh the browser if a callback was provided."""
         if refresh_callback:
@@ -1402,6 +1419,18 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
         stage_set = set(graph.stage_targets(None))
         display_targets = set(render_files)
 
+    pending_notebook = graph.notebook_pending_targets(display_targets)
+    if not stage_set and pending_notebook:
+        # If prior runs left notebook placeholders behind, force these targets
+        # back into staging so async notebook output replacement can complete.
+        print(
+            "No staged files but notebook placeholders are still pending; "
+            "forcing stage rebuild for notebook targets.",
+            flush=True,
+        )
+        for target in sorted(pending_notebook):
+            stage_set.add(target)
+
     stage_files = sorted(stage_set)
     # Log the exact file sets to make async build/debug behavior obvious.
     print(
@@ -1417,7 +1446,6 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
             "Display targets: " + ", ".join(sorted(display_targets)),
             flush=True,
         )
-    pending_notebook = set()
     graph.log_tree_status(
         "before rebuild",
         set(stage_files),
