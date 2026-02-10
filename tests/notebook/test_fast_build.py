@@ -1,9 +1,11 @@
 import shutil
+import threading
 import time
 from pathlib import Path
 
 import pytest
 import yaml
+from jupyter_client.kernelspec import KernelSpecManager
 
 import pydifftools.notebook.fast_build as fast_build
 
@@ -130,6 +132,14 @@ def test_navigation_persists_after_notebook_updates(fb):
 
 
 def test_async_notebook_outputs_replace_placeholder(fb):
+    # Ensure the python3 kernel is available so notebook execution runs.
+    kernel_specs = KernelSpecManager().find_kernel_specs()
+    if "python3" not in kernel_specs:
+        raise AssertionError(
+            "python3 kernel spec is missing; install ipykernel and register"
+            " the kernel to run notebook execution tests."
+        )
+
     qmd = Path("async_test.qmd")
     qmd.write_text(
         "# Async test\n\n"
@@ -147,10 +157,25 @@ def test_async_notebook_outputs_replace_placeholder(fb):
     config["project"]["render"].append("async_test.qmd")
     Path("_quarto.yml").write_text(yaml.safe_dump(config))
 
-    # Trigger the build and wait for the async notebook outputs to apply.
-    fb.build_all()
+    # Trigger the build in the background so we can observe the placeholder
+    # before notebook execution completes.
+    build_thread = threading.Thread(target=fb.build_all)
+    build_thread.start()
 
     display_file = Path("_display/async_test.html")
+    # Ensure the initial placeholder appears while the build is still running
+    # so we know the pipeline is streaming results.
+    placeholder_seen = False
+    placeholder_deadline = time.time() + 4
+    while time.time() < placeholder_deadline and build_thread.is_alive():
+        if display_file.exists():
+            html = display_file.read_text()
+            if "Running notebook async_test.qmd" in html:
+                placeholder_seen = True
+                break
+        time.sleep(0.2)
+
+    build_thread.join()
     deadline = time.time() + 4
     found_output = False
     while time.time() < deadline:
@@ -162,4 +187,5 @@ def test_async_notebook_outputs_replace_placeholder(fb):
                     break
         time.sleep(0.5)
 
+    assert placeholder_seen
     assert found_output

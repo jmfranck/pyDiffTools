@@ -1337,8 +1337,6 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
         notebook_future = notebook_executor.submit(
             execute_code_blocks, code_blocks
         )
-    else:
-        print("No notebook code blocks detected.", flush=True)
 
     order = graph.render_order()
     render_targets = [f for f in order if f in stage_set]
