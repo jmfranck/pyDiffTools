@@ -73,7 +73,10 @@ include_pattern = re.compile(
     r"\{\{\s*<\s*(include|embed)\s+([^>\s]+)\s*>\s*\}\}"
 )
 # Python code block pattern
-code_pattern = re.compile(r"```\{python[^}]*\}\n(.*?)```", re.DOTALL)
+code_pattern = re.compile(
+    r"^\s*```\{python[^}]*\}\s*\r?\n(.*?)^\s*```",
+    re.DOTALL | re.MULTILINE | re.IGNORECASE,
+)
 # Markdown image pattern
 image_pattern = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 
@@ -82,6 +85,11 @@ anchor_pattern = re.compile(r"\{#(sec|fig|tab):([A-Za-z0-9_-]+)\}")
 heading_pattern = re.compile(
     r"^(#+)\s+(.*?)\s*\{#(sec|fig|tab):([A-Za-z0-9_-]+)\}"
 )
+
+
+def count_code_blocks(text):
+    """Count python code blocks in a Quarto document."""
+    return len(code_pattern.findall(text))
 
 
 class RenderNotebook:
@@ -123,8 +131,8 @@ class RenderNotebook:
             src = PROJECT_ROOT / path
             if src.exists():
                 text = src.read_text()
-                self.nodes[path]["has_notebook"] = bool(
-                    code_pattern.search(text)
+                self.nodes[path]["has_notebook"] = (
+                    count_code_blocks(text) > 0
                 )
 
     def all_paths(self):
@@ -841,12 +849,24 @@ def collect_render_targets(targets, included_by, render_files):
 def mirror_and_modify(files, anchors, roots):
     project_root = PROJECT_ROOT
     code_blocks: dict[str, list[tuple[str, str]]] = {}
+    scanned_files = 0
+    total_blocks = 0
+    scanned_list = []
     for file in files:
         src = Path(file)
         dest = BUILD_DIR / file
         dest.parent.mkdir(parents=True, exist_ok=True)
         text = src.read_text()
         text = replace_refs_text(text, anchors, dest.parent)
+        scanned_files += 1
+        scanned_list.append(file)
+        block_count = count_code_blocks(text)
+        total_blocks += block_count
+        if block_count:
+            print(
+                f"Detected {block_count} notebook code block(s) in {file}.",
+                flush=True,
+            )
 
         root_dir = roots.get(file, src.parent)
 
@@ -907,6 +927,18 @@ def mirror_and_modify(files, anchors, roots):
                 target_dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(target_src, target_dest)
         dest.write_text(text)
+    if scanned_files and not total_blocks:
+        # Report which files were scanned to troubleshoot missing notebook
+        # detection when user content contains code fences.
+        print(
+            "Scanned for notebook blocks in: "
+            + ", ".join(scanned_list),
+            flush=True,
+        )
+        print(
+            f"No notebook code blocks detected in {scanned_files} file(s).",
+            flush=True,
+        )
     return code_blocks
 
 

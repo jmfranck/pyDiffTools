@@ -1,9 +1,9 @@
-import os
 import shutil
-import subprocess
+import time
 from pathlib import Path
 
 import pytest
+import yaml
 
 import pydifftools.notebook.fast_build as fast_build
 
@@ -13,26 +13,7 @@ def fb(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PYDIFFTOOLS_FAKE_MATHJAX", "1")
     fast_build.qmdinit(tmp_path, force=True)
-    dummybin = tmp_path / "dummybin"
-    dummybin.mkdir()
-    for name in ("pandoc", "pandoc-crossref"):
-        script = dummybin / name
-        script.write_text("#!/bin/sh\ncat >/dev/null\n")
-        script.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{dummybin}:{os.environ['PATH']}")
     fast_build.load_bibliography_csl = lambda: (None, None)
-    real_run = fast_build.subprocess.run
-
-    def fake_run(cmd, **kwargs):
-        if cmd and cmd[0] == "pandoc":
-            dest_idx = cmd.index("-o") + 1
-            dest = Path(kwargs.get("cwd") or ".") / cmd[dest_idx]
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text("<html><body>stub</body></html>")
-            return subprocess.CompletedProcess(cmd, 0)
-        return real_run(cmd, **kwargs)
-
-    monkeypatch.setattr(fast_build.subprocess, "run", fake_run)
     original_build = fast_build.BUILD_DIR
     original_display = fast_build.DISPLAY_DIR
     try:
@@ -146,3 +127,39 @@ def test_navigation_persists_after_notebook_updates(fb):
     graph.apply_notebook_outputs([], set(render_files), None)
 
     assert "on-this-page" in target.read_text()
+
+
+def test_async_notebook_outputs_replace_placeholder(fb):
+    qmd = Path("async_test.qmd")
+    qmd.write_text(
+        "# Async test\n\n"
+        "```{python}\n"
+        "import time\n"
+        "time.sleep(2)\n"
+        "print('async done')\n"
+        "```\n"
+    )
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    if "project" not in config:
+        config["project"] = {}
+    if "render" not in config["project"]:
+        config["project"]["render"] = []
+    config["project"]["render"].append("async_test.qmd")
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    # Trigger the build and wait for the async notebook outputs to apply.
+    fb.build_all()
+
+    display_file = Path("_display/async_test.html")
+    deadline = time.time() + 4
+    found_output = False
+    while time.time() < deadline:
+        if display_file.exists():
+            html = display_file.read_text()
+            if "Running notebook async_test.qmd" not in html:
+                if "async done" in html:
+                    found_output = True
+                    break
+        time.sleep(0.5)
+
+    assert found_output
