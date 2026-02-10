@@ -10,6 +10,7 @@ import re
 import nbformat
 import difflib
 import shutil
+import socket
 import importlib.util
 from pathlib import Path
 from . import (
@@ -18,7 +19,7 @@ from . import (
     outline,
     update_check,
 )
-from .continuous import cpb
+from .continuous import cpb, FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT
 from .wrap_sentences import wr as wrap_sentences_wr  # registers wrap command
 from .separate_comments import tex_sepcomments
 from .unseparate_comments import tex_unsepcomments
@@ -171,8 +172,7 @@ def look_for_pdf(directory, origbasename):
 def nb2py(arguments):
     assert arguments[0].endswith(".ipynb"), (
         "this is supposed to be called with a .ipynb file argument! (arguments"
-        " are %s)"
-        % repr(arguments)
+        " are %s)" % repr(arguments)
     )
     nb = nbformat.read(arguments[0], nbformat.NO_CONVERT)
     last_was_markdown = False
@@ -229,8 +229,7 @@ def py2nb(arguments):
     assert len(arguments) == 1, "py2nb should only be called with one argument"
     assert arguments[0].endswith(".py"), (
         "this is supposed to be called with a .py file argument! (arguments"
-        " are %s)"
-        % repr(arguments)
+        " are %s)" % repr(arguments)
     )
     with open(arguments[0], encoding="utf-8") as fpin:
         text = fpin.read()
@@ -286,13 +285,15 @@ def py2nb(arguments):
     nbook = nbformat.v3.reads_py(text)
 
     nbook = nbformat.v4.upgrade(nbook)  # Upgrade nbformat.v3 to nbformat.v4
-    nbook.metadata.update({
-        "kernelspec": {
-            "name": "Python [Anaconda2]",
-            "display_name": "Python [Anaconda2]",
-            "language": "python",
+    nbook.metadata.update(
+        {
+            "kernelspec": {
+                "name": "Python [Anaconda2]",
+                "display_name": "Python [Anaconda2]",
+                "language": "python",
+            }
         }
-    })
+    )
 
     jsonform = nbformat.v4.writes(nbook) + "\n"
     with open(
@@ -511,6 +512,23 @@ def fs(arguments):
     if os.name == "posix":
         cmd = ["wmctrl", "-a", basename + ".pdf"]
         os.system(" ".join(cmd))
+
+
+@register_command(
+    "markdown forward search, use with cpb to jump to text in the browser"
+)
+def mfs(text):
+    # Send the requested search text to the cpb socket listener.
+    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        client.connect((FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT))
+    except OSError as exc:
+        raise RuntimeError(
+            "Could not connect to cpb forward search socket. "
+            "Start cpb in the markdown directory first."
+        ) from exc
+    client.sendall(text.encode("utf-8"))
+    client.close()
 
 
 @register_command("Convert xml to xlsx")
