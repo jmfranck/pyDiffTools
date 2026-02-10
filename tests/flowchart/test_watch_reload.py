@@ -10,6 +10,7 @@ from selenium.webdriver.chrome.service import Service
 
 
 def test_reload_preserves_view(tmp_path):
+
     dot_file = tmp_path / "graph.dot"
     svg_file = tmp_path / "graph.svg"
     html_file = tmp_path / "view.html"

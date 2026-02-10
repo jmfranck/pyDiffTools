@@ -42,7 +42,20 @@ def forward_search_listener(stop_event, search_queue):
             search_queue.put(payload.decode("utf-8"))
     server.close()
 
+
 def run_pandoc(filename, html_file):
+    # Pandoc and pandoc-crossref must be installed for HTML rendering.
+    if shutil.which("pandoc") is None:
+        raise RuntimeError(
+            "Pandoc must be installed to render HTML output. Install pandoc"
+            " so the 'pandoc' executable is available on your PATH."
+        )
+    if shutil.which("pandoc-crossref") is None:
+        raise RuntimeError(
+            "Pandoc-crossref must be installed to render HTML output. Install"
+            " pandoc-crossref so the 'pandoc-crossref' executable is available"
+            " on your PATH."
+        )
     if os.path.exists("MathJax-3.1.2"):
         has_local_jax = True
     else:
@@ -64,8 +77,7 @@ def run_pandoc(filename, html_file):
         else:
             raise ValueError(
                 f"You have more than one (or no) {k} file in this directory!"
-                " Get rid of all but one! of "
-                + "and".join(localfiles[k])
+                " Get rid of all but one! of " + "and".join(localfiles[k])
             )
     command = [
         "pandoc",
@@ -213,7 +225,9 @@ position
             print("forward search did not find text:", search_text)
         # Bring the browser window to the foreground in Linux window managers.
         if os.name == "posix" and shutil.which("wmctrl"):
-            window_title = self.firefox.execute_script("return document.title;")
+            window_title = self.firefox.execute_script(
+                "return document.title;"
+            )
             if window_title:
                 # Try common Chromium title forms used by desktop environments.
                 for title_candidate in [

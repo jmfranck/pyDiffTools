@@ -23,7 +23,7 @@ digraph G {
 <br align="left"/>>];
     End [label=<Finish
 <br align="left"/>
-<font color="red">10/2/25</font>
+<font color="orange">10/2/25</font>
 <br align="left"/>>];
     Start -> Middle;
     Middle -> End;

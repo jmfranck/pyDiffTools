@@ -1,30 +1,12 @@
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
-from datetime import date
+from datetime import date, datetime
 
-import os
-import shutil
-import tempfile
 import textwrap
 import re
 import yaml
 from dateutil.parser import parse as parse_due_string
 from yaml.emitter import ScalarAnalysis
-
-if shutil.which("dot") is None:
-    # Provide a lightweight fallback for environments without Graphviz so the
-    # flowchart tests can still render stub SVG output.
-    _dot_dir = Path(tempfile.mkdtemp(prefix="pydt_dot_"))
-    _dot_path = _dot_dir / "dot"
-    _dot_path.write_text(
-        "#!/usr/bin/env python3\nimport sys, pathlib\nargs = sys.argv\noutfile"
-        " = args[args.index('-o') + 1] if '-o' in args else None\nif"
-        " outfile:\n    path = pathlib.Path(outfile)\n   "
-        ' path.write_text("<svg'
-        " xmlns='http://www.w3.org/2000/svg'></svg>\\n\")\nsys.exit(0)\n"
-    )
-    _dot_path.chmod(0o755)
-    os.environ["PATH"] = f"{_dot_dir}{os.pathsep}" + os.environ.get("PATH", "")
 
 
 class IndentDumper(yaml.SafeDumper):
@@ -308,7 +290,7 @@ def _node_text_with_due(node):
     due_date = parse_due_string(due_text).date()
     today_date = date.today()
 
-    # Render the actual due date in red, optionally showing an original date
+    # Render the actual due date in orange, optionally showing an original date
     # that slipped.  The original value is italicized so it stands out while
     # remaining inside the colored tag for continuity.
     def date_formatter(thedate):
@@ -338,8 +320,14 @@ def _node_text_with_due(node):
         )
         formatted = f"<i>{orig_str}</i>→{formatted}"
     # Completed tasks should show a green due date so the status is obvious at
-    # a glance.
-    due_color = "green" if is_completed else "red"
+    # a glance. Upcoming deadlines within the next week are orange to match the
+    # same visual emphasis used for overdue dates.
+    if is_completed:
+        due_color = "green"
+    elif (due_date - today_date).days <= 7:
+        due_color = "red"
+    else:
+        due_color = "orange"
     formatted = f'<font color="{due_color}">{formatted}</font>'
 
     if "text" in node and node["text"]:
@@ -350,13 +338,70 @@ def _node_text_with_due(node):
     return formatted
 
 
-def _node_label(text, wrap_width: int = 55) -> str:
+def _node_label(text, wrap_width=55):
     if text is None:
         return ""
     return _format_label(text, wrap_width)
 
 
-def yaml_to_dot(data: Dict[str, Any], *, wrap_width: int = 55) -> str:
+def _normalize_graph_dates(data):
+    # Normalize due dates to mm/dd/yy so the YAML is consistent across years.
+    if "nodes" not in data:
+        return
+    default_date = datetime(date.today().year, 1, 1)
+    for name in data["nodes"]:
+        if (
+            "due" in data["nodes"][name]
+            and data["nodes"][name]["due"] is not None
+        ):
+            if str(data["nodes"][name]["due"]).strip():
+                parsed = parse_due_string(
+                    str(data["nodes"][name]["due"]).strip(),
+                    default=default_date,
+                )
+                data["nodes"][name]["due"] = parsed.date().strftime("%m/%d/%y")
+        if (
+            "orig_due" in data["nodes"][name]
+            and data["nodes"][name]["orig_due"] is not None
+        ):
+            if str(data["nodes"][name]["orig_due"]).strip():
+                parsed = parse_due_string(
+                    str(data["nodes"][name]["orig_due"]).strip(),
+                    default=default_date,
+                )
+                data["nodes"][name]["orig_due"] = parsed.date().strftime(
+                    "%m/%d/%y"
+                )
+
+
+def _append_node(
+    lines, indent, node_name, data, wrap_width, order_by_date, sort_order
+):
+    # Add a node line with an optional sort hint so Graphviz keeps date order.
+    if node_name in data["nodes"]:
+        label = _node_label(
+            _node_text_with_due(data["nodes"][node_name]), wrap_width
+        )
+    else:
+        label = ""
+    if label:
+        if order_by_date:
+            lines.append(
+                f"{indent}{node_name} [label={label},"
+                f" sortv={sort_order[node_name]}];"
+            )
+        else:
+            lines.append(f"{indent}{node_name} [label={label}];")
+    else:
+        if order_by_date:
+            lines.append(
+                f"{indent}{node_name} [sortv={sort_order[node_name]}];"
+            )
+        else:
+            lines.append(f"{indent}{node_name};")
+
+
+def yaml_to_dot(data, wrap_width=55, order_by_date=False):
     lines = [
         "digraph G {",
         "    graph [",
@@ -374,55 +419,132 @@ def yaml_to_dot(data: Dict[str, Any], *, wrap_width: int = 55) -> str:
         "    ];",
         "    node [shape=box,width=0.5];",
     ]
-    nodes = data.get("nodes", {})
-    styles = data.get("styles", {})
+    if "nodes" not in data:
+        data["nodes"] = {}
+    if "styles" not in data:
+        data["styles"] = {}
+    ordered_names = None
+    sort_order = None
+    ordered_set = None
+    if order_by_date:
+        # Order nodes by due date so the graph renders boxes in calendar order.
+        order_pairs = []
+        for name in data["nodes"]:
+            # Exclude nodes without a due date from date-ordered display.
+            if (
+                "due" in data["nodes"][name]
+                and data["nodes"][name]["due"] is not None
+            ):
+                if str(data["nodes"][name]["due"]).strip():
+                    due_date = parse_due_string(
+                        str(data["nodes"][name]["due"]).strip()
+                    ).date()
+                    order_pairs.append((due_date, name))
+        # Capture a stable order and use sort values so Graphviz keeps it.
+        ordered_names = [
+            name
+            for due_date, name in sorted(
+                order_pairs, key=lambda item: (item[0], item[1])
+            )
+        ]
+        sort_order = {name: index for index, name in enumerate(ordered_names)}
+        ordered_set = set(ordered_names)
     handled = set()
-    # group nodes by their declared style
-    style_members: Dict[str, List[str]] = {}
-    for name, node in nodes.items():
-        style = node.get("style")
-        if style:
-            style_members.setdefault(style, []).append(name)
+    # Group nodes by their declared style so they share subgraph attributes.
+    style_members = {}
+    for name in data["nodes"]:
+        if order_by_date and name not in ordered_set:
+            continue
+        if "style" in data["nodes"][name] and data["nodes"][name]["style"]:
+            style_members.setdefault(data["nodes"][name]["style"], []).append(
+                name
+            )
 
-    for style_name, style_def in styles.items():
-        members = style_members.get(style_name, [])
-        if not members:
+    for style_name in data["styles"]:
+        if style_name not in style_members:
+            continue
+        if not style_members[style_name]:
             continue
         lines.append(f"    subgraph {style_name} {{")
-        attrs = style_def.get("attrs", {})
-        node_attrs = attrs.get("node")
-        if isinstance(node_attrs, list):
-            node_attrs = node_attrs[0]
-        if node_attrs:
-            attr_str = ", ".join(f"{k}={v}" for k, v in node_attrs.items())
-            lines.append(f"        node [{attr_str}];")
-        for node_name in members:
-            node = nodes.get(node_name, {})
-            label = _node_label(_node_text_with_due(node), wrap_width)
-            if label:
-                lines.append(f"        {node_name} [label={label}];")
+        if (
+            "attrs" in data["styles"][style_name]
+            and "node" in data["styles"][style_name]["attrs"]
+        ):
+            if isinstance(data["styles"][style_name]["attrs"]["node"], list):
+                attr_str = ", ".join(
+                    f"{k}={v}"
+                    for k, v in data["styles"][style_name]["attrs"]["node"][
+                        0
+                    ].items()
+                )
             else:
-                lines.append(f"        {node_name};")
+                attr_str = ", ".join(
+                    f"{k}={v}"
+                    for k, v in data["styles"][style_name]["attrs"][
+                        "node"
+                    ].items()
+                )
+            lines.append(f"        node [{attr_str}];")
+        for node_name in style_members[style_name]:
+            _append_node(
+                lines,
+                "        ",
+                node_name,
+                data,
+                wrap_width,
+                order_by_date,
+                sort_order,
+            )
             handled.add(node_name)
         lines.append("    };")
 
-    for name, node in nodes.items():
+    if ordered_names is None:
+        ordered_names = list(data["nodes"].keys())
+    for name in ordered_names:
         if name in handled:
             continue
-        label = _node_label(_node_text_with_due(node), wrap_width)
-        if label:
-            lines.append(f"    {name} [label={label}];")
-        else:
-            lines.append(f"    {name};")
-    # Edges
-    for name, node in nodes.items():
-        for child in node.get("children", []):
-            lines.append(f"    {name} -> {child};")
+        _append_node(
+            lines,
+            "    ",
+            name,
+            data,
+            wrap_width,
+            order_by_date,
+            sort_order,
+        )
+    if order_by_date:
+        # Arrange nodes in a grid while preserving style subgraphs.
+        column_count = 5
+        for index in range(0, len(ordered_names), column_count):
+            lines.append(
+                "    { rank=same; "
+                + "; ".join(ordered_names[index : index + column_count])
+                + "; }"
+            )
+            row_nodes = ordered_names[index : index + column_count]
+            for row_index in range(len(row_nodes) - 1):
+                lines.append(
+                    f"    {row_nodes[row_index]} ->"
+                    f" {row_nodes[row_index + 1]} [style=invis];"
+                )
+        for index in range(0, len(ordered_names) - column_count, column_count):
+            lines.append(
+                f"    {ordered_names[index]} ->"
+                f" {ordered_names[index + column_count]} [style=invis];"
+            )
+    else:
+        # Edges are omitted when ordering by date so boxes stand alone.
+        for name in data["nodes"]:
+            if "children" in data["nodes"][name]:
+                for child in data["nodes"][name]["children"]:
+                    lines.append(f"    {name} -> {child};")
     lines.append("}")
     return "\n".join(lines)
 
 
-def save_graph_yaml(path: str | Path, data: Dict[str, Any]) -> None:
+def save_graph_yaml(path, data):
+    # Ensure stored dates are normalized before writing.
+    _normalize_graph_dates(data)
     with open(path, "w") as f:
         yaml.dump(
             data,
@@ -436,15 +558,126 @@ def save_graph_yaml(path: str | Path, data: Dict[str, Any]) -> None:
 
 
 def write_dot_from_yaml(
-    yaml_path: str | Path,
-    dot_path: str | Path,
-    *,
-    update_yaml: bool = True,
-    wrap_width: int = 55,
-    old_data: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    yaml_path,
+    dot_path,
+    update_yaml=True,
+    wrap_width=55,
+    order_by_date=False,
+    old_data=None,
+    validate_due_dates=False,
+    filter_task=None,
+):
     data = load_graph_yaml(str(yaml_path), old_data=old_data)
-    dot_str = yaml_to_dot(data, wrap_width=wrap_width)
+    _normalize_graph_dates(data)
+    if validate_due_dates:
+        # Enforce that no node's due date is earlier than any ancestor due date
+        # so dependency timelines remain coherent.
+        due_dates = {}
+        for name in data["nodes"]:
+            if (
+                "due" in data["nodes"][name]
+                and data["nodes"][name]["due"] is not None
+            ):
+                due_text = str(data["nodes"][name]["due"]).strip()
+                if due_text:
+                    due_dates[name] = parse_due_string(due_text).date()
+        for name in due_dates:
+            parents_to_check = [
+                (parent, [parent]) for parent in data["nodes"][name]["parents"]
+            ]
+            seen_parents = set()
+            while parents_to_check:
+                parent, path = parents_to_check.pop()
+                if parent in seen_parents:
+                    continue
+                seen_parents.add(parent)
+                if parent in due_dates and due_dates[name] < due_dates[parent]:
+                    path_str = " -> ".join(path)
+                    raise ValueError(
+                        "Refusing to render watch_graph because node "
+                        f"'{name}' has due date {due_dates[name].isoformat()},"
+                        " which is earlier than its ancestor "
+                        f"'{parent}' due date {due_dates[parent].isoformat()}."
+                        " Parent chain checked: "
+                        f"{name} -> {path_str}. "
+                        "Update the node's due date or adjust the parent "
+                        "relationship so child due dates are not earlier than "
+                        "any ancestor."
+                    )
+                if (
+                    parent in data["nodes"]
+                    and data["nodes"][parent]["parents"]
+                ):
+                    for grandparent in data["nodes"][parent]["parents"]:
+                        parents_to_check.append(
+                            (grandparent, path + [grandparent])
+                        )
+    data_for_dot = data
+    if filter_task is not None:
+        # Limit the rendered graph to incomplete ancestors of the target task.
+        if "nodes" not in data or filter_task not in data["nodes"]:
+            # Allow case-insensitive task lookup to align with CLI completion.
+            matches = [
+                name
+                for name in data["nodes"]
+                if name.lower() == filter_task.lower()
+            ]
+            if len(matches) == 1:
+                filter_task = matches[0]
+            elif len(matches) > 1:
+                raise ValueError(
+                    "Task name is ambiguous when compared case-insensitively: "
+                    f"'{filter_task}' matches {matches}."
+                )
+            else:
+                raise ValueError(
+                    f"Task '{filter_task}' not found in flowchart YAML."
+                )
+        # Include the target task alongside its ancestors in the filtered view.
+        ancestors = set([filter_task])
+        parents_to_check = list(data["nodes"][filter_task]["parents"])
+        while parents_to_check:
+            parent = parents_to_check.pop()
+            if parent in ancestors:
+                continue
+            ancestors.add(parent)
+            if (
+                parent in data["nodes"]
+                and "parents" in data["nodes"][parent]
+            ):
+                for grandparent in data["nodes"][parent]["parents"]:
+                    parents_to_check.append(grandparent)
+        incomplete_ancestors = set()
+        for name in ancestors:
+            if name not in data["nodes"]:
+                continue
+            if (
+                "style" in data["nodes"][name]
+                and data["nodes"][name]["style"] == "completed"
+            ):
+                continue
+            incomplete_ancestors.add(name)
+        data_for_dot = {"nodes": {}, "styles": {}}
+        if "styles" in data:
+            data_for_dot["styles"] = data["styles"]
+        for name in incomplete_ancestors:
+            data_for_dot["nodes"][name] = dict(data["nodes"][name])
+        for name in data_for_dot["nodes"]:
+            if "children" in data_for_dot["nodes"][name]:
+                data_for_dot["nodes"][name]["children"] = [
+                    child
+                    for child in data_for_dot["nodes"][name]["children"]
+                    if child in incomplete_ancestors
+                ]
+            if "parents" in data_for_dot["nodes"][name]:
+                data_for_dot["nodes"][name]["parents"] = [
+                    parent
+                    for parent in data_for_dot["nodes"][name]["parents"]
+                    if parent in incomplete_ancestors
+                ]
+    dot_str = yaml_to_dot(
+        data_for_dot, wrap_width=wrap_width, order_by_date=order_by_date
+    )
     Path(dot_path).write_text(dot_str)
     if update_yaml:
         save_graph_yaml(str(yaml_path), data)
