@@ -302,9 +302,13 @@ class RenderNotebook:
                     self.notebook_outputs,
                     self.notebook_code_map,
                 )
+        self.update_display_targets(display_targets, refresh_callback)
+        self.refresh_navigation()
+
+    def update_display_targets(self, display_targets, refresh_callback):
+        """Refresh display HTML for all targets and trigger browser reload."""
         for target in sorted(display_targets):
             self.update_display_page(target)
-        self.refresh_navigation()
         self.refresh_if_ready(refresh_callback)
 
     def record_notebook_outputs(self, outputs, code_map):
@@ -1379,6 +1383,7 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     anchors = collect_anchors(render_files, include_map)
 
     if changed_paths:
+        # 1) Normalize changed paths to qmd files rooted in this project.
         normalized = set()
         for path in changed_paths:
             candidate = Path(path)
@@ -1391,17 +1396,21 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
             if rel.suffix != ".qmd":
                 continue
             normalized.add(rel.as_posix())
+
+        # 2) Compute staged targets from the render tree.
         stage_set = set(graph.stage_targets(normalized))
+
+        # 3) Compute display targets impacted by the staged set.
         display_targets = collect_render_targets(
             stage_set, include_map, render_files
         )
         for rel in stage_set:
             if rel in render_files:
                 display_targets.add(rel)
+
+        # 4) If nothing is staged yet but display pages are impacted, force
+        # staging for those display targets so placeholder replacement can run.
         if not stage_set and display_targets:
-            # If a render target is impacted but no file is currently marked
-            # stale, force a rebuild for that target so placeholders can be
-            # replaced and async notebook outputs can flow through.
             print(
                 "No staged files were marked stale for changed paths; "
                 "forcing stage rebuild for impacted display targets.",
@@ -1409,6 +1418,9 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
             )
             for target in sorted(display_targets):
                 stage_set.add(target)
+
+        # 5) Exit early only when there are no staged files and no display
+        # targets to rebuild.
         if not stage_set and not display_targets:
             return {
                 "render_files": render_files,
@@ -1431,6 +1443,8 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
         for target in sorted(pending_notebook):
             stage_set.add(target)
 
+    # Post-condition: stage_files and display_targets contain every file that
+    # must be rebuilt or refreshed during this build pass.
     stage_files = sorted(stage_set)
     # Log the exact file sets to make async build/debug behavior obvious.
     print(
@@ -1481,12 +1495,10 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     render_targets = [f for f in order if f in stage_set]
     # phase 2: ensure display pages exist right away with placeholders so
     # browsers can load content while pandoc runs.
-    for target in sorted(display_targets):
-        graph.update_display_page(target)
-    graph.refresh_if_ready(refresh_callback)
+    graph.update_display_targets(display_targets, refresh_callback)
     if render_targets:
         workers = max(1, min(len(render_targets), 4))
-        tasks = []
+        future_to_target = {}
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for f in render_targets:
                 fragment = f not in render_files
@@ -1499,12 +1511,13 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
                     csl,
                     webtex,
                 )
-                tasks.append((f, future))
-            for future in as_completed([t[1] for t in tasks]):
-                for pair in tasks:
-                    if pair[1] is future:
-                        print(f"Pandoc finished for {pair[0]}")
-                        break
+                future_to_target[future] = f
+            # Use direct future-to-target mapping so completion logging stays
+            # straightforward while each render finishes.
+            for future in as_completed(future_to_target):
+                print(
+                    f"Pandoc finished for {future_to_target[future]}"
+                )
 
     graph.update_checksums(checksums)
     save_checksums(checksums)
@@ -1538,9 +1551,7 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
                 substitute_code_placeholders(html_file, outputs, code_map)
 
     # phase 4: assemble the served pages from staged fragments
-    for target in sorted(display_targets):
-        graph.update_display_page(target)
-    graph.refresh_if_ready(refresh_callback)
+    graph.update_display_targets(display_targets, refresh_callback)
     # If notebook outputs arrived before pandoc finished, apply them now that
     # the HTML is available.
     graph.apply_notebook_outputs(
