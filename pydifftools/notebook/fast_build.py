@@ -1383,7 +1383,7 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     anchors = collect_anchors(render_files, include_map)
 
     if changed_paths:
-        # 1) Normalize changed paths to qmd files rooted in this project.
+        # Normalize changed paths, then compute staged and display targets.
         normalized = set()
         for path in changed_paths:
             candidate = Path(path)
@@ -1393,14 +1393,10 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
                 rel = candidate.resolve().relative_to(PROJECT_ROOT)
             except ValueError:
                 continue
-            if rel.suffix != ".qmd":
-                continue
-            normalized.add(rel.as_posix())
+            if rel.suffix == ".qmd":
+                normalized.add(rel.as_posix())
 
-        # 2) Compute staged targets from the render tree.
         stage_set = set(graph.stage_targets(normalized))
-
-        # 3) Compute display targets impacted by the staged set.
         display_targets = collect_render_targets(
             stage_set, include_map, render_files
         )
@@ -1408,19 +1404,15 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
             if rel in render_files:
                 display_targets.add(rel)
 
-        # 4) If nothing is staged yet but display pages are impacted, force
-        # staging for those display targets so placeholder replacement can run.
+        # If no source is stale but display pages are impacted, force staging.
         if not stage_set and display_targets:
             print(
                 "No staged files were marked stale for changed paths; "
                 "forcing stage rebuild for impacted display targets.",
                 flush=True,
             )
-            for target in sorted(display_targets):
-                stage_set.add(target)
+            stage_set.update(display_targets)
 
-        # 5) Exit early only when there are no staged files and no display
-        # targets to rebuild.
         if not stage_set and not display_targets:
             return {
                 "render_files": render_files,
@@ -1440,11 +1432,9 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
             "forcing stage rebuild for notebook targets.",
             flush=True,
         )
-        for target in sorted(pending_notebook):
-            stage_set.add(target)
+        stage_set.update(pending_notebook)
 
-    # Post-condition: stage_files and display_targets contain every file that
-    # must be rebuilt or refreshed during this build pass.
+    # stage_files and display_targets now define everything to rebuild/refresh.
     stage_files = sorted(stage_set)
     # Log the exact file sets to make async build/debug behavior obvious.
     print(
@@ -1456,10 +1446,7 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     if stage_files:
         print("Stage files: " + ", ".join(stage_files), flush=True)
     if display_targets:
-        print(
-            "Display targets: " + ", ".join(sorted(display_targets)),
-            flush=True,
-        )
+        print("Display targets: " + ", ".join(sorted(display_targets)), flush=True)
     graph.log_tree_status(
         "before rebuild",
         set(stage_files),
