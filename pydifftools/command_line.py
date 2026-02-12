@@ -523,10 +523,48 @@ def mfs(text):
     try:
         client.connect((FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT))
     except OSError as exc:
-        raise RuntimeError(
-            "Could not connect to cpb forward search socket. "
-            "Start cpb in the markdown directory first."
-        ) from exc
+        client.close()
+        # If cpb isn't running yet, choose a markdown file in this directory
+        # that contains the requested search text and start cpb for it.
+        matching_files = []
+        for filename in sorted(os.listdir(".")):
+            if not filename.endswith(".md"):
+                continue
+            with open(filename, encoding="utf-8") as fp:
+                if text in fp.read():
+                    matching_files.append(filename)
+        if len(matching_files) == 0:
+            raise RuntimeError(
+                "Could not connect to cpb forward search socket and "
+                "could not find the requested text in any .md file in the "
+                "current directory."
+            ) from exc
+        if len(matching_files) > 1:
+            print(
+                "Found search text in multiple markdown files. "
+                "Starting cpb for",
+                matching_files[0],
+            )
+        pid = os.fork()
+        if pid == 0:
+            try:
+                cpb(matching_files[0])
+            finally:
+                os._exit(0)
+        # Wait briefly so the child can bring up the listener, then resend.
+        for _ in range(20):
+            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                client.connect((FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT))
+                break
+            except OSError:
+                client.close()
+                time.sleep(0.25)
+        else:
+            raise RuntimeError(
+                "Started cpb automatically, but the forward search socket "
+                "did not come up in time."
+            )
     client.sendall(text.encode("utf-8"))
     client.close()
 

@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 from pydifftools.continuous import run_pandoc
+from pydifftools.command_line import mfs
 
 
 def _make_cli_env(tmp_path):
@@ -207,3 +208,69 @@ def test_cpb_hides_low_headers(tmp_path):
     html_content = html_file.read_text()
     assert "h5, h6 { display: none; }" in html_content
     assert "h4" not in html_content.split("display:")[-1]
+
+
+def test_mfs_starts_cpb_when_socket_missing(tmp_path):
+    (tmp_path / "notes.md").write_text("alpha\nneedle\nomega\n")
+    (tmp_path / "other.md").write_text("does not match\n")
+
+    calls = {
+        "connect": 0,
+        "sendall": [],
+    }
+
+    class FakeSocket:
+        def __init__(self, *args, **kwargs):
+            return
+
+        def connect(self, _address):
+            calls["connect"] += 1
+            if calls["connect"] == 1:
+                raise OSError("socket not ready")
+
+        def sendall(self, payload):
+            calls["sendall"].append(payload)
+
+        def close(self):
+            return
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with patch("pydifftools.command_line.socket.socket", FakeSocket):
+            with patch("pydifftools.command_line.os.fork", return_value=123):
+                with patch("pydifftools.command_line.time.sleep"):
+                    mfs("needle")
+        assert calls["connect"] >= 2
+        assert calls["sendall"] == [b"needle"]
+    finally:
+        os.chdir(cwd)
+
+
+def test_mfs_errors_when_no_matching_markdown(tmp_path):
+    (tmp_path / "notes.md").write_text("alpha\nbeta\n")
+
+    class FakeSocket:
+        def __init__(self, *args, **kwargs):
+            return
+
+        def connect(self, _address):
+            raise OSError("socket not ready")
+
+        def sendall(self, _payload):
+            return
+
+        def close(self):
+            return
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with patch("pydifftools.command_line.socket.socket", FakeSocket):
+            try:
+                mfs("needle")
+                assert False, "Expected mfs to raise RuntimeError"
+            except RuntimeError as exc:
+                assert "could not find the requested text" in str(exc)
+    finally:
+        os.chdir(cwd)
