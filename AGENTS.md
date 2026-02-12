@@ -8,11 +8,12 @@
   can be added to environment setup scripts.
 - Never skip tests for missing external tools. If a dependency is missing,
   allow the test to fail and include the exact install commands in the response.
-- Use the pyenv interpreter that is compatible with the conda site-packages:
-  `PYENV_VERSION=3.13.x` (use any available 3.13 patch release, e.g. 3.13.8).
-- When installing and testing in this repo, prepend the conda site-packages:
-  `PYTHONPATH=/root/conda/lib/python3.13/site-packages`.
-- With the two settings above, the install/test flow can be simplified to:
-  `PYENV_VERSION=3.13.x PYTHONPATH=/root/conda/lib/python3.13/site-packages pip install -e . --no-build-isolation`
-  then
-  `PYENV_VERSION=3.13.x PYTHONPATH=/root/conda/lib/python3.13/site-packages pytest`.
+- Prefer the conda base environment for installs and tests, so version selection
+  is handled by conda activation instead of per-command env vars.
+- Recommended flow:
+  1. `source /root/conda/etc/profile.d/conda.sh`
+  2. `conda activate base`
+  3. `python -m pip install -e . --no-build-isolation`
+  4. `python -m pytest`
+- If `python -m pytest` fails because pytest is missing in base, install it with:
+  `python -m pip install pytest`
