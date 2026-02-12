@@ -9,10 +9,10 @@
 - Never skip tests for missing external tools. If a dependency is missing,
   allow the test to fail and include the exact install commands in the response.
 - Use the pyenv interpreter that is compatible with the conda site-packages:
-  `PYENV_VERSION=3.13.8`.
+  `PYENV_VERSION=3.13.x` (use any available 3.13 patch release, e.g. 3.13.8).
 - When installing and testing in this repo, prepend the conda site-packages:
   `PYTHONPATH=/root/conda/lib/python3.13/site-packages`.
 - With the two settings above, the install/test flow can be simplified to:
-  `PYENV_VERSION=3.13.8 PYTHONPATH=/root/conda/lib/python3.13/site-packages pip install -e . --no-build-isolation`
+  `PYENV_VERSION=3.13.x PYTHONPATH=/root/conda/lib/python3.13/site-packages pip install -e . --no-build-isolation`
   then
-  `PYENV_VERSION=3.13.8 PYTHONPATH=/root/conda/lib/python3.13/site-packages pytest`.
+  `PYENV_VERSION=3.13.x PYTHONPATH=/root/conda/lib/python3.13/site-packages pytest`.
