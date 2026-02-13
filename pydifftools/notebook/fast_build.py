@@ -73,7 +73,10 @@ include_pattern = re.compile(
     r"\{\{\s*<\s*(include|embed)\s+([^>\s]+)\s*>\s*\}\}"
 )
 # Python code block pattern
-code_pattern = re.compile(r"```\{python[^}]*\}\n(.*?)```", re.DOTALL)
+code_pattern = re.compile(
+    r"^\s*```\{python[^}]*\}\s*\r?\n(.*?)^\s*```",
+    re.DOTALL | re.MULTILINE | re.IGNORECASE,
+)
 # Markdown image pattern
 image_pattern = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 
@@ -84,6 +87,11 @@ heading_pattern = re.compile(
 )
 
 
+def count_code_blocks(text):
+    """Count python code blocks in a Quarto document."""
+    return len(code_pattern.findall(text))
+
+
 class RenderNotebook:
     """Track trunks, branches, and leaves along with build state."""
 
@@ -92,6 +100,8 @@ class RenderNotebook:
         self.tree = tree
         self.include_map = include_map
         self.nodes = {}
+        self.notebook_outputs = None
+        self.notebook_code_map = None
         self._build_nodes()
 
     def _build_nodes(self):
@@ -121,9 +131,7 @@ class RenderNotebook:
             src = PROJECT_ROOT / path
             if src.exists():
                 text = src.read_text()
-                self.nodes[path]["has_notebook"] = bool(
-                    code_pattern.search(text)
-                )
+                self.nodes[path]["has_notebook"] = count_code_blocks(text) > 0
 
     def all_paths(self):
         return list(self.nodes.keys())
@@ -165,6 +173,207 @@ class RenderNotebook:
 
     def render_order(self):
         return build_order(self.render_files, self.tree)
+
+    def _lineage_paths(self):
+        """Return leaf->...->trunk paths for logging build state."""
+        lines = []
+        seen = set()
+        for trunk in self.render_files:
+            stack = [(trunk, [trunk])]
+            while stack:
+                node, chain = stack.pop()
+                if node in self.nodes and self.nodes[node]["children"]:
+                    for child in self.nodes[node]["children"]:
+                        stack.append((child, [child] + chain))
+                else:
+                    key = tuple(chain)
+                    if key not in seen:
+                        seen.add(key)
+                        lines.append(chain)
+        return lines
+
+    def log_tree_status(
+        self,
+        phase_label,
+        pandoc_pending,
+        notebook_pending,
+    ):
+        """Print tree status as leaf->branch->trunk lines with p/j/i flags."""
+        print(f"Build tree status ({phase_label}):", flush=True)
+        lines = self._lineage_paths()
+        if not lines:
+            print("  <no render tree paths>", flush=True)
+            return
+        for chain in lines:
+            parts = []
+            for node in chain:
+                if node not in self.nodes:
+                    continue
+                if node in pandoc_pending:
+                    pandoc_state = "no"
+                else:
+                    pandoc_state = "yes"
+                if self.nodes[node]["has_notebook"]:
+                    if node in notebook_pending:
+                        notebook_state = "no"
+                    else:
+                        notebook_state = "yes"
+                else:
+                    notebook_state = "n/a"
+                if self.nodes[node]["children"]:
+                    include_state = "yes"
+                    for child in self.nodes[node]["children"]:
+                        if child in pandoc_pending:
+                            include_state = "no"
+                            break
+                else:
+                    include_state = "n/a"
+                parts.append(
+                    f"{node} ({self.nodes[node]['type']}; "
+                    f"p: {pandoc_state}, j: {notebook_state}, "
+                    f"i: {include_state})"
+                )
+            if parts:
+                print("  " + " --> ".join(parts), flush=True)
+
+    def notebook_pending_targets(self, candidates):
+        """Return notebook targets whose staged HTML still has pending
+        markers."""
+        pending = set()
+        for path in candidates:
+            if path not in self.nodes:
+                continue
+            if not self.nodes[path]["has_notebook"]:
+                continue
+            html_file = (BUILD_DIR / path).with_suffix(".html")
+            if not html_file.exists():
+                pending.add(path)
+                continue
+            html_text = html_file.read_text()
+            if "data-script=" in html_text or "Running notebook " in html_text:
+                pending.add(path)
+        return pending
+
+    def refresh_if_ready(self, refresh_callback):
+        """Refresh the browser if a callback was provided."""
+        if refresh_callback:
+            refresh_callback()
+
+    def update_display_page(self, target):
+        """Update a single display page or ensure a placeholder is present."""
+        src_html = (BUILD_DIR / target).with_suffix(".html")
+        dest_html = (DISPLAY_DIR / target).with_suffix(".html")
+        if not src_html.exists():
+            dest_html.parent.mkdir(parents=True, exist_ok=True)
+            dest_html.write_text(
+                "<html><body><div style='color:red;font-weight:bold'>"
+                f"Waiting for pandoc on {target} to complete..."
+                "</div>"
+                "</body></html>"
+            )
+            return
+        dest_html.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_html, dest_html)
+        # Build includes using staged fragments and rewrite math assets to the
+        # display tree that the web server presents.
+        postprocess_html(dest_html, BUILD_DIR, DISPLAY_DIR)
+
+    def apply_notebook_outputs(
+        self,
+        stage_files,
+        display_targets,
+        refresh_callback,
+    ):
+        """Insert stored notebook outputs and refresh display pages."""
+        if self.notebook_outputs is None or self.notebook_code_map is None:
+            return
+        print(
+            "Applying notebook outputs to "
+            f"{len(stage_files)} staged file(s) and "
+            f"{len(display_targets)} display page(s).",
+            flush=True,
+        )
+        for f in stage_files:
+            html_file = (BUILD_DIR / f).with_suffix(".html")
+            if html_file.exists():
+                substitute_code_placeholders(
+                    html_file,
+                    self.notebook_outputs,
+                    self.notebook_code_map,
+                )
+        self.update_display_targets(display_targets, refresh_callback)
+        self.refresh_navigation()
+
+    def update_display_targets(self, display_targets, refresh_callback):
+        """Refresh display HTML for all targets and trigger browser reload."""
+        for target in sorted(display_targets):
+            self.update_display_page(target)
+        self.refresh_if_ready(refresh_callback)
+
+    def record_notebook_outputs(self, outputs, code_map):
+        """Store notebook outputs for later substitution into HTML."""
+        self.notebook_outputs = outputs
+        self.notebook_code_map = code_map
+
+    def handle_notebook_future(
+        self,
+        notebook_future,
+        notebook_executor,
+        stage_files,
+        display_targets,
+        refresh_callback,
+    ):
+        """Record notebook outputs and refresh display pages when ready."""
+        outputs, code_map = notebook_future.result()
+        if notebook_executor:
+            notebook_executor.shutdown(wait=False)
+        self.record_notebook_outputs(outputs, code_map)
+        print("Notebook execution complete; applying outputs.", flush=True)
+        self.apply_notebook_outputs(
+            stage_files,
+            display_targets,
+            refresh_callback,
+        )
+        self.log_tree_status(
+            "after notebook completion",
+            set(),
+            set(),
+        )
+
+    def refresh_navigation(self):
+        """Rebuild navigation for rendered pages in the display tree."""
+        pages = []
+        for qmd in self.render_files:
+            html_file = (DISPLAY_DIR / qmd).with_suffix(".html")
+            source_path = PROJECT_ROOT / qmd
+            if not source_path.exists():
+                # Make it obvious which path is missing and keep the display
+                # tree consistent by creating a placeholder page until pandoc
+                # produces the real output.
+                placeholder = (
+                    "<html><body><div style='color:red;font-weight:bold'>"
+                    f"Missing source file {source_path}"
+                    "</div></body></html>"
+                )
+                html_file.parent.mkdir(parents=True, exist_ok=True)
+                html_file.write_text(placeholder)
+                print(f"Cannot read title; missing source: {source_path}")
+                continue
+            if html_file.exists():
+                sections = parse_headings(html_file)
+                pages.append(
+                    {
+                        "file": qmd,
+                        "href": html_file.name,
+                        "title": read_title(source_path),
+                        "sections": sections,
+                    }
+                )
+
+        for page in pages:
+            html_file = (DISPLAY_DIR / page["file"]).with_suffix(".html")
+            if html_file.exists():
+                add_navigation(html_file, pages, page["file"])
 
 
 def load_checksums():
@@ -733,12 +942,24 @@ def collect_render_targets(targets, included_by, render_files):
 def mirror_and_modify(files, anchors, roots):
     project_root = PROJECT_ROOT
     code_blocks: dict[str, list[tuple[str, str]]] = {}
+    scanned_files = 0
+    total_blocks = 0
+    scanned_list = []
     for file in files:
         src = Path(file)
         dest = BUILD_DIR / file
         dest.parent.mkdir(parents=True, exist_ok=True)
         text = src.read_text()
         text = replace_refs_text(text, anchors, dest.parent)
+        scanned_files += 1
+        scanned_list.append(file)
+        block_count = count_code_blocks(text)
+        total_blocks += block_count
+        if block_count:
+            print(
+                f"Detected {block_count} notebook code block(s) in {file}.",
+                flush=True,
+            )
 
         root_dir = roots.get(file, src.parent)
 
@@ -799,6 +1020,17 @@ def mirror_and_modify(files, anchors, roots):
                 target_dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(target_src, target_dest)
         dest.write_text(text)
+    if scanned_files and not total_blocks:
+        # Report which files were scanned to troubleshoot missing notebook
+        # detection when user content contains code fences.
+        print(
+            "Scanned for notebook blocks in: " + ", ".join(scanned_list),
+            flush=True,
+        )
+        print(
+            f"No notebook code blocks detected in {scanned_files} file(s).",
+            flush=True,
+        )
     return code_blocks
 
 
@@ -1100,19 +1332,19 @@ def substitute_code_placeholders(
                 create_parent=False,
             )
             frags.append(waiting)
-        parent = node.getparent()
-        if parent is None:
-            continue
-        pos = parent.index(node)
-        parent.remove(node)
-        for frag in reversed(frags):
-            parent.insert(pos, frag)
+        # Keep the data-script marker node in place so later async passes can
+        # replace the temporary "Running notebook ..." block with final output.
+        node.text = None
+        for child in list(node):
+            node.remove(child)
+        for frag in frags:
+            node.append(frag)
         changed = True
     if changed:
         tree.write(str(html_path), encoding="utf-8", method="html")
 
 
-def build_all(webtex: bool = False, changed_paths=None):
+def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     ensure_pandoc_available()
     ensure_pandoc_crossref()
     ensure_template_assets(PROJECT_ROOT)
@@ -1149,6 +1381,7 @@ def build_all(webtex: bool = False, changed_paths=None):
     anchors = collect_anchors(render_files, include_map)
 
     if changed_paths:
+        # Normalize changed paths, then compute staged and display targets.
         normalized = set()
         for path in changed_paths:
             candidate = Path(path)
@@ -1158,9 +1391,9 @@ def build_all(webtex: bool = False, changed_paths=None):
                 rel = candidate.resolve().relative_to(PROJECT_ROOT)
             except ValueError:
                 continue
-            if rel.suffix != ".qmd":
-                continue
-            normalized.add(rel.as_posix())
+            if rel.suffix == ".qmd":
+                normalized.add(rel.as_posix())
+
         stage_set = set(graph.stage_targets(normalized))
         display_targets = collect_render_targets(
             stage_set, include_map, render_files
@@ -1168,6 +1401,16 @@ def build_all(webtex: bool = False, changed_paths=None):
         for rel in stage_set:
             if rel in render_files:
                 display_targets.add(rel)
+
+        # If no source is stale but display pages are impacted, force staging.
+        if not stage_set and display_targets:
+            print(
+                "No staged files were marked stale for changed paths; "
+                "forcing stage rebuild for impacted display targets.",
+                flush=True,
+            )
+            stage_set.update(display_targets)
+
         if not stage_set and not display_targets:
             return {
                 "render_files": render_files,
@@ -1178,7 +1421,39 @@ def build_all(webtex: bool = False, changed_paths=None):
         stage_set = set(graph.stage_targets(None))
         display_targets = set(render_files)
 
+    pending_notebook = graph.notebook_pending_targets(display_targets)
+    if not stage_set and pending_notebook:
+        # If prior runs left notebook placeholders behind, force these targets
+        # back into staging so async notebook output replacement can complete.
+        print(
+            "No staged files but notebook placeholders are still pending; "
+            "forcing stage rebuild for notebook targets.",
+            flush=True,
+        )
+        stage_set.update(pending_notebook)
+
+    # stage_files and display_targets now define everything to rebuild/refresh.
     stage_files = sorted(stage_set)
+    # Log the exact file sets to make async build/debug behavior obvious.
+    print(
+        "Build plan: "
+        f"{len(stage_files)} staged file(s), "
+        f"{len(display_targets)} display target(s).",
+        flush=True,
+    )
+    if stage_files:
+        print("Stage files: " + ", ".join(stage_files), flush=True)
+    if display_targets:
+        print(
+            "Display targets: " + ", ".join(sorted(display_targets)),
+            flush=True,
+        )
+    graph.log_tree_status(
+        "before rebuild",
+        set(stage_files),
+        pending_notebook,
+    )
+
     # phase 1: rebuild the modified sources into the staging tree
     code_blocks = mirror_and_modify(stage_files, anchors, roots)
 
@@ -1188,6 +1463,17 @@ def build_all(webtex: bool = False, changed_paths=None):
     outputs = {}
     code_map = {}
     if code_blocks:
+        pending_notebook = set(code_blocks.keys())
+        graph.log_tree_status(
+            "after notebook job submission",
+            set(stage_files),
+            pending_notebook,
+        )
+        print(
+            f"Executing notebook blocks for {len(code_blocks)}"
+            " source files.",
+            flush=True,
+        )
         notebook_executor = ThreadPoolExecutor(max_workers=1)
         notebook_future = notebook_executor.submit(
             execute_code_blocks, code_blocks
@@ -1195,9 +1481,12 @@ def build_all(webtex: bool = False, changed_paths=None):
 
     order = graph.render_order()
     render_targets = [f for f in order if f in stage_set]
+    # phase 2: ensure display pages exist right away with placeholders so
+    # browsers can load content while pandoc runs.
+    graph.update_display_targets(display_targets, refresh_callback)
     if render_targets:
         workers = max(1, min(len(render_targets), 4))
-        tasks = []
+        future_to_target = {}
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for f in render_targets:
                 fragment = f not in render_files
@@ -1210,96 +1499,78 @@ def build_all(webtex: bool = False, changed_paths=None):
                     csl,
                     webtex,
                 )
-                tasks.append((f, future))
-            for future in as_completed([t[1] for t in tasks]):
-                for pair in tasks:
-                    if pair[1] is future:
-                        print(f"Pandoc finished for {pair[0]}")
-                        break
+                future_to_target[future] = f
+            # Use direct future-to-target mapping so completion logging stays
+            # straightforward while each render finishes.
+            for future in as_completed(future_to_target):
+                print(f"Pandoc finished for {future_to_target[future]}")
 
     graph.update_checksums(checksums)
     save_checksums(checksums)
 
-    # phase 2: insert whatever notebook output is available into staged pages
+    # phase 3: insert whatever notebook output is available into staged pages
     if notebook_future and notebook_future.done():
-        outputs, code_map = notebook_future.result()
-        notebook_executor.shutdown(wait=False)
+        print(
+            "Notebook execution finished before phase 3; applying ",
+            "outputs now.",
+            flush=True,
+        )
+        graph.handle_notebook_future(
+            notebook_future,
+            notebook_executor,
+            stage_files,
+            display_targets,
+            refresh_callback,
+        )
+        pending_notebook = set()
         notebook_executor = None
         notebook_future = None
-    for f in stage_files:
-        html_file = (BUILD_DIR / f).with_suffix(".html")
-        if html_file.exists():
-            substitute_code_placeholders(html_file, outputs, code_map)
-
-    # phase 3: assemble the served pages from staged fragments
-    for target in sorted(display_targets):
-        src_html = (BUILD_DIR / target).with_suffix(".html")
-        dest_html = (DISPLAY_DIR / target).with_suffix(".html")
-        if not src_html.exists():
-            dest_html.parent.mkdir(parents=True, exist_ok=True)
-            dest_html.write_text(
-                "<html><body><div style='color:red;font-weight:bold'>"
-                f"Waiting for pandoc on {target} to complete..."
-                "</div>"
-                "</body></html>"
+    else:
+        if notebook_future:
+            print(
+                "Notebook execution still running during phase 3; "
+                "writing temporary placeholders.",
+                flush=True,
             )
-            continue
-        dest_html.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src_html, dest_html)
-        # build includes using staged fragments and rewrite math assets to the
-        # display tree that the web server presents.
-        postprocess_html(dest_html, BUILD_DIR, DISPLAY_DIR)
-
-    # phase 4: wait for notebooks to finish, then refresh staged and served
-    # pages with the completed outputs so the browser updates when work ends.
-    if notebook_future:
-        outputs, code_map = notebook_future.result()
-        notebook_executor.shutdown(wait=False)
         for f in stage_files:
             html_file = (BUILD_DIR / f).with_suffix(".html")
             if html_file.exists():
                 substitute_code_placeholders(html_file, outputs, code_map)
-        for target in sorted(display_targets):
-            src_html = (BUILD_DIR / target).with_suffix(".html")
-            dest_html = (DISPLAY_DIR / target).with_suffix(".html")
-            if not src_html.exists():
-                continue
-            dest_html.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src_html, dest_html)
-            postprocess_html(dest_html, BUILD_DIR, DISPLAY_DIR)
 
-    pages = []
-    for qmd in render_files:
-        html_file = (DISPLAY_DIR / qmd).with_suffix(".html")
-        source_path = PROJECT_ROOT / qmd
-        if not source_path.exists():
-            # Make it obvious which path is missing and keep the display tree
-            # consistent by creating a placeholder page until pandoc produces
-            # the real output.
-            placeholder = (
-                "<html><body><div style='color:red;font-weight:bold'>"
-                f"Missing source file {source_path}"
-                "</div></body></html>"
-            )
-            html_file.parent.mkdir(parents=True, exist_ok=True)
-            html_file.write_text(placeholder)
-            print(f"Cannot read title; missing source: {source_path}")
-            continue
-        if html_file.exists():
-            sections = parse_headings(html_file)
-            pages.append(
-                {
-                    "file": qmd,
-                    "href": html_file.name,
-                    "title": read_title(source_path),
-                    "sections": sections,
-                }
-            )
+    # phase 4: assemble the served pages from staged fragments
+    graph.update_display_targets(display_targets, refresh_callback)
+    # If notebook outputs arrived before pandoc finished, apply them now that
+    # the HTML is available.
+    graph.apply_notebook_outputs(
+        stage_files,
+        display_targets,
+        refresh_callback,
+    )
 
-    for page in pages:
-        html_file = (DISPLAY_DIR / page["file"]).with_suffix(".html")
-        if html_file.exists():
-            add_navigation(html_file, pages, page["file"])
+    # phase 5: keep notebook execution asynchronous and refresh once complete.
+    if notebook_future:
+        print(
+            "Notebook execution still running after phase 4; "
+            "registering async completion callback.",
+            flush=True,
+        )
+        notebook_future.add_done_callback(
+            lambda future: graph.handle_notebook_future(
+                future,
+                notebook_executor,
+                stage_files,
+                display_targets,
+                refresh_callback,
+            )
+        )
+
+    graph.log_tree_status(
+        "after synchronous phases",
+        set(),
+        pending_notebook,
+    )
+
+    graph.refresh_navigation()
 
     return {
         "render_files": render_files,
@@ -1384,14 +1655,13 @@ def _serve_forever(httpd: ThreadingHTTPServer):
 
 
 def watch_and_serve(no_browser: bool = False, webtex: bool = False):
-    state = build_all(webtex=webtex)
     if no_browser:
         # In headless scenarios we only need the build artifacts and can exit
         # immediately instead of launching a server loop that waits for a
         # browser connection.
-        return state
+        return build_all(webtex=webtex)
     port = 8000
-    render_files = state["render_files"]
+    render_files = load_rendered_files()
 
     if render_files:
         start_page = Path(render_files[0]).with_suffix(".html").as_posix()
@@ -1411,27 +1681,11 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
             if not rel:
                 rel = ""
             display_root = DISPLAY_DIR.resolve()
-            build_root = BUILD_DIR.resolve()
-            if rel == "_build":
-                return str(build_root)
-            if rel.startswith("_build/"):
-                inner = rel.split("/", 1)[1]
-                candidate = (BUILD_DIR / inner).resolve()
-                if (
-                    str(candidate).startswith(str(build_root))
-                    and candidate.exists()
-                ):
-                    return str(candidate)
             display_candidate = (DISPLAY_DIR / rel).resolve()
             if display_candidate.exists() and str(
                 display_candidate
             ).startswith(str(display_root)):
                 return str(display_candidate)
-            build_candidate = (BUILD_DIR / rel).resolve()
-            if build_candidate.exists() and str(build_candidate).startswith(
-                str(build_root)
-            ):
-                return str(build_candidate)
             return super().translate_path(path)
 
     try:
@@ -1439,21 +1693,15 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
     except OSError as exc:  # pragma: no cover - depends on local environment
         print(f"Could not start server on port {port}: {exc}")
         return
-    print(
-        f"Serving {DISPLAY_DIR} with fallback to {BUILD_DIR} at"
-        f" http://localhost:{port}"
-    )
+    print(f"Serving {DISPLAY_DIR} at http://localhost:{port}")
     Path(DISPLAY_DIR).mkdir(parents=True, exist_ok=True)
     threading.Thread(target=_serve_forever, args=(httpd,), daemon=True).start()
-    if no_browser:
-
-        class Dummy:
-            def refresh(self):
-                pass
-
-        refresher = Dummy()
-    else:
-        refresher = BrowserReloader(url)
+    refresher = BrowserReloader(url)
+    # Launch the initial build asynchronously so the browser opens immediately.
+    initial_executor = ThreadPoolExecutor(max_workers=1)
+    initial_future = initial_executor.submit(
+        build_all, webtex=webtex, refresh_callback=refresher.refresh
+    )
     if Observer is None:
         raise ImportError(
             "File watching requires the optional 'watchdog' package."
@@ -1462,19 +1710,30 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
     observer = Observer()
 
     def rebuild(path):
-        build_all(webtex=webtex, changed_paths=[path])
+        build_all(
+            webtex=webtex,
+            changed_paths=[path],
+            refresh_callback=refresher.refresh,
+        )
 
     handler = ChangeHandler(rebuild, refresher)
     observer.schedule(handler, str(PROJECT_ROOT), recursive=True)
     observer.start()
     try:
         while True:
+            if initial_future and initial_future.done():
+                initial_future.result()
+                initial_executor.shutdown(wait=False)
+                initial_future = None
             if not no_browser and not refresher.is_alive():
                 break
             time.sleep(1)
     except KeyboardInterrupt:
         pass
     finally:
+        if initial_future:
+            initial_future.result()
+            initial_executor.shutdown(wait=False)
         observer.stop()
         observer.join()
         httpd.shutdown()
