@@ -283,7 +283,8 @@ def test_mfs_waits_up_to_20_seconds_for_socket(tmp_path):
                         assert False, "Expected mfs to raise RuntimeError"
                     except RuntimeError as exc:
                         assert "within 20 seconds" in str(exc)
-        # one initial connect plus 80 retries gives a full 20-second wait window
+        # one initial connect plus 80 retries gives a full 20-second wait
+        # window
         assert calls["connect"] == 81
         assert calls["sleep"] == 80
     finally:
