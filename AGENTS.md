@@ -8,6 +8,8 @@
   can be added to environment setup scripts.
 - Never skip tests for missing external tools. If a dependency is missing,
   allow the test to fail and include the exact install commands in the response.
-- When running tests in this repo, activate the conda environment and run:
-  `source "${HOME}/conda/etc/profile.d/conda.sh" && conda activate base && pytest -q -ra`.
-- The `-ra` flag is required so skipped tests are reported with reasons.
+- Prefer the conda base environment for installs and tests, so version selection
+  is handled by conda activation instead of per-command env vars.
+- Recommended flow for test:
+  1. source /root/conda/etc/profile.d/conda.sh && conda activate base && python -m pip install -e . --no-build-isolation
+	2. source /root/conda/etc/profile.d/conda.sh && conda activate base && python -m pytest
