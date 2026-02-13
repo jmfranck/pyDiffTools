@@ -8,6 +8,6 @@
   can be added to environment setup scripts.
 - Never skip tests for missing external tools. If a dependency is missing,
   allow the test to fail and include the exact install commands in the response.
-- When running tests in this repo, use the simpler maintenance flow:
-  `source "${HOME}/conda/etc/profile.d/conda.sh" && conda activate base && pip install -e . && pytest -q -ra`.
+- When running tests in this repo, activate the conda environment and run:
+  `source "${HOME}/conda/etc/profile.d/conda.sh" && conda activate base && pytest -q -ra`.
 - The `-ra` flag is required so skipped tests are reported with reasons.
