@@ -190,7 +190,10 @@ def test_async_notebook_outputs_replace_placeholder(fb):
     while not found_output and time.time() < output_deadline:
         if display_file.exists():
             html = display_file.read_text()
-            if "NOTEBOOK_OUTPUT_MARKER" in html and "Running notebook" not in html:
+            if (
+                "NOTEBOOK_OUTPUT_MARKER" in html
+                and "Running notebook" not in html
+            ):
                 found_output = True
                 break
         time.sleep(0.2)
@@ -199,7 +202,9 @@ def test_async_notebook_outputs_replace_placeholder(fb):
     assert found_output
 
 
-def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(fb, capsys):
+def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(
+    fb, capsys
+):
     # Build once so checksums reflect a clean tree and the second build starts
     # from a "0 staged files" state.
     qmd = Path("async_pending.qmd")

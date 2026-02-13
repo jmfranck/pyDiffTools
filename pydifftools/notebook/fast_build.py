@@ -131,9 +131,7 @@ class RenderNotebook:
             src = PROJECT_ROOT / path
             if src.exists():
                 text = src.read_text()
-                self.nodes[path]["has_notebook"] = (
-                    count_code_blocks(text) > 0
-                )
+                self.nodes[path]["has_notebook"] = count_code_blocks(text) > 0
 
     def all_paths(self):
         return list(self.nodes.keys())
@@ -239,7 +237,8 @@ class RenderNotebook:
                 print("  " + " --> ".join(parts), flush=True)
 
     def notebook_pending_targets(self, candidates):
-        """Return notebook targets whose staged HTML still has pending markers."""
+        """Return notebook targets whose staged HTML still has pending
+        markers."""
         pending = set()
         for path in candidates:
             if path not in self.nodes:
@@ -1025,8 +1024,7 @@ def mirror_and_modify(files, anchors, roots):
         # Report which files were scanned to troubleshoot missing notebook
         # detection when user content contains code fences.
         print(
-            "Scanned for notebook blocks in: "
-            + ", ".join(scanned_list),
+            "Scanned for notebook blocks in: " + ", ".join(scanned_list),
             flush=True,
         )
         print(
@@ -1446,7 +1444,10 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     if stage_files:
         print("Stage files: " + ", ".join(stage_files), flush=True)
     if display_targets:
-        print("Display targets: " + ", ".join(sorted(display_targets)), flush=True)
+        print(
+            "Display targets: " + ", ".join(sorted(display_targets)),
+            flush=True,
+        )
     graph.log_tree_status(
         "before rebuild",
         set(stage_files),
@@ -1502,9 +1503,7 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
             # Use direct future-to-target mapping so completion logging stays
             # straightforward while each render finishes.
             for future in as_completed(future_to_target):
-                print(
-                    f"Pandoc finished for {future_to_target[future]}"
-                )
+                print(f"Pandoc finished for {future_to_target[future]}")
 
     graph.update_checksums(checksums)
     save_checksums(checksums)
@@ -1512,7 +1511,8 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     # phase 3: insert whatever notebook output is available into staged pages
     if notebook_future and notebook_future.done():
         print(
-            "Notebook execution finished before phase 3; applying outputs now.",
+            "Notebook execution finished before phase 3; applying ",
+            "outputs now.",
             flush=True,
         )
         graph.handle_notebook_future(
