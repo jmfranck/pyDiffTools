@@ -10,10 +10,6 @@
   allow the test to fail and include the exact install commands in the response.
 - Prefer the conda base environment for installs and tests, so version selection
   is handled by conda activation instead of per-command env vars.
-- Recommended flow:
-  1. `source /root/conda/etc/profile.d/conda.sh`
-  2. `conda activate base`
-  3. `python -m pip install -e . --no-build-isolation`
-  4. `python -m pytest`
-- If `python -m pytest` fails because pytest is missing in base, install it with:
-  `python -m pip install pytest`
+- Recommended flow for test:
+  1. source /root/conda/etc/profile.d/conda.sh && conda activate base && python -m pip install -e . --no-build-isolation
+	2. source /root/conda/etc/profile.d/conda.sh && conda activate base && python -m pytest
