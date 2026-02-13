@@ -8,7 +8,6 @@
   can be added to environment setup scripts.
 - Never skip tests for missing external tools. If a dependency is missing,
   allow the test to fail and include the exact install commands in the response.
-- When running tests in this repo, activate the conda environment and run pytest
-  through conda's Python while prepending both the pyenv pytest path and conda
-  site-packages: use
-  `source "${HOME}/conda/etc/profile.d/conda.sh" && conda activate base && PYTHONPATH=/root/.pyenv/versions/3.12.12/lib/python3.12/site-packages:/root/conda/lib/python3.13/site-packages /root/conda/bin/python -m pytest`.
+- When running tests in this repo, use the simpler maintenance flow:
+  `source "${HOME}/conda/etc/profile.d/conda.sh" && conda activate base && pip install -e . && pytest -q -ra`.
+- The `-ra` flag is required so skipped tests are reported with reasons.
