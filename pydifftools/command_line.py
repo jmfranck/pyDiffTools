@@ -551,8 +551,9 @@ def mfs(text):
                 cpb(matching_files[0])
             finally:
                 os._exit(0)
-        # Wait briefly so the child can bring up the listener, then resend.
-        for _ in range(20):
+        # Wait up to 20 seconds so the child can bring up the listener,
+        # then resend the forward-search text.
+        for _ in range(80):
             client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
                 client.connect((FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT))
@@ -563,7 +564,7 @@ def mfs(text):
         else:
             raise RuntimeError(
                 "Started cpb automatically, but the forward search socket "
-                "did not come up in time."
+                "did not come up within 20 seconds."
             )
     client.sendall(text.encode("utf-8"))
     client.close()

@@ -247,6 +247,49 @@ def test_mfs_starts_cpb_when_socket_missing(tmp_path):
         os.chdir(cwd)
 
 
+def test_mfs_waits_up_to_20_seconds_for_socket(tmp_path):
+    (tmp_path / "notes.md").write_text("alpha\nneedle\nomega\n")
+
+    calls = {
+        "connect": 0,
+        "sleep": 0,
+    }
+
+    class FakeSocket:
+        def __init__(self, *args, **kwargs):
+            return
+
+        def connect(self, _address):
+            calls["connect"] += 1
+            raise OSError("socket not ready")
+
+        def sendall(self, _payload):
+            return
+
+        def close(self):
+            return
+
+    def fake_sleep(_seconds):
+        calls["sleep"] += 1
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with patch("pydifftools.command_line.socket.socket", FakeSocket):
+            with patch("pydifftools.command_line.os.fork", return_value=123):
+                with patch("pydifftools.command_line.time.sleep", fake_sleep):
+                    try:
+                        mfs("needle")
+                        assert False, "Expected mfs to raise RuntimeError"
+                    except RuntimeError as exc:
+                        assert "within 20 seconds" in str(exc)
+        # one initial connect plus 80 retries gives a full 20-second wait window
+        assert calls["connect"] == 81
+        assert calls["sleep"] == 80
+    finally:
+        os.chdir(cwd)
+
+
 def test_mfs_errors_when_no_matching_markdown(tmp_path):
     (tmp_path / "notes.md").write_text("alpha\nbeta\n")
 
