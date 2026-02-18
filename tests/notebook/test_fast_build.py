@@ -248,7 +248,7 @@ def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(
 
     logs = capsys.readouterr().out
     assert "Build plan: 1 staged file(s), 1 display target(s)." in logs
-    assert "forcing stage rebuild for notebook targets" in logs
+    assert "forcing stage rebuild for incomplete targets" in logs
 
     build_html = ""
     display_html = ""
@@ -270,3 +270,46 @@ def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(
     assert "Running notebook" not in build_html
     assert "Running notebook" not in display_html
     assert "on-this-page" in display_html
+
+
+def test_render_notebook_status_tags_and_tree_output(fb):
+    # Build a one-page render target and then replace the staged html with
+    # unresolved notebook/include placeholders to exercise state tagging.
+    qmd = Path("status_tags.qmd")
+    qmd.write_text(
+        "# Status tags\n\n"
+        "{{< include status_leaf.qmd >}}\n\n"
+        "```{python}\n"
+        "print('hello')\n"
+        "```\n"
+    )
+    Path("status_leaf.qmd").write_text("leaf text")
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    if "project" not in config:
+        config["project"] = {}
+    config["project"]["render"] = ["status_tags.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+    fb.build_all()
+
+    pending_html = (
+        "<html><body>"
+        '<div data-script="status_tags.qmd" data-index="1"></div>'
+        '<div data-include="status_leaf.html" data-source="status_leaf.html"></div>'
+        "</body></html>"
+    )
+    Path("_build/status_tags.html").write_text(pending_html)
+
+    render_files = fb.load_rendered_files()
+    tree, _, include_map = fb.analyze_includes(render_files)
+    graph = fb.RenderNotebook(render_files, tree, include_map)
+    graph.mark_outdated(fb.load_checksums())
+    graph.refresh_status_tags(fb.load_checksums())
+
+    assert graph.status_contains("status_tags.qmd", "unrun ipynb")
+    assert graph.status_contains(
+        "status_tags.qmd", "waiting on include build"
+    )
+    tree_text = str(graph)
+    assert "status_tags.qmd" in tree_text
+    assert "unrun ipynb" in tree_text
+    assert "waiting on include build" in tree_text
