@@ -60,8 +60,12 @@ class LoggingExecutePreprocessor(ExecutePreprocessor):
                 "language_info"
             ]
             for index, cell in enumerate(self.nb.cells):
+                # Print the source qmd path so users can see which notebook
+                # file is currently being executed during async runs.
                 print(
-                    f"Executing cell {index + 1}/{cell_count}...", flush=True
+                    f"Executing cell {index + 1}/{cell_count} "
+                    f"of code from {self.resources['metadata']['source']}...",
+                    flush=True,
                 )
                 self.preprocess_cell(cell, resources, index)
         self.set_widgets_metadata()
@@ -158,6 +162,7 @@ class RenderNotebook:
         """Refresh per-node build tags from source/staged html state.
 
         The tags are intended to describe the staged build lifecycle:
+        - missing html
         - old html
         - unrun ipynb
         - waiting on include build
@@ -171,7 +176,7 @@ class RenderNotebook:
             html_exists = html_file.exists()
 
             if not src.exists() or not html_exists:
-                tags.append("old html")
+                tags.append("missing html")
             else:
                 new_hash = self._hash_file(src)
                 if path not in checksums or checksums[path] != new_hash:
@@ -193,12 +198,11 @@ class RenderNotebook:
 
         # second pass: include status depends on children being rendered
         for path in self.nodes:
-            children = self.nodes[path]["children"]
-            if not children:
+            if not self.nodes[path]["children"]:
                 continue
             waiting_on_child = False
-            for child in children:
-                if self.status_contains(child, "old html"):
+            for child in self.nodes[path]["children"]:
+                if self.status_contains(child, "missing html"):
                     waiting_on_child = True
                     break
             if waiting_on_child:
@@ -284,6 +288,8 @@ class RenderNotebook:
         for path in self.nodes:
             if self.status_contains(path, "old html"):
                 stack.append(path)
+            elif self.status_contains(path, "missing html"):
+                stack.append(path)
             elif self.status_contains(path, "unrun ipynb"):
                 stack.append(path)
             elif self.status_contains(path, "waiting on include build"):
@@ -345,14 +351,16 @@ class RenderNotebook:
                     self.notebook_outputs,
                     self.notebook_code_map,
                 )
-        self.update_display_targets(display_targets, refresh_callback)
+        # Rebuild display pages first, then inject navigation, and only then
+        # refresh the browser so users do not see a nav-less intermediate page.
+        self.update_display_targets(display_targets)
         self.refresh_navigation()
+        self.refresh_if_ready(refresh_callback)
 
-    def update_display_targets(self, display_targets, refresh_callback):
-        """Refresh display HTML for all targets and trigger browser reload."""
+    def update_display_targets(self, display_targets):
+        """Refresh display HTML for all targets from _build fragments."""
         for target in sorted(display_targets):
             self.update_display_page(target)
-        self.refresh_if_ready(refresh_callback)
 
     def record_notebook_outputs(self, outputs, code_map):
         """Store notebook outputs for later substitution into HTML."""
@@ -550,7 +558,13 @@ def execute_code_blocks(blocks):
             )
             try:
                 ep.preprocess(
-                    nb, {"metadata": {"path": str(Path(src).parent)}}
+                    nb,
+                    {
+                        "metadata": {
+                            "path": str(Path(src).parent),
+                            "source": src,
+                        }
+                    },
                 )
             except Exception as e:
                 tb = traceback.format_exc()
@@ -1526,7 +1540,9 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     render_targets = [f for f in order if f in build_set]
     # phase 2: ensure display pages exist right away with placeholders so
     # browsers can load content while pandoc runs.
-    graph.update_display_targets(display_targets, refresh_callback)
+    graph.update_display_targets(display_targets)
+    graph.refresh_navigation()
+    graph.refresh_if_ready(refresh_callback)
     if render_targets:
         workers = max(1, min(len(render_targets), 4))
         future_to_target = {}
@@ -1581,7 +1597,7 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
                 substitute_code_placeholders(html_file, outputs, code_map)
 
     # phase 4: assemble the served pages from staged fragments
-    graph.update_display_targets(display_targets, refresh_callback)
+    graph.update_display_targets(display_targets)
     # If notebook outputs arrived before pandoc finished, apply them now that
     # the HTML is available.
     graph.apply_notebook_outputs(
@@ -1609,8 +1625,6 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
         )
 
     graph.print_tree_status("after synchronous phases", checksums)
-
-    graph.refresh_navigation()
 
     return {
         "render_files": render_files,

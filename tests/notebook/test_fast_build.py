@@ -130,6 +130,31 @@ def test_navigation_persists_after_notebook_updates(fb):
     assert "on-this-page" in target.read_text()
 
 
+def test_refresh_callback_never_sees_menu_less_page(fb):
+    qmd = Path("menu_guard.qmd")
+    qmd.write_text(
+        "# Menu guard\n\n"
+        "```{python}\n"
+        "print('menu guard')\n"
+        "```\n"
+    )
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    if "project" not in config:
+        config["project"] = {}
+    config["project"]["render"] = ["menu_guard.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    refresh_states = []
+
+    def refresh_callback():
+        page = Path("_display/menu_guard.html")
+        if page.exists():
+            refresh_states.append("on-this-page" in page.read_text())
+
+    fb.build_all(refresh_callback=refresh_callback)
+    assert refresh_states
+    assert all(refresh_states)
+
 def test_async_notebook_outputs_replace_placeholder(fb):
     # Slow notebook execution in a controlled way so the test can reliably
     # observe the red placeholder first and then the final output.
@@ -329,7 +354,9 @@ def test_render_notebook_status_tags_and_tree_output(fb):
     assert graph.status_contains(
         "status_tags.qmd", "waiting on include build"
     )
+    assert graph.status_contains("status_leaf.qmd", "missing html")
     tree_text = str(graph)
     assert "status_tags.qmd" in tree_text
     assert "unrun ipynb" in tree_text
     assert "waiting on include build" in tree_text
+    assert "missing html" in tree_text
