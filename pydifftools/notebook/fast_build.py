@@ -91,11 +91,6 @@ heading_pattern = re.compile(
 )
 
 
-def count_code_blocks(text):
-    """Count python code blocks in a Quarto document."""
-    return len(code_pattern.findall(text))
-
-
 class RenderNotebook:
     """Track trunks, branches, and leaves along with build state."""
 
@@ -107,6 +102,11 @@ class RenderNotebook:
         self.notebook_outputs = None
         self.notebook_code_map = None
         self._build_nodes()
+
+    @staticmethod
+    def count_code_blocks(text):
+        """Count python code blocks in a Quarto document."""
+        return len(code_pattern.findall(text))
 
     def _build_nodes(self):
         for path in self.tree:
@@ -136,7 +136,9 @@ class RenderNotebook:
             src = PROJECT_ROOT / path
             if src.exists():
                 text = src.read_text()
-                self.nodes[path]["has_notebook"] = count_code_blocks(text) > 0
+                self.nodes[path]["has_notebook"] = (
+                    self.count_code_blocks(text) > 0
+                )
 
     def all_paths(self):
         return list(self.nodes.keys())
@@ -1008,7 +1010,7 @@ def mirror_and_modify(files, anchors, roots):
         text = replace_refs_text(text, anchors, dest.parent)
         scanned_files += 1
         scanned_list.append(file)
-        block_count = count_code_blocks(text)
+        block_count = RenderNotebook.count_code_blocks(text)
         total_blocks += block_count
         if block_count:
             print(
