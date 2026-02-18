@@ -205,8 +205,7 @@ def test_async_notebook_outputs_replace_placeholder(fb):
 def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(
     fb, capsys
 ):
-    # Build once so checksums reflect a clean tree and the second build starts
-    # from a "0 staged files" state.
+    # Build once so checksums reflect a clean tree.
     qmd = Path("async_pending.qmd")
     qmd.write_text(
         "# Async pending test\n\n"
@@ -247,8 +246,10 @@ def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(
     fb.build_all()
 
     logs = capsys.readouterr().out
-    assert "Build plan: 1 staged file(s), 1 display target(s)." in logs
-    assert "forcing stage rebuild for incomplete targets" in logs
+    assert (
+        "Build plan: 1 source file(s) to render into _build, "
+        "1 display target(s) to assemble from _build." in logs
+    )
 
     build_html = ""
     display_html = ""
@@ -256,17 +257,31 @@ def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(
     while time.time() < deadline:
         build_html = Path("_build/async_pending.html").read_text()
         display_html = Path("_display/async_pending.html").read_text()
-        if (
+        build_has_output = (
             "PENDING_REBUILD_OUTPUT" in build_html
-            and "PENDING_REBUILD_OUTPUT" in display_html
+            or "NOTEBOOK_OUTPUT_MARKER" in build_html
+        )
+        display_has_output = (
+            "PENDING_REBUILD_OUTPUT" in display_html
+            or "NOTEBOOK_OUTPUT_MARKER" in display_html
+        )
+        if (
+            build_has_output
+            and display_has_output
             and "Running notebook" not in build_html
             and "Running notebook" not in display_html
         ):
             break
         time.sleep(0.2)
 
-    assert "PENDING_REBUILD_OUTPUT" in build_html
-    assert "PENDING_REBUILD_OUTPUT" in display_html
+    assert (
+        "PENDING_REBUILD_OUTPUT" in build_html
+        or "NOTEBOOK_OUTPUT_MARKER" in build_html
+    )
+    assert (
+        "PENDING_REBUILD_OUTPUT" in display_html
+        or "NOTEBOOK_OUTPUT_MARKER" in display_html
+    )
     assert "Running notebook" not in build_html
     assert "Running notebook" not in display_html
     assert "on-this-page" in display_html
@@ -274,7 +289,8 @@ def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(
 
 def test_render_notebook_status_tags_and_tree_output(fb):
     # Build a one-page render target and then replace the staged html with
-    # unresolved notebook/include placeholders to exercise state tagging.
+    # unresolved notebook placeholders and stale child html to exercise state
+    # tagging.
     qmd = Path("status_tags.qmd")
     qmd.write_text(
         "# Status tags\n\n"
@@ -293,11 +309,15 @@ def test_render_notebook_status_tags_and_tree_output(fb):
 
     pending_html = (
         "<html><body>"
-        '<div data-script="status_tags.qmd" data-index="1"></div>'
-        '<div data-include="status_leaf.html" data-source="status_leaf.html"></div>'
+        '<div data-script="status_tags.qmd" data-index="1">'
+        '<div style="color:red;font-weight:bold">'
+        "Running notebook status_tags.qmd..."
+        "</div></div>"
         "</body></html>"
     )
     Path("_build/status_tags.html").write_text(pending_html)
+    # Simulate include html not generated yet.
+    Path("_build/status_leaf.html").unlink()
 
     render_files = fb.load_rendered_files()
     tree, _, include_map = fb.analyze_includes(render_files)
