@@ -155,6 +155,89 @@ def test_refresh_callback_never_sees_menu_less_page(fb):
     assert refresh_states
     assert all(refresh_states)
 
+
+
+def test_all_render_targets_receive_navigation_template(fb):
+    Path("first_page.qmd").write_text("# First page\n\nContent")
+    Path("second_page.qmd").write_text("# Second page\n\nContent")
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    if "project" not in config:
+        config["project"] = {}
+    config["project"]["render"] = ["first_page.qmd", "second_page.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    fb.build_all()
+
+    for page in ["first_page", "second_page"]:
+        html = Path(f"_display/{page}.html").read_text()
+        assert "on-this-page" in html
+
+
+def test_notebook_progress_message_includes_notebook_index(fb, capsys, monkeypatch):
+    class DummyKernel:
+        def kernel_info(self):
+            return None
+
+    class DummySetupKernel:
+        def __init__(self, preprocessor):
+            self.preprocessor = preprocessor
+
+        def __enter__(self):
+            self.preprocessor.kc = DummyKernel()
+            return self.preprocessor
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        fb.LoggingExecutePreprocessor,
+        "reset_execution_trackers",
+        lambda self: None,
+    )
+    monkeypatch.setattr(
+        fb.LoggingExecutePreprocessor,
+        "_check_assign_resources",
+        lambda self, resources: setattr(self, "resources", resources),
+    )
+    monkeypatch.setattr(
+        fb.LoggingExecutePreprocessor,
+        "setup_kernel",
+        lambda self: DummySetupKernel(self),
+    )
+    monkeypatch.setattr(
+        fb.LoggingExecutePreprocessor,
+        "wait_for_reply",
+        lambda self, reply: {"content": {"language_info": {}}},
+    )
+    monkeypatch.setattr(
+        fb.LoggingExecutePreprocessor,
+        "preprocess_cell",
+        lambda self, cell, resources, index: None,
+    )
+    monkeypatch.setattr(
+        fb.LoggingExecutePreprocessor,
+        "set_widgets_metadata",
+        lambda self: None,
+    )
+
+    nb = fb.nbformat.v4.new_notebook()
+    nb.cells = [fb.nbformat.v4.new_code_cell("print('A')")]
+    ep = fb.LoggingExecutePreprocessor()
+    ep.preprocess(
+        nb,
+        {
+            "metadata": {
+                "source": "split_notebook.qmd",
+                "notebook_index": 1,
+                "notebook_total": 2,
+            }
+        },
+    )
+
+    logs = capsys.readouterr().out
+    assert "of notebook 1/2 from split_notebook.qmd" in logs
+
+
 def test_async_notebook_outputs_replace_placeholder(fb):
     # Slow notebook execution in a controlled way so the test can reliably
     # observe the red placeholder first and then the final output.

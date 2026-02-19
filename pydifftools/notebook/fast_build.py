@@ -60,11 +60,14 @@ class LoggingExecutePreprocessor(ExecutePreprocessor):
                 "language_info"
             ]
             for index, cell in enumerate(self.nb.cells):
-                # Print the source qmd path so users can see which notebook
-                # file is currently being executed during async runs.
+                # Print notebook group progress and the source qmd path so
+                # users can see exactly which split notebook chunk is running.
                 print(
                     f"Executing cell {index + 1}/{cell_count} "
-                    f"of code from {self.resources['metadata']['source']}...",
+                    "of notebook "
+                    f"{self.resources['metadata']['notebook_index']}/"
+                    f"{self.resources['metadata']['notebook_total']} "
+                    f"from {self.resources['metadata']['source']}...",
                     flush=True,
                 )
                 self.preprocess_cell(cell, resources, index)
@@ -565,6 +568,8 @@ def execute_code_blocks(blocks):
                         "metadata": {
                             "path": str(Path(src).parent),
                             "source": src,
+                            "notebook_index": group_idx,
+                            "notebook_total": total_groups,
                         }
                     },
                 )
@@ -1500,6 +1505,11 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
             if rel in render_files:
                 display_targets.add(rel)
 
+    # Always assemble every trunk page in _display. This keeps navigation
+    # template injection consistent across all render entries, not just pages
+    # touched by the current change set.
+    display_targets.update(render_files)
+
     # build_files and display_targets now define everything to render/refresh.
     build_files = sorted(build_set)
     # Log the exact file sets to make async build/debug behavior obvious.
@@ -1600,6 +1610,10 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
 
     # phase 4: assemble the served pages from staged fragments
     graph.update_display_targets(display_targets)
+    # Always refresh navigation after staged HTML is copied so every trunk page
+    # in _display receives template content even when no notebook work exists.
+    graph.refresh_navigation()
+    graph.refresh_if_ready(refresh_callback)
     # If notebook outputs arrived before pandoc finished, apply them now that
     # the HTML is available.
     graph.apply_notebook_outputs(
