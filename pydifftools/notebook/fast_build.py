@@ -81,7 +81,7 @@ include_pattern = re.compile(
 )
 # Python code block pattern
 code_pattern = re.compile(
-    r"^\s*```\{python[^}]*\}\s*\r?\n(.*?)^\s*```",
+    r"^\s*```(?:\{python[^}]*\}|python[^\n]*)\s*\r?\n(.*?)^\s*```",
     re.DOTALL | re.MULTILINE | re.IGNORECASE,
 )
 # Markdown image pattern
@@ -516,13 +516,25 @@ def execute_code_blocks(blocks):
     for src, cells in blocks.items():
         if not cells:
             continue
-        codes = [c for c, _ in cells]
-        md5s = [m for _, m in cells]
+        codes = [c for c, _, _ in cells]
+        md5s = [m for _, m, _ in cells]
+        skip_flags = [flag for _, _, flag in cells]
         groups = []
         current_codes = []
         current_md5s = []
         current_indices = []
         for idx, code in enumerate(codes, start=1):
+            if skip_flags[idx - 1]:
+                # Mark %noexec cells as completed immediately so they never
+                # reach notebook execution, but still render highlighted code
+                # with an explicit skipped notice in the final HTML.
+                outputs[(src, idx)] = (
+                    '<div style="color:#888;font-style:italic">'
+                    "code skipped (%noexec)"
+                    "</div>"
+                )
+                code_map[(src, idx)] = code
+                continue
             stripped = code.lstrip()
             # Split execution into separate notebooks whenever a cell
             # begins with ``%reset -f`` so that changing code after a
@@ -599,16 +611,17 @@ def execute_code_blocks(blocks):
         return src, group_indices, nb, codes
 
     # Execute notebook chunks concurrently so long-running groups do not block.
-    max_workers = max(1, min(len(jobs), 4))
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = [pool.submit(run_job, job) for job in jobs]
-        for future in as_completed(futures):
-            src, group_indices, nb, codes = future.result()
-            for offset, cell in enumerate(nb.cells):
-                html = outputs_to_html(cell.get("outputs", []))
-                idx = group_indices[offset]
-                outputs[(src, idx)] = html
-                code_map[(src, idx)] = codes[idx - 1]
+    if jobs:
+        max_workers = max(1, min(len(jobs), 4))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [pool.submit(run_job, job) for job in jobs]
+            for future in as_completed(futures):
+                src, group_indices, nb, codes = future.result()
+                for offset, cell in enumerate(nb.cells):
+                    html = outputs_to_html(cell.get("outputs", []))
+                    idx = group_indices[offset]
+                    outputs[(src, idx)] = html
+                    code_map[(src, idx)] = codes[idx - 1]
 
     return outputs, code_map
 
@@ -1005,7 +1018,7 @@ def collect_render_targets(targets, included_by, render_files):
 
 def mirror_and_modify(files, anchors, roots):
     project_root = PROJECT_ROOT
-    code_blocks: dict[str, list[tuple[str, str]]] = {}
+    code_blocks = {}
     scanned_files = 0
     total_blocks = 0
     scanned_list = []
@@ -1055,8 +1068,15 @@ def mirror_and_modify(files, anchors, roots):
             idx += 1
             code = match.group(1)
             md5 = hashlib.md5(code.encode()).hexdigest()
+            noexec = False
+            for line in code.splitlines():
+                if not line.strip():
+                    continue
+                if line.lstrip().startswith("%noexec"):
+                    noexec = True
+                break
             src_rel = str(src)
-            code_blocks.setdefault(src_rel, []).append((code, md5))
+            code_blocks.setdefault(src_rel, []).append((code, md5, noexec))
             return (
                 f'<div data-script="{src_rel}" data-index="{idx}"'
                 f' data-md5="{md5}"></div>'

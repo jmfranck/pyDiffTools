@@ -169,6 +169,36 @@ def test_all_render_targets_receive_navigation_template(fb):
         assert "on-this-page" in html
 
 
+def test_code_block_counter_accepts_plain_python_fences(fb):
+    text = """```python
+print('hello')
+```
+"""
+    assert fb.RenderNotebook.count_code_blocks(text) == 1
+
+
+def test_noexec_magic_marks_block_without_execution(fb, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    src = Path("doc.qmd")
+    src.write_text(
+        "# noexec test\n\n"
+        "```python\n"
+        "%noexec\n"
+        "print('skip')\n"
+        "```\n"
+    )
+    fb.PROJECT_ROOT = tmp_path
+    fb.BUILD_DIR = tmp_path / "_build"
+    fb.BUILD_DIR.mkdir(parents=True, exist_ok=True)
+
+    code_blocks = fb.mirror_and_modify(["doc.qmd"], {}, {"doc.qmd": tmp_path})
+
+    assert code_blocks["doc.qmd"][0][2]
+    outputs, code_map = fb.execute_code_blocks(code_blocks)
+    assert "code skipped (%noexec)" in outputs[("doc.qmd", 1)]
+    assert "%noexec" in code_map[("doc.qmd", 1)]
+
+
 def test_notebook_progress_message_includes_notebook_index(
     fb, capsys, monkeypatch
 ):
