@@ -5,6 +5,10 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from pydifftools.command_registry import register_command
+from pydifftools.browser_lifecycle import (
+    browser_window_is_alive,
+    close_browser_window,
+)
 from .graph import write_dot_from_yaml
 
 
@@ -35,12 +39,7 @@ def start_chrome(webdriver, options, html_file):
 
 def close_chrome(driver):
     # Close the Chrome window if it is still running.
-    if driver is None:
-        return
-    try:
-        driver.quit()
-    except Exception:
-        pass
+    close_browser_window(driver)
 
 
 def build_graph(
@@ -170,10 +169,6 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
     try:
         from selenium import webdriver
         from selenium.webdriver.chrome.options import Options
-        from selenium.common.exceptions import (
-            WebDriverException,
-            NoSuchWindowException,
-        )
     except ImportError as exc:
         raise ImportError(
             "The 'watch_graph' command requires the 'selenium' package to be"
@@ -217,15 +212,10 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
     observer.start()
     try:
         while True:
-            if event_handler.driver is None:
-                time.sleep(1)
-                continue
-            try:
-                _ = event_handler.driver.window_handles
-                event_handler.driver.execute_script("return 1")
-            except (NoSuchWindowException, WebDriverException):
-                close_chrome(event_handler.driver)
-                event_handler.driver = None
+            # Exit the watcher when the browser window is closed so the CLI
+            # process does not stay alive in the background.
+            if not browser_window_is_alive(event_handler.driver):
+                break
             time.sleep(1)
     except KeyboardInterrupt:
         pass
