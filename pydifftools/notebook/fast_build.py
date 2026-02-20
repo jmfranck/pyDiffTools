@@ -33,6 +33,7 @@ from pygments.formatters import HtmlFormatter
 from ansi2html import Ansi2HTMLConverter
 
 _ansi_conv = Ansi2HTMLConverter(inline=True)
+PYGMENTS_CSS = Path("assets") / "pygments.css"
 
 
 def _ansi_to_html(text: str, *, default_style: str | None = None) -> str:
@@ -782,6 +783,24 @@ def ensure_mathjax():
     download_mathjax(MATHJAX_DIR)
 
 
+def ensure_pygments_css(resource_root):
+    """Write syntax-highlighting CSS into the display asset tree.
+
+    We keep this as a standalone file so assembled display pages can link one
+    shared stylesheet instead of relying on per-fragment inline style blocks.
+    """
+
+    css_path = resource_root / PYGMENTS_CSS
+    css_path.parent.mkdir(parents=True, exist_ok=True)
+    formatter = HtmlFormatter()
+    style = formatter.get_style_defs(".highlight")
+    if css_path.exists():
+        current = css_path.read_text()
+        if current == style:
+            return
+    css_path.write_text(style)
+
+
 def _copy_resource_tree(resource, dest, overwrite=False):
     dest = Path(dest)
     if resource.is_dir():
@@ -1343,6 +1362,33 @@ def postprocess_html(html_path: Path, include_root: Path, resource_root: Path):
                     create_parent=False,
                 )
                 head[0].append(script)
+
+    # Always attach the shared Pygments stylesheet to the final display page.
+    # Included child pages can contain highlighted blocks, but include
+    # expansion only pulls body content, so we add one document-level link.
+    ensure_pygments_css(resource_root)
+    head = root.xpath("//head")
+    if not head:
+        html_nodes = root.xpath("//html")
+        if html_nodes:
+            new_head = lxml_html.Element("head")
+            html_nodes[0].insert(0, new_head)
+            head = [new_head]
+    if head:
+        existing_links = root.xpath(
+            '//link[@rel="stylesheet" and contains(@href, "pygments.css")]'
+        )
+        if not existing_links:
+            css_href = os.path.relpath(
+                resource_root / PYGMENTS_CSS,
+                html_path.parent,
+            )
+            link = lxml_html.fragment_fromstring(
+                '<link rel="stylesheet" '
+                f'href="{css_href}" id="pygments-style-link">',
+                create_parent=False,
+            )
+            head[0].append(link)
     html_path.write_text(lxml_html.tostring(root, encoding="unicode"))
 
 
@@ -1414,6 +1460,7 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     ensure_template_assets(PROJECT_ROOT)
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     DISPLAY_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_pygments_css(DISPLAY_DIR)
     if not webtex:
         ensure_mathjax()
         # copy MathJax into the display tree so browsers load assets from the

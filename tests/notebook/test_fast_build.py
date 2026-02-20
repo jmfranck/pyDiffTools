@@ -115,6 +115,29 @@ def test_postprocess_nested_includes(fb, tmp_path, monkeypatch):
     assert "data-include" not in html
 
 
+def test_postprocess_adds_shared_pygments_stylesheet_link(fb, tmp_path):
+    build_dir = tmp_path / "build"
+    display_dir = tmp_path / "display"
+    build_dir.mkdir()
+    display_dir.mkdir()
+
+    page = display_dir / "index.html"
+    page.write_text(
+        "<html><head></head><body>"
+        '<div class="highlight"><pre>'
+        '<span class="k">print</span>'
+        "</pre></div>"
+        "</body></html>"
+    )
+
+    fb.postprocess_html(page, build_dir, display_dir)
+
+    html = page.read_text()
+    assert 'href="assets/pygments.css"' in html
+    css = (display_dir / "assets" / "pygments.css").read_text()
+    assert ".highlight" in css
+
+
 def test_navigation_persists_after_notebook_updates(fb):
     fb.build_all()
     render_files = fb.load_rendered_files()
