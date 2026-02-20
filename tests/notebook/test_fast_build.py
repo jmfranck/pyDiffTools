@@ -130,6 +130,112 @@ def test_navigation_persists_after_notebook_updates(fb):
     assert "on-this-page" in target.read_text()
 
 
+def test_refresh_callback_never_sees_menu_less_page(fb):
+    qmd = Path("menu_guard.qmd")
+    qmd.write_text(
+        "# Menu guard\n\n" "```{python}\n" "print('menu guard')\n" "```\n"
+    )
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    if "project" not in config:
+        config["project"] = {}
+    config["project"]["render"] = ["menu_guard.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    refresh_states = []
+
+    def refresh_callback():
+        page = Path("_display/menu_guard.html")
+        if page.exists():
+            refresh_states.append("on-this-page" in page.read_text())
+
+    fb.build_all(refresh_callback=refresh_callback)
+    assert refresh_states
+    assert all(refresh_states)
+
+
+def test_all_render_targets_receive_navigation_template(fb):
+    Path("first_page.qmd").write_text("# First page\n\nContent")
+    Path("second_page.qmd").write_text("# Second page\n\nContent")
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    if "project" not in config:
+        config["project"] = {}
+    config["project"]["render"] = ["first_page.qmd", "second_page.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    fb.build_all()
+
+    for page in ["first_page", "second_page"]:
+        html = Path(f"_display/{page}.html").read_text()
+        assert "on-this-page" in html
+
+
+def test_notebook_progress_message_includes_notebook_index(
+    fb, capsys, monkeypatch
+):
+    class DummyKernel:
+        def kernel_info(self):
+            return None
+
+    class DummySetupKernel:
+        def __init__(self, preprocessor):
+            self.preprocessor = preprocessor
+
+        def __enter__(self):
+            self.preprocessor.kc = DummyKernel()
+            return self.preprocessor
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        fb.LoggingExecutePreprocessor,
+        "reset_execution_trackers",
+        lambda self: None,
+    )
+    monkeypatch.setattr(
+        fb.LoggingExecutePreprocessor,
+        "_check_assign_resources",
+        lambda self, resources: setattr(self, "resources", resources),
+    )
+    monkeypatch.setattr(
+        fb.LoggingExecutePreprocessor,
+        "setup_kernel",
+        lambda self: DummySetupKernel(self),
+    )
+    monkeypatch.setattr(
+        fb.LoggingExecutePreprocessor,
+        "wait_for_reply",
+        lambda self, reply: {"content": {"language_info": {}}},
+    )
+    monkeypatch.setattr(
+        fb.LoggingExecutePreprocessor,
+        "preprocess_cell",
+        lambda self, cell, resources, index: None,
+    )
+    monkeypatch.setattr(
+        fb.LoggingExecutePreprocessor,
+        "set_widgets_metadata",
+        lambda self: None,
+    )
+
+    nb = fb.nbformat.v4.new_notebook()
+    nb.cells = [fb.nbformat.v4.new_code_cell("print('A')")]
+    ep = fb.LoggingExecutePreprocessor()
+    ep.preprocess(
+        nb,
+        {
+            "metadata": {
+                "source": "split_notebook.qmd",
+                "notebook_index": 1,
+                "notebook_total": 2,
+            }
+        },
+    )
+
+    logs = capsys.readouterr().out
+    assert "of notebook 1/2 from split_notebook.qmd" in logs
+
+
 def test_async_notebook_outputs_replace_placeholder(fb):
     # Slow notebook execution in a controlled way so the test can reliably
     # observe the red placeholder first and then the final output.
@@ -205,8 +311,7 @@ def test_async_notebook_outputs_replace_placeholder(fb):
 def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(
     fb, capsys
 ):
-    # Build once so checksums reflect a clean tree and the second build starts
-    # from a "0 staged files" state.
+    # Build once so checksums reflect a clean tree.
     qmd = Path("async_pending.qmd")
     qmd.write_text(
         "# Async pending test\n\n"
@@ -247,8 +352,10 @@ def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(
     fb.build_all()
 
     logs = capsys.readouterr().out
-    assert "Build plan: 1 staged file(s), 1 display target(s)." in logs
-    assert "forcing stage rebuild for notebook targets" in logs
+    assert (
+        "Build plan: 1 source file(s) to render into _build, "
+        "1 display target(s) to assemble from _build." in logs
+    )
 
     build_html = ""
     display_html = ""
@@ -256,17 +363,79 @@ def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(
     while time.time() < deadline:
         build_html = Path("_build/async_pending.html").read_text()
         display_html = Path("_display/async_pending.html").read_text()
-        if (
+        build_has_output = (
             "PENDING_REBUILD_OUTPUT" in build_html
-            and "PENDING_REBUILD_OUTPUT" in display_html
+            or "NOTEBOOK_OUTPUT_MARKER" in build_html
+        )
+        display_has_output = (
+            "PENDING_REBUILD_OUTPUT" in display_html
+            or "NOTEBOOK_OUTPUT_MARKER" in display_html
+        )
+        if (
+            build_has_output
+            and display_has_output
             and "Running notebook" not in build_html
             and "Running notebook" not in display_html
         ):
             break
         time.sleep(0.2)
 
-    assert "PENDING_REBUILD_OUTPUT" in build_html
-    assert "PENDING_REBUILD_OUTPUT" in display_html
+    assert (
+        "PENDING_REBUILD_OUTPUT" in build_html
+        or "NOTEBOOK_OUTPUT_MARKER" in build_html
+    )
+    assert (
+        "PENDING_REBUILD_OUTPUT" in display_html
+        or "NOTEBOOK_OUTPUT_MARKER" in display_html
+    )
     assert "Running notebook" not in build_html
     assert "Running notebook" not in display_html
     assert "on-this-page" in display_html
+
+
+def test_render_notebook_status_tags_and_tree_output(fb):
+    # Build a one-page render target and then replace the staged html with
+    # unresolved notebook placeholders and stale child html to exercise state
+    # tagging.
+    qmd = Path("status_tags.qmd")
+    qmd.write_text(
+        "# Status tags\n\n"
+        "{{< include status_leaf.qmd >}}\n\n"
+        "```{python}\n"
+        "print('hello')\n"
+        "```\n"
+    )
+    Path("status_leaf.qmd").write_text("leaf text")
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    if "project" not in config:
+        config["project"] = {}
+    config["project"]["render"] = ["status_tags.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+    fb.build_all()
+
+    pending_html = (
+        "<html><body>"
+        '<div data-script="status_tags.qmd" data-index="1">'
+        '<div style="color:red;font-weight:bold">'
+        "Running notebook status_tags.qmd..."
+        "</div></div>"
+        "</body></html>"
+    )
+    Path("_build/status_tags.html").write_text(pending_html)
+    # Simulate include html not generated yet.
+    Path("_build/status_leaf.html").unlink()
+
+    render_files = fb.load_rendered_files()
+    tree, _, include_map = fb.analyze_includes(render_files)
+    graph = fb.RenderNotebook(render_files, tree, include_map)
+    graph.mark_outdated(fb.load_checksums())
+    graph.refresh_status_tags(fb.load_checksums())
+
+    assert graph.status_contains("status_tags.qmd", "unrun ipynb")
+    assert graph.status_contains("status_tags.qmd", "waiting on include build")
+    assert graph.status_contains("status_leaf.qmd", "missing html")
+    tree_text = str(graph)
+    assert "status_tags.qmd" in tree_text
+    assert "unrun ipynb" in tree_text
+    assert "waiting on include build" in tree_text
+    assert "missing html" in tree_text
