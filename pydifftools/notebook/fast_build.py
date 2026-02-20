@@ -16,13 +16,14 @@ import threading
 import shutil
 import yaml
 from pydifftools.command_registry import register_command
+from pydifftools.browser_lifecycle import (
+    browser_window_is_alive,
+    close_browser_window,
+)
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers.polling import PollingObserver as Observer
 from selenium import webdriver
-from selenium.common.exceptions import (
-    WebDriverException,
-    NoSuchWindowException,
-)
+from selenium.common.exceptions import WebDriverException
 from jinja2 import Environment, FileSystemLoader
 import nbformat
 from nbconvert.preprocessors import ExecutePreprocessor
@@ -1603,24 +1604,12 @@ class BrowserReloader:
         try:
             self.browser.refresh()
         except WebDriverException:
-            try:
-                self.browser.quit()
-            except Exception:
-                pass
+            close_browser_window(self.browser)
             self.browser = None
 
     def is_alive(self) -> bool:
         """Return True if the browser window is still open."""
-        if not self.browser:
-            return False
-        try:
-            handles = self.browser.window_handles
-            if not handles:
-                return False
-            self.browser.execute_script("return 1")
-            return True
-        except (NoSuchWindowException, WebDriverException):
-            return False
+        return browser_window_is_alive(self.browser)
 
 
 class ChangeHandler(FileSystemEventHandler):
@@ -1739,10 +1728,7 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
         httpd.shutdown()
         httpd.server_close()
         if not no_browser and getattr(refresher, "browser", None):
-            try:
-                refresher.browser.quit()
-            except Exception:
-                pass
+            close_browser_window(refresher.browser)
 
 
 if __name__ == "__main__":

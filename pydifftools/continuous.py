@@ -12,6 +12,7 @@ import queue
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from .command_registry import register_command
+from .browser_lifecycle import browser_window_is_alive, close_browser_window
 
 FORWARD_SEARCH_HOST = "127.0.0.1"
 FORWARD_SEARCH_PORT = 51235
@@ -262,17 +263,23 @@ def cpb(filename):
 
     try:
         while True:
+            # Exit when the browser window is closed so cpb does not leave a
+            # background process running after the user closes Chrome.
+            if not browser_window_is_alive(event_handler.firefox):
+                break
             time.sleep(1)
             while not search_queue.empty():
                 search_text = search_queue.get().strip()
                 if search_text:
                     event_handler.forward_search(search_text)
     except KeyboardInterrupt:
+        pass
+    finally:
         stop_event.set()
         observer.stop()
-
-    observer.join()
-    socket_thread.join()
+        observer.join()
+        socket_thread.join()
+        close_browser_window(event_handler.firefox)
 
 
 if __name__ == "__main__":
