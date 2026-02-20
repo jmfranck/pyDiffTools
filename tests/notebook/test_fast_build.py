@@ -133,10 +133,7 @@ def test_navigation_persists_after_notebook_updates(fb):
 def test_refresh_callback_never_sees_menu_less_page(fb):
     qmd = Path("menu_guard.qmd")
     qmd.write_text(
-        "# Menu guard\n\n"
-        "```{python}\n"
-        "print('menu guard')\n"
-        "```\n"
+        "# Menu guard\n\n" "```{python}\n" "print('menu guard')\n" "```\n"
     )
     config = yaml.safe_load(Path("_quarto.yml").read_text())
     if "project" not in config:
@@ -156,7 +153,6 @@ def test_refresh_callback_never_sees_menu_less_page(fb):
     assert all(refresh_states)
 
 
-
 def test_all_render_targets_receive_navigation_template(fb):
     Path("first_page.qmd").write_text("# First page\n\nContent")
     Path("second_page.qmd").write_text("# Second page\n\nContent")
@@ -173,7 +169,9 @@ def test_all_render_targets_receive_navigation_template(fb):
         assert "on-this-page" in html
 
 
-def test_notebook_progress_message_includes_notebook_index(fb, capsys, monkeypatch):
+def test_notebook_progress_message_includes_notebook_index(
+    fb, capsys, monkeypatch
+):
     class DummyKernel:
         def kernel_info(self):
             return None
@@ -434,9 +432,7 @@ def test_render_notebook_status_tags_and_tree_output(fb):
     graph.refresh_status_tags(fb.load_checksums())
 
     assert graph.status_contains("status_tags.qmd", "unrun ipynb")
-    assert graph.status_contains(
-        "status_tags.qmd", "waiting on include build"
-    )
+    assert graph.status_contains("status_tags.qmd", "waiting on include build")
     assert graph.status_contains("status_leaf.qmd", "missing html")
     tree_text = str(graph)
     assert "status_tags.qmd" in tree_text

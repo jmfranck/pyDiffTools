@@ -265,7 +265,9 @@ class RenderNotebook:
             branch = "└── " if is_last else "├── "
             label = node
             if self.nodes[node]["status_tags"]:
-                label += " [" + ", ".join(self.nodes[node]["status_tags"]) + "]"
+                label += (
+                    " [" + ", ".join(self.nodes[node]["status_tags"]) + "]"
+                )
             lines.append(prefix + branch + label)
             children = sorted(self.nodes[node]["children"])
             child_prefix = prefix + ("    " if is_last else "│   ")
