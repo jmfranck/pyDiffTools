@@ -67,19 +67,25 @@ def run_pandoc(filename, html_file):
             + "refs/tags/3.1.2.zip"
         )
         print("and then unzip")
-    current_dir = os.getcwd()
+    # Collect companion files from the markdown file's directory so cpb works
+    # even when started from a different working directory.
+    source_dir = os.path.dirname(os.path.abspath(filename))
     localfiles = {}
     for k in ["csl", "bib"]:
         localfiles[k] = [
-            f for f in os.listdir(current_dir) if f.endswith("." + k)
+            f for f in os.listdir(source_dir) if f.endswith("." + k)
         ]
         if len(localfiles[k]) == 1:
-            localfiles[k] = localfiles[k][0]
+            localfiles[k] = os.path.join(source_dir, localfiles[k][0])
         else:
             raise ValueError(
                 f"You have more than one (or no) {k} file in this directory!"
                 " Get rid of all but one! of " + "and".join(localfiles[k])
             )
+    # Include any css files next to the markdown source in the pandoc output.
+    localfiles["css"] = sorted(
+        [f for f in os.listdir(source_dir) if f.endswith(".css")]
+    )
     command = [
         "pandoc",
         "--bibliography",
@@ -96,6 +102,8 @@ def run_pandoc(filename, html_file):
         html_file,
         filename,
     ]
+    for css_file in localfiles["css"]:
+        command.extend(["--css", os.path.join(source_dir, css_file)])
     # command = ['pandoc', '-s', '--mathjax', '-o', html_file, filename]
     print("running:", " ".join(command))
     subprocess.run(
