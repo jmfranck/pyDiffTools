@@ -91,6 +91,12 @@ def run_pandoc(filename, html_file):
     localfiles["lua"] = sorted(
         [f for f in os.listdir(source_dir) if f.endswith(".lua")]
     )
+    # Include any javascript files next to the markdown source by injecting
+    # script tags after pandoc runs. This adds extra javascript and does not
+    # replace pandoc's own MathJax script configuration.
+    localfiles["js"] = sorted(
+        [f for f in os.listdir(source_dir) if f.endswith(".js")]
+    )
     command = [
         "pandoc",
         "--bibliography",
@@ -132,6 +138,21 @@ def run_pandoc(filename, html_file):
         # }}}
     with open(html_file, encoding="utf-8") as fp:
         text = fp.read()
+    html_was_updated = False
+    if localfiles["js"]:
+        script_block = ""
+        for js_file in localfiles["js"]:
+            script_block += (
+                '\n<script src="'
+                + os.path.join(source_dir, js_file)
+                + '"></script>\n'
+            )
+        if script_block not in text:
+            if "</head>" in text:
+                text = text.replace("</head>", script_block + "</head>", 1)
+            else:
+                text = script_block + text
+            html_was_updated = True
     style_block = (
         '\n<style id="pydifftools-hide-low-headers">\n'
         "h5, h6 { display: none; }\n"
@@ -143,6 +164,8 @@ def run_pandoc(filename, html_file):
             text = text.replace("</head>", style_block + "</head>", 1)
         else:
             text = style_block + text
+        html_was_updated = True
+    if html_was_updated:
         with open(html_file, "w", encoding="utf-8") as fp:
             fp.write(text)
     return

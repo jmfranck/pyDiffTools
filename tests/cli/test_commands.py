@@ -291,7 +291,7 @@ def test_mfs_waits_up_to_20_seconds_for_socket(tmp_path):
         os.chdir(cwd)
 
 
-def test_run_pandoc_adds_css_and_lua_files_from_markdown_directory(tmp_path, monkeypatch):
+def test_run_pandoc_adds_css_lua_and_js_files_from_markdown_directory(tmp_path, monkeypatch):
     project_dir = tmp_path / "project"
     project_dir.mkdir()
     markdown_file = project_dir / "notes.md"
@@ -307,6 +307,8 @@ def test_run_pandoc_adds_css_and_lua_files_from_markdown_directory(tmp_path, mon
     (project_dir / "print.css").write_text("@media print { body { color: black; } }\n")
     (project_dir / "cleanup.lua").write_text("return {}\n")
     (project_dir / "numbers.lua").write_text("return {}\n")
+    (project_dir / "extras.js").write_text("console.log(\"extras\");\n")
+    (project_dir / "widgets.js").write_text("console.log(\"widgets\");\n")
     html_file = tmp_path / "notes.html"
     captured_command = {}
 
@@ -316,7 +318,9 @@ def test_run_pandoc_adds_css_and_lua_files_from_markdown_directory(tmp_path, mon
     def fake_run(command):
         captured_command["value"] = command
         with open(html_file, "w", encoding="utf-8") as fp:
-            fp.write("<html><head></head><body>ok</body></html>")
+            fp.write(
+                "<html><head><script id=\"MathJax-script\" src=\"MathJax-3.1.2/es5/tex-mml-chtml.js\"></script></head><body>ok</body></html>"
+            )
 
     monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
 
@@ -338,6 +342,14 @@ def test_run_pandoc_adds_css_and_lua_files_from_markdown_directory(tmp_path, mon
         str(project_dir / "cleanup.lua"),
         str(project_dir / "numbers.lua"),
     ]
+    html_content = html_file.read_text()
+    assert "MathJax-script" in html_content
+    assert (
+        "<script src=\"" + str(project_dir / "extras.js") + "\"></script>"
+    ) in html_content
+    assert (
+        "<script src=\"" + str(project_dir / "widgets.js") + "\"></script>"
+    ) in html_content
 
 
 def test_mfs_errors_when_no_matching_markdown(tmp_path):
