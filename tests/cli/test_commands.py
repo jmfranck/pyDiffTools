@@ -291,7 +291,7 @@ def test_mfs_waits_up_to_20_seconds_for_socket(tmp_path):
         os.chdir(cwd)
 
 
-def test_run_pandoc_adds_css_files_from_markdown_directory(tmp_path, monkeypatch):
+def test_run_pandoc_adds_css_and_lua_files_from_markdown_directory(tmp_path, monkeypatch):
     project_dir = tmp_path / "project"
     project_dir.mkdir()
     markdown_file = project_dir / "notes.md"
@@ -305,6 +305,8 @@ def test_run_pandoc_adds_css_files_from_markdown_directory(tmp_path, monkeypatch
     )
     (project_dir / "site.css").write_text("body { color: red; }\n")
     (project_dir / "print.css").write_text("@media print { body { color: black; } }\n")
+    (project_dir / "cleanup.lua").write_text("return {}\n")
+    (project_dir / "numbers.lua").write_text("return {}\n")
     html_file = tmp_path / "notes.html"
     captured_command = {}
 
@@ -321,13 +323,20 @@ def test_run_pandoc_adds_css_files_from_markdown_directory(tmp_path, monkeypatch
     run_pandoc(str(markdown_file), str(html_file))
 
     css_pairs = []
+    lua_pairs = []
     command = captured_command["value"]
     for index, token in enumerate(command[:-1]):
         if token == "--css":
             css_pairs.append(command[index + 1])
+        if token == "--lua-filter":
+            lua_pairs.append(command[index + 1])
     assert css_pairs == [
         str(project_dir / "print.css"),
         str(project_dir / "site.css"),
+    ]
+    assert lua_pairs == [
+        str(project_dir / "cleanup.lua"),
+        str(project_dir / "numbers.lua"),
     ]
 
 

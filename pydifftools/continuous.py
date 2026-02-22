@@ -86,6 +86,11 @@ def run_pandoc(filename, html_file):
     localfiles["css"] = sorted(
         [f for f in os.listdir(source_dir) if f.endswith(".css")]
     )
+    # Include any lua filters next to the markdown source in the pandoc
+    # output by passing repeated --lua-filter arguments.
+    localfiles["lua"] = sorted(
+        [f for f in os.listdir(source_dir) if f.endswith(".lua")]
+    )
     command = [
         "pandoc",
         "--bibliography",
@@ -104,6 +109,8 @@ def run_pandoc(filename, html_file):
     ]
     for css_file in localfiles["css"]:
         command.extend(["--css", os.path.join(source_dir, css_file)])
+    for lua_file in localfiles["lua"]:
+        command.extend(["--lua-filter", os.path.join(source_dir, lua_file)])
     # command = ['pandoc', '-s', '--mathjax', '-o', html_file, filename]
     print("running:", " ".join(command))
     subprocess.run(
