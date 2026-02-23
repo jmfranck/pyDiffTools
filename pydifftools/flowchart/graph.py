@@ -450,10 +450,54 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
         sort_order = {name: index for index, name in enumerate(ordered_names)}
         ordered_set = set(ordered_names)
     handled = set()
+    endpoint_style_names = set(
+        ["endpoint", "endpoints", "completedendpoint"]
+    )
+    endpoint_nodes = set()
+    endpoint_clusters = {}
+    if not order_by_date:
+        # Build one cluster per endpoint-like node. Each cluster contains
+        # non-endpoint ancestors of that endpoint, and ancestor walks stop
+        # when another endpoint-like node is reached.
+        for name in data["nodes"]:
+            if (
+                "style" in data["nodes"][name]
+                and data["nodes"][name]["style"] in endpoint_style_names
+            ):
+                endpoint_nodes.add(name)
+        for endpoint_name in endpoint_nodes:
+            endpoint_clusters[endpoint_name] = set()
+            parents_to_check = []
+            if "parents" in data["nodes"][endpoint_name]:
+                parents_to_check = list(data["nodes"][endpoint_name]["parents"])
+            while parents_to_check:
+                parent_name = parents_to_check.pop()
+                if parent_name in endpoint_clusters[endpoint_name]:
+                    continue
+                if parent_name not in data["nodes"]:
+                    continue
+                if (
+                    "style" in data["nodes"][parent_name]
+                    and data["nodes"][parent_name]["style"]
+                    in endpoint_style_names
+                ):
+                    continue
+                endpoint_clusters[endpoint_name].add(parent_name)
+                if "parents" in data["nodes"][parent_name]:
+                    for grandparent_name in data["nodes"][parent_name]["parents"]:
+                        parents_to_check.append(grandparent_name)
+        if endpoint_nodes:
+            # Compound edges are required so ``ltail`` can attach edges to
+            # cluster boundaries rather than individual tail nodes.
+            lines.append("    graph [compound=true];")
+
     # Group nodes by their declared style so they share subgraph attributes.
     style_members = {}
     for name in data["nodes"]:
         if order_by_date and name not in ordered_set:
+            continue
+        if not order_by_date and name in endpoint_nodes:
+            # Endpoint nodes are represented by clusters in non-date mode.
             continue
         if "style" in data["nodes"][name] and data["nodes"][name]["style"]:
             style_members.setdefault(data["nodes"][name]["style"], []).append(
@@ -501,6 +545,8 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
     if ordered_names is None:
         ordered_names = list(data["nodes"].keys())
     for name in ordered_names:
+        if not order_by_date and name in endpoint_nodes:
+            continue
         if name in handled:
             continue
         _append_node(
@@ -512,6 +558,64 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
             order_by_date,
             sort_order,
         )
+    if not order_by_date:
+        # Draw one explicit cluster per endpoint using the endpoint text for
+        # the cluster label and applying endpoint style attributes to the
+        # cluster box itself.
+        for endpoint_name in endpoint_clusters:
+            cluster_name = f"cluster_{endpoint_name}"
+            lines.append(f"    subgraph {cluster_name} {{")
+            if (
+                "style" in data["nodes"][endpoint_name]
+                and data["nodes"][endpoint_name]["style"] in data["styles"]
+                and "attrs"
+                in data["styles"][data["nodes"][endpoint_name]["style"]]
+                and "node"
+                in data["styles"][data["nodes"][endpoint_name]["style"]][
+                    "attrs"
+                ]
+            ):
+                if isinstance(
+                    data["styles"][data["nodes"][endpoint_name]["style"]][
+                        "attrs"
+                    ]["node"],
+                    list,
+                ):
+                    for key, value in data["styles"][
+                        data["nodes"][endpoint_name]["style"]
+                    ]["attrs"]["node"][0].items():
+                        lines.append(f"        {key}={value};")
+                else:
+                    for key, value in data["styles"][
+                        data["nodes"][endpoint_name]["style"]
+                    ]["attrs"]["node"].items():
+                        lines.append(f"        {key}={value};")
+            else:
+                lines.append("        color=black;")
+            if (
+                "text" in data["nodes"][endpoint_name]
+                and data["nodes"][endpoint_name]["text"] is not None
+            ):
+                lines.append(
+                    "        label="
+                    + _format_label(
+                        data["nodes"][endpoint_name]["text"],
+                        wrap_width=wrap_width * 2,
+                    )
+                    + ";"
+                )
+            else:
+                lines.append(f"        label=<{endpoint_name}>;")
+            # Hidden anchor keeps edges attached to the whole cluster.
+            lines.append(
+                "        "
+                + f"cluster_anchor_{endpoint_name}"
+                + " [shape=point,width=0,height=0,label=\"\",style=invis];"
+            )
+            for node_name in sorted(endpoint_clusters[endpoint_name]):
+                lines.append(f"        {node_name};")
+            lines.append("    }")
+
     if order_by_date:
         # Arrange nodes in a grid while preserving style subgraphs.
         column_count = 5
@@ -533,11 +637,30 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
                 f" {ordered_names[index + column_count]} [style=invis];"
             )
     else:
-        # Edges are omitted when ordering by date so boxes stand alone.
+        # Draw regular task edges, excluding endpoint-like nodes because they
+        # are represented by clusters in non-date mode.
         for name in data["nodes"]:
+            if name in endpoint_nodes:
+                continue
             if "children" in data["nodes"][name]:
                 for child in data["nodes"][name]["children"]:
+                    if child in endpoint_nodes:
+                        continue
                     lines.append(f"    {name} -> {child};")
+
+        # Draw edges from each endpoint cluster to the endpoint's children.
+        for endpoint_name in endpoint_nodes:
+            if "children" not in data["nodes"][endpoint_name]:
+                continue
+            cluster_name = f"cluster_{endpoint_name}"
+            for child in data["nodes"][endpoint_name]["children"]:
+                if child not in data["nodes"]:
+                    continue
+                lines.append(
+                    "    "
+                    + f"cluster_anchor_{endpoint_name} -> {child}"
+                    + f" [ltail={cluster_name}];"
+                )
     lines.append("}")
     return "\n".join(lines)
 
