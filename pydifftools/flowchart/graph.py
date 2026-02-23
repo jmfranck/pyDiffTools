@@ -519,10 +519,9 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
                         parents_to_check.append(grandparent_name)
         if endpoint_nodes:
             # Keep endpoint clusters from overlapping and leave enough room
-            # for routing in dense plans. We intentionally avoid Graphviz
-            # compound-edge clipping attrs here because they can trigger
-            # intermittent crashes on some endpoint-cluster layouts.
-            lines.append("    graph [nodesep=0.60,ranksep=0.90];")
+            # for routing in dense plans while letting Graphviz clip edges
+            # cleanly to cluster borders.
+            lines.append("    graph [compound=true,nodesep=0.60,ranksep=0.90];")
 
     # Group nodes by their declared style so they share subgraph attributes.
     style_members = {}
@@ -611,7 +610,7 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
             lines.append(
                 "        "
                 + f"cluster_anchor_{endpoint_name}"
-                + " [shape=point,width=0,height=0,label=\"\",style=invis];"
+                + " [shape=box,width=0.01,height=0.01,fixedsize=true,label=\"\",color=white,fontcolor=white];"
             )
             for node_name in sorted(endpoint_clusters[endpoint_name]):
                 lines.append(f"        {node_name};")
@@ -731,18 +730,21 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
                 # child anchor node to keep endpoint-to-endpoint edges visible
                 # without drawing endpoint nodes directly.
                 edge_target = child
+                edge_cluster = ""
                 if child in endpoint_nodes:
                     edge_target = f"cluster_anchor_{child}"
+                    edge_cluster = f",lhead=cluster_{child}"
                 if edge_style:
                     lines.append(
                         "    "
                         + f"cluster_anchor_{endpoint_name} -> {edge_target}"
-                        + f" [{edge_style[1:]}];"
+                        + f" [ltail={cluster_name}{edge_cluster},{edge_style[1:]}];"
                     )
                 else:
                     lines.append(
                         "    "
-                        + f"cluster_anchor_{endpoint_name} -> {edge_target};"
+                        + f"cluster_anchor_{endpoint_name} -> {edge_target}"
+                        + f" [ltail={cluster_name}{edge_cluster}];"
                     )
     lines.append("}")
     return "\n".join(lines)
