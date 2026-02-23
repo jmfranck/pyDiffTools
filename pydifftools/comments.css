@@ -329,7 +329,11 @@ span.comment-pin > span.comment-left::after {
   span.comment-pin > span.comment-right::before,
   span.comment-pin > span.comment-right::after,
   span.comment-pin > span.comment-left::before,
-  span.comment-pin > span.comment-left::after {
+  span.comment-pin > span.comment-left::after,
+  div.comment-overlay.comment-right::before,
+  div.comment-overlay.comment-right::after,
+  div.comment-overlay.comment-left::before,
+  div.comment-overlay.comment-left::after {
     display: none;
   }
 }
@@ -350,6 +354,44 @@ div.comment-overlay {
 div.comment-overlay.comment-right,
 div.comment-overlay.comment-left {
   width: 11rem;          /* match your current bubble width */
+}
+
+/* Pointer triangles for overlay block comments */
+div.comment-overlay.comment-right::before {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: 0.55rem;
+  border-width: 8px 8px 8px 0;
+  border-style: solid;
+  border-color: transparent #5aa0ff transparent transparent;
+}
+div.comment-overlay.comment-right::after {
+  content: "";
+  position: absolute;
+  left: -7px;
+  top: 0.55rem;
+  border-width: 8px 8px 8px 0;
+  border-style: solid;
+  border-color: transparent #eaf3ff transparent transparent;
+}
+div.comment-overlay.comment-left::before {
+  content: "";
+  position: absolute;
+  right: -8px;
+  top: 0.55rem;
+  border-width: 8px 0 8px 8px;
+  border-style: solid;
+  border-color: transparent transparent transparent #5aa0ff;
+}
+div.comment-overlay.comment-left::after {
+  content: "";
+  position: absolute;
+  right: -7px;
+  top: 0.55rem;
+  border-width: 8px 0 8px 8px;
+  border-style: solid;
+  border-color: transparent transparent transparent #eaf3ff;
 }
 
 /* Optional: click-to-hide behavior styling (your JS toggles this) */

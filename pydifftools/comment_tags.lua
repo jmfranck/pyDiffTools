@@ -95,6 +95,23 @@ local function split_inline_block_at_tag(block, tag)
     after:insert(block.content[j])
   end
 
+  -- Avoid creating hard visual breaks around opener/closer tags when those
+  -- tags sit at line boundaries in markdown source.
+  while #before > 0 and (
+    before[#before].t == "SoftBreak"
+    or before[#before].t == "LineBreak"
+    or before[#before].t == "Space"
+  ) do
+    before:remove(#before)
+  end
+  while #after > 0 and (
+    after[1].t == "SoftBreak"
+    or after[1].t == "LineBreak"
+    or after[1].t == "Space"
+  ) do
+    after:remove(1)
+  end
+
   local before_block = nil
   local after_block = nil
   if #before > 0 then
@@ -272,9 +289,11 @@ function Blocks(blocks)
       i = i + 1
     else
       local buf = pandoc.List()
+      local inserted_before_open = false
       if before_open then
         -- Keep text before the opener in the main document flow.
         out:insert(before_open)
+        inserted_before_open = true
       end
       if after_open then
         -- Everything after the opener belongs inside the bubble body.
@@ -303,8 +322,39 @@ function Blocks(blocks)
 
       if found then
         local id = next_id()
-        out:insert(make_block_anchor(id))
+        local merged_with_inline_anchor = false
+
+        -- If the comment opens mid-paragraph and closes before trailing prose,
+        -- merge the surrounding prose back into one paragraph and place the
+        -- anchor inline at the split point so there is no forced line break.
+        if inserted_before_open and #after_close_blocks > 0 then
+          if para_like_t(out[#out]) and para_like_t(after_close_blocks[1]) then
+            local merged_inlines = pandoc.List()
+            for k = 1, #out[#out].content do
+              merged_inlines:insert(out[#out].content[k])
+            end
+            merged_inlines:insert(
+              pandoc.RawInline(
+                "html",
+                '<span class="comment-pin comment-pin-block" data-comment-id="'
+                  .. id .. '"></span>'
+              )
+            )
+            merged_inlines:insert(pandoc.Space())
+            for k = 1, #after_close_blocks[1].content do
+              merged_inlines:insert(after_close_blocks[1].content[k])
+            end
+            out[#out] = clone_para_like(out[#out], merged_inlines)
+            after_close_blocks:remove(1)
+            merged_with_inline_anchor = true
+          end
+        end
+
+        if not merged_with_inline_anchor then
+          out:insert(make_block_anchor(id))
+        end
         out:insert(make_block_overlay(spec.side, id, buf))
+
         -- Keep trailing content after the closer in main flow.
         for after_index = 1, #after_close_blocks do
           out:insert(after_close_blocks[after_index])

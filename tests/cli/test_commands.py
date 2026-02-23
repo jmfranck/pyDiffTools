@@ -503,6 +503,10 @@ def test_comment_css_arrow_geometry_constants(tmp_path):
     css_content = (tmp_path / "comments.css").read_text()
 
     # Left/right pointer triangles should use the configured arrow size.
+    assert "span.comment-pin > span.comment-right::before" in css_content
+    assert "span.comment-pin > span.comment-left::before" in css_content
+    assert "div.comment-overlay.comment-right::before" in css_content
+    assert "div.comment-overlay.comment-left::before" in css_content
     assert f"left: -{arrow_size_px}px;" in css_content
     assert f"right: -{arrow_size_px}px;" in css_content
     assert (
