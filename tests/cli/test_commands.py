@@ -360,6 +360,38 @@ def test_run_pandoc_adds_css_lua_and_js_files_from_markdown_directory(
     ) in html_content
 
 
+def test_run_pandoc_copies_comment_assets_when_comment_tags_present(
+    tmp_path, monkeypatch
+):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    markdown_file = project_dir / "notes.md"
+    markdown_file.write_text("# Title\n\n<comment>hello</comment>\n")
+    (project_dir / "references.bib").write_text(
+        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
+    )
+    (project_dir / "style.csl").write_text(
+        '<?xml version="1.0" encoding="utf-8"?><style '
+        'xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
+    )
+    html_file = tmp_path / "notes.html"
+
+    monkeypatch.setattr(
+        "pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool"
+    )
+
+    def fake_run(_command):
+        with open(html_file, "w", encoding="utf-8") as fp:
+            fp.write("<html><head></head><body>ok</body></html>")
+
+    monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
+
+    run_pandoc(str(markdown_file), str(html_file))
+
+    assert (project_dir / "comments.css").exists()
+    assert (project_dir / "comment_tags.lua").exists()
+    assert (project_dir / "comment_toggle.js").exists()
+
 def test_mfs_errors_when_no_matching_markdown(tmp_path):
     (tmp_path / "notes.md").write_text("alpha\nbeta\n")
 
