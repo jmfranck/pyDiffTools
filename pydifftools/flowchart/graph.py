@@ -401,6 +401,27 @@ def _append_node(
             lines.append(f"{indent}{node_name};")
 
 
+
+
+def _style_attrs(data, style_name, attr_name):
+    # Return one attribute dictionary from a style section (node/edge/etc).
+    # Styles may store attrs as either a dict or a one-item list of dicts.
+    if style_name not in data["styles"]:
+        return {}
+    if "attrs" not in data["styles"][style_name]:
+        return {}
+    if attr_name not in data["styles"][style_name]["attrs"]:
+        return {}
+    if isinstance(data["styles"][style_name]["attrs"][attr_name], list):
+        if not data["styles"][style_name]["attrs"][attr_name]:
+            return {}
+        if not isinstance(data["styles"][style_name]["attrs"][attr_name][0], dict):
+            return {}
+        return data["styles"][style_name]["attrs"][attr_name][0]
+    if isinstance(data["styles"][style_name]["attrs"][attr_name], dict):
+        return data["styles"][style_name]["attrs"][attr_name]
+    return {}
+
 def yaml_to_dot(data, wrap_width=55, order_by_date=False):
     lines = [
         "digraph G {",
@@ -422,6 +443,17 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
         data["nodes"] = {}
     if "styles" not in data:
         data["styles"] = {}
+    # Allow a YAML "default" style to set global node defaults.
+    if "default" in data["styles"]:
+        if _style_attrs(data, "default", "node"):
+            lines.append(
+                "    node ["
+                + ", ".join(
+                    f"{k}={v}"
+                    for k, v in _style_attrs(data, "default", "node").items()
+                )
+                + "];"
+            )
     ordered_names = None
     sort_order = None
     ordered_set = None
@@ -488,7 +520,11 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
         if endpoint_nodes:
             # Compound edges are required so ``ltail`` can attach edges to
             # cluster boundaries rather than individual tail nodes.
-            lines.append("    graph [compound=true];")
+            # Keep endpoint clusters from overlapping and leave enough room
+            # for cluster-to-cluster routing in dense plans.
+            lines.append(
+                "    graph [compound=true,nodesep=0.60,ranksep=0.90];"
+            )
 
     # Group nodes by their declared style so they share subgraph attributes.
     style_members = {}
@@ -509,24 +545,10 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
         if not style_members[style_name]:
             continue
         lines.append(f"    subgraph {style_name} {{")
-        if (
-            "attrs" in data["styles"][style_name]
-            and "node" in data["styles"][style_name]["attrs"]
-        ):
-            if isinstance(data["styles"][style_name]["attrs"]["node"], list):
-                attr_str = ", ".join(
-                    f"{k}={v}"
-                    for k, v in data["styles"][style_name]["attrs"]["node"][
-                        0
-                    ].items()
-                )
-            else:
-                attr_str = ", ".join(
-                    f"{k}={v}"
-                    for k, v in data["styles"][style_name]["attrs"][
-                        "node"
-                    ].items()
-                )
+        if _style_attrs(data, style_name, "node"):
+            attr_str = ", ".join(
+                f"{k}={v}" for k, v in _style_attrs(data, style_name, "node").items()
+            )
             lines.append(f"        node [{attr_str}];")
         for node_name in style_members[style_name]:
             _append_node(
@@ -566,29 +588,12 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
             lines.append(f"    subgraph {cluster_name} {{")
             if (
                 "style" in data["nodes"][endpoint_name]
-                and data["nodes"][endpoint_name]["style"] in data["styles"]
-                and "attrs"
-                in data["styles"][data["nodes"][endpoint_name]["style"]]
-                and "node"
-                in data["styles"][data["nodes"][endpoint_name]["style"]][
-                    "attrs"
-                ]
+                and _style_attrs(data, data["nodes"][endpoint_name]["style"], "node")
             ):
-                if isinstance(
-                    data["styles"][data["nodes"][endpoint_name]["style"]][
-                        "attrs"
-                    ]["node"],
-                    list,
-                ):
-                    for key, value in data["styles"][
-                        data["nodes"][endpoint_name]["style"]
-                    ]["attrs"]["node"][0].items():
-                        lines.append(f"        {key}={value};")
-                else:
-                    for key, value in data["styles"][
-                        data["nodes"][endpoint_name]["style"]
-                    ]["attrs"]["node"].items():
-                        lines.append(f"        {key}={value};")
+                for key, value in _style_attrs(
+                    data, data["nodes"][endpoint_name]["style"], "node"
+                ).items():
+                    lines.append(f"        {key}={value};")
             else:
                 lines.append("        color=black;")
             # Cluster labels should use the same label pipeline as nodes,
@@ -652,30 +657,75 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
                 continue
             cluster_name = f"cluster_{endpoint_name}"
             edge_style = ""
-            if (
-                "style" in data["nodes"][endpoint_name]
-                and data["nodes"][endpoint_name]["style"] in data["styles"]
-                and "attrs" in data["styles"][data["nodes"][endpoint_name]["style"]]
-                and "node" in data["styles"][data["nodes"][endpoint_name]["style"]]["attrs"]
-            ):
-                if isinstance(
-                    data["styles"][data["nodes"][endpoint_name]["style"]]["attrs"]["node"],
-                    list,
-                ):
-                    if "color" in data["styles"][data["nodes"][endpoint_name]["style"]]["attrs"]["node"][0]:
-                        edge_style = (
+            if "style" in data["nodes"][endpoint_name]:
+                # Edge attrs override node attrs for cluster-origin edges.
+                if _style_attrs(data, data["nodes"][endpoint_name]["style"], "edge"):
+                    if "color" in _style_attrs(
+                        data, data["nodes"][endpoint_name]["style"], "edge"
+                    ):
+                        edge_style += (
                             ",color="
                             + str(
-                                data["styles"][data["nodes"][endpoint_name]["style"]]["attrs"]["node"][0]["color"]
+                                _style_attrs(
+                                    data,
+                                    data["nodes"][endpoint_name]["style"],
+                                    "edge",
+                                )["color"]
                             )
                         )
-                elif "color" in data["styles"][data["nodes"][endpoint_name]["style"]]["attrs"]["node"]:
-                    edge_style = (
-                        ",color="
-                        + str(
-                            data["styles"][data["nodes"][endpoint_name]["style"]]["attrs"]["node"]["color"]
+                    if "penwidth" in _style_attrs(
+                        data, data["nodes"][endpoint_name]["style"], "edge"
+                    ):
+                        edge_style += (
+                            ",penwidth="
+                            + str(
+                                _style_attrs(
+                                    data,
+                                    data["nodes"][endpoint_name]["style"],
+                                    "edge",
+                                )["penwidth"]
+                            )
                         )
-                    )
+                    if "style" in _style_attrs(
+                        data, data["nodes"][endpoint_name]["style"], "edge"
+                    ):
+                        edge_style += (
+                            ",style="
+                            + str(
+                                _style_attrs(
+                                    data,
+                                    data["nodes"][endpoint_name]["style"],
+                                    "edge",
+                                )["style"]
+                            )
+                        )
+                elif _style_attrs(data, data["nodes"][endpoint_name]["style"], "node"):
+                    if "color" in _style_attrs(
+                        data, data["nodes"][endpoint_name]["style"], "node"
+                    ):
+                        edge_style += (
+                            ",color="
+                            + str(
+                                _style_attrs(
+                                    data,
+                                    data["nodes"][endpoint_name]["style"],
+                                    "node",
+                                )["color"]
+                            )
+                        )
+                    if "penwidth" in _style_attrs(
+                        data, data["nodes"][endpoint_name]["style"], "node"
+                    ):
+                        edge_style += (
+                            ",penwidth="
+                            + str(
+                                _style_attrs(
+                                    data,
+                                    data["nodes"][endpoint_name]["style"],
+                                    "node",
+                                )["penwidth"]
+                            )
+                        )
             for child in data["nodes"][endpoint_name]["children"]:
                 if child not in data["nodes"]:
                     continue

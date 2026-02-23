@@ -95,7 +95,7 @@ def test_yaml_to_dot_clusters_endpoint_ancestors_in_non_date_mode():
         in dot_text
     )
     assert (
-        "cluster_anchor_done_ep -> child [ltail=cluster_done_ep,color=green];"
+        "cluster_anchor_done_ep -> child [ltail=cluster_done_ep,color=green,penwidth=2];"
         in dot_text
     )
 
@@ -121,6 +121,37 @@ def test_yaml_to_dot_cluster_label_keeps_due_without_text():
 
     assert "subgraph cluster_ep" in dot_text
     assert 'font color="orange"' in dot_text
+
+
+
+def test_yaml_to_dot_cluster_edge_uses_edge_attrs():
+    data = {
+        "styles": {
+            "endpoint": {
+                "attrs": {
+                    "node": {"color": "darkred", "penwidth": 2},
+                    "edge": {"color": "purple", "penwidth": 5, "style": "dashed"},
+                }
+            },
+        },
+        "nodes": {
+            "ep": {
+                "children": ["child"],
+                "parents": [],
+                "style": "endpoint",
+                "text": "Endpoint",
+            },
+            "child": {"children": [], "parents": ["ep"]},
+        },
+    }
+
+    dot_text = yaml_to_dot(data, order_by_date=False)
+
+    assert (
+        "cluster_anchor_ep -> child "
+        "[ltail=cluster_ep,color=purple,penwidth=5,style=dashed];"
+        in dot_text
+    )
 
 
 def test_yaml_to_dot_keeps_endpoint_style_in_date_mode():
@@ -178,3 +209,22 @@ def test_yaml_to_dot_endpoint_cluster_edges_render_with_dot(tmp_path):
 
     subprocess.run(["dot", "-Tsvg", str(dot_path), "-o", str(svg_path)], check=True)
     assert svg_path.exists()
+
+
+def test_yaml_to_dot_default_style_sets_global_node_attrs():
+    data = {
+        "styles": {
+            "default": {
+                "attrs": {
+                    "node": {"fillcolor": "mintcream", "style": "filled"}
+                }
+            }
+        },
+        "nodes": {
+            "a": {"children": [], "parents": []},
+        },
+    }
+
+    dot_text = yaml_to_dot(data, order_by_date=False)
+
+    assert "node [fillcolor=mintcream, style=filled];" in dot_text
