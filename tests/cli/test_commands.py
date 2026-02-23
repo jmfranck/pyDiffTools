@@ -488,6 +488,9 @@ def test_comment_css_arrow_geometry_constants(tmp_path):
     left_arrow_width_px = 16
     bubble_separation_rem = 0.5
     overlap_shift_rem = 1
+    overlay_right_shift_rem = 0.45
+    overlay_rise_rem = 0.65
+    inline_rise_rem = 0.35
 
     markdown_file = tmp_path / "notes.md"
     html_file = tmp_path / "notes.html"
@@ -520,14 +523,28 @@ def test_comment_css_arrow_geometry_constants(tmp_path):
     assert f"--comment-arrow-width: {arrow_width_px}px;" in css_content
     assert f"--comment-left-arrow-width: {left_arrow_width_px}px;" in css_content
     assert f"--comment-overlap-shift: {overlap_shift_rem}rem;" in css_content
+    assert f"--comment-overlay-right-shift: {overlay_right_shift_rem}rem;" in css_content
+    assert f"--comment-overlay-rise: {overlay_rise_rem}rem;" in css_content
+    assert f"--comment-inline-rise: {inline_rise_rem}rem;" in css_content
 
     # Bubble separation (gap) must match the configured value for both sides.
     assert f"left: {bubble_separation_rem}rem;" in css_content
     assert f"right: {bubble_separation_rem}rem;" in css_content
     assert f"--comment-gap: {bubble_separation_rem}rem;" in css_content
 
-    # JS should use the overlap-shift css variable for stacked overlay nudging.
+    # JS should convert css length variables to pixels before geometry math,
+    # otherwise rem-based values do not affect rendered spacing correctly.
     assert "--comment-overlap-shift" in js_content
+    assert "--comment-overlay-right-shift" in js_content
+    assert "--comment-overlay-rise" in js_content
+    assert "--comment-inline-rise" in js_content
+    assert "--comment-gap" in js_content
+    assert "function cssLengthToPx" in js_content
+    assert "function cssVariableLengthPx" in js_content
+    assert "SELECTOR_INLINE" in js_content
+    assert "bubble.style.transform" in js_content
+    assert "left = ax + gap + overlayRightShift" in js_content
+    assert "const top = ay - overlayRise" in js_content
 
 
 def test_mfs_errors_when_no_matching_markdown(tmp_path):

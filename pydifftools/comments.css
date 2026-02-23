@@ -409,6 +409,9 @@ span.comment-pin-block {
 :root {
   --comment-gap: 0.5rem;
   --comment-overlap-shift: 1rem;
+  --comment-overlay-right-shift: 0.45rem;
+  --comment-overlay-rise: 0.65rem;
+  --comment-inline-rise: 0.35rem;
   --comment-arrow-height: 8px;
   --comment-arrow-width: 8px;
   --comment-left-arrow-width: 16px;

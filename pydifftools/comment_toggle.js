@@ -7,23 +7,85 @@
 
   const SELECTOR_OVERLAY = "div.comment-overlay[data-comment-id]";
   const SELECTOR_ANCHOR = 'span.comment-pin-block[data-comment-id]';
+  const SELECTOR_INLINE =
+    "span.comment-pin > span.comment-right, span.comment-pin > span.comment-left";
 
   function clamp(x, lo, hi) {
     return Math.max(lo, Math.min(hi, x));
   }
 
-  function positionOverlays() {
+  function cssLengthToPx(value, fallbackPx) {
+    // Convert css lengths (px/rem/etc.) into pixel numbers for geometry math.
+    if (!value) return fallbackPx;
+    const probe = document.createElement("div");
+    probe.style.position = "absolute";
+    probe.style.visibility = "hidden";
+    probe.style.width = value.trim();
+    document.body.appendChild(probe);
+    const pixels = probe.getBoundingClientRect().width;
+    document.body.removeChild(probe);
+    if (!Number.isFinite(pixels) || pixels <= 0) return fallbackPx;
+    return pixels;
+  }
+
+  function cssVariableLengthPx(name, fallbackPx) {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue(name);
+    return cssLengthToPx(raw, fallbackPx);
+  }
+
+  function positionComments() {
+    // Inline comment bubbles are absolutely positioned relative to a zero-width
+    // pin. We nudge overlapping bubbles so adjacent <comment> tags visibly
+    // separate, and we raise the bubbles so the pointer aims at the source point.
+    const inlineBubbles = document.querySelectorAll(SELECTOR_INLINE);
+    if (inlineBubbles.length) {
+      const inlineRise = cssVariableLengthPx("--comment-inline-rise", 0);
+      const overlapShift = cssVariableLengthPx("--comment-overlap-shift", 0);
+      const placedInline = [];
+
+      inlineBubbles.forEach((bubble) => {
+        bubble.style.transform = "";
+
+        const bubbleRect = bubble.getBoundingClientRect();
+        let shiftX = 0;
+
+        if (overlapShift > 0) {
+          for (let j = 0; j < placedInline.length; j += 1) {
+            const prior = placedInline[j];
+            const verticalOverlap =
+              bubbleRect.top < prior.bottom && bubbleRect.bottom > prior.top;
+            const horizontalOverlap =
+              bubbleRect.left + shiftX < prior.right &&
+              bubbleRect.right + shiftX > prior.left;
+            if (verticalOverlap && horizontalOverlap) {
+              if (bubble.classList.contains("comment-left")) {
+                shiftX -= overlapShift;
+              } else {
+                shiftX += overlapShift;
+              }
+            }
+          }
+        }
+
+        bubble.style.transform = `translate(${shiftX}px, ${-inlineRise}px)`;
+        const shiftedRect = bubble.getBoundingClientRect();
+        placedInline.push({
+          left: shiftedRect.left,
+          right: shiftedRect.right,
+          top: shiftedRect.top,
+          bottom: shiftedRect.bottom,
+        });
+      });
+    }
+
     const overlays = document.querySelectorAll(SELECTOR_OVERLAY);
     if (!overlays.length) return;
 
     const viewportLeft = window.scrollX;
     const viewportRight = window.scrollX + window.innerWidth;
-    const overlapShift =
-      parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue(
-          "--comment-overlap-shift"
-        )
-      ) || 0;
+    const overlapShift = cssVariableLengthPx("--comment-overlap-shift", 0);
+    const overlayRise = cssVariableLengthPx("--comment-overlay-rise", 6);
+    const overlayRightShift = cssVariableLengthPx("--comment-overlay-right-shift", 0);
     const placed = [];
 
     overlays.forEach((ov) => {
@@ -42,7 +104,7 @@
       ov.style.top = "0px";
 
       const a = anchor.getBoundingClientRect();
-      const gap = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--comment-gap")) || 8;
+      const gap = cssVariableLengthPx("--comment-gap", 8);
 
       // Measure overlay
       // (temporarily visible for accurate width/height)
@@ -58,27 +120,33 @@
       if (ov.classList.contains("comment-left")) {
         left = ax - gap - ow;
       } else {
-        // default right
-        left = ax + gap;
+        // default right; add configurable shift so the arrow points back to
+        // the intended source location instead of aligning bubble top-left.
+        left = ax + gap + overlayRightShift;
       }
 
       // Clamp within viewport so it doesn't go off-screen
       left = clamp(left, viewportLeft + 4, viewportRight - ow - 4);
 
-      // Put it slightly above the anchor line (tweakable)
-      const top = ay - 6;
+      // Raise overlay so the arrow points toward the source anchor.
+      const top = ay - overlayRise;
 
       let shiftedLeft = left;
       if (overlapShift > 0) {
         for (let j = 0; j < placed.length; j += 1) {
           const prior = placed[j];
           const verticalOverlap = top < prior.bottom && top + oh > prior.top;
-          const horizontalOverlap = shiftedLeft < prior.right && shiftedLeft + ow > prior.left;
+          const horizontalOverlap =
+            shiftedLeft < prior.right && shiftedLeft + ow > prior.left;
           if (verticalOverlap && horizontalOverlap) {
             shiftedLeft += overlapShift;
           }
         }
-        shiftedLeft = clamp(shiftedLeft, viewportLeft + 4, viewportRight - ow - 4);
+        shiftedLeft = clamp(
+          shiftedLeft,
+          viewportLeft + 4,
+          viewportRight - ow - 4
+        );
       }
 
       ov.style.left = `${shiftedLeft}px`;
@@ -102,12 +170,12 @@
   });
 
   // Reposition overlays on layout changes
-  window.addEventListener("load", positionOverlays, { passive: true });
-  window.addEventListener("resize", positionOverlays, { passive: true });
-  window.addEventListener("scroll", positionOverlays, { passive: true });
-  document.addEventListener("DOMContentLoaded", positionOverlays, { passive: true });
+  window.addEventListener("load", positionComments, { passive: true });
+  window.addEventListener("resize", positionComments, { passive: true });
+  window.addEventListener("scroll", positionComments, { passive: true });
+  document.addEventListener("DOMContentLoaded", positionComments, { passive: true });
 
   // If fonts/images load after DOMContentLoaded, do one more pass shortly after
-  window.setTimeout(positionOverlays, 50);
-  window.setTimeout(positionOverlays, 250);
+  window.setTimeout(positionComments, 50);
+  window.setTimeout(positionComments, 250);
 })();
