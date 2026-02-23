@@ -42,8 +42,6 @@ def _make_cli_env(tmp_path):
     return env
 
 
-
-
 def write_minimal_bibliography_and_csl(target_dir):
     # Create citation support files that run_pandoc requires.
     (target_dir / "references.bib").write_text(
@@ -53,11 +51,11 @@ def write_minimal_bibliography_and_csl(target_dir):
         '<?xml version="1.0" encoding="utf-8"?>\n<style'
         ' xmlns="http://purl.org/net/xbiblio/csl" version="1.0"'
         ' class="in-text">\n  <info>\n    <title>Minimal</title>\n   '
-        ' <id>minimal</id>\n    <updated>2023-01-01T00:00:00Z</updated>\n '
-        ' </info>\n  <citation>\n    <layout>\n      <text'
+        " <id>minimal</id>\n    <updated>2023-01-01T00:00:00Z</updated>\n "
+        " </info>\n  <citation>\n    <layout>\n      <text"
         ' variable="title"/>\n    </layout>\n  </citation>\n  <bibliography>\n'
         '    <layout>\n      <text variable="title"/>\n    </layout>\n '
-        ' </bibliography>\n</style>'
+        " </bibliography>\n</style>"
     )
 
 
@@ -406,14 +404,14 @@ to contributions from the RMs with low local
 concentration.
 <comment>
 ☐ TODO:
-	Include a comparison of actual lines in the
-	plot.
+    Include a comparison of actual lines in the
+    plot.
 </comment>
 <comment>
 ☐ TODO:
-	Make sure the git repo has the updated
-	version of the plot that you crafted and
-	presented on slack!!
+    Make sure the git repo has the updated
+    version of the plot that you crafted and
+    presented on slack!!
 </comment>
 Correspondingly,
 <comment>
@@ -423,20 +421,20 @@ explicitly through exactly what you are
 talking about:
 
 * For people unaccustomed to ESR spectra, you
-	want to specifically talk in terms of the
-	"initial positive maximum" and the "final
-	minimum".
+    want to specifically talk in terms of the
+    "initial positive maximum" and the "final
+    minimum".
 * You need to be sure that you're
-	explaining that in this concentration
-	range, you transition from three resolved
-	hyperfine lines to a single, broad line.
+    explaining that in this concentration
+    range, you transition from three resolved
+    hyperfine lines to a single, broad line.
 </comment>
 ESR measurements at lower water loading include [@dummy_ref].
 
 <comment>
 ☐ TODO:
-	I think a lot of the following caption is
-	description.
+    I think a lot of the following caption is
+    description.
 </comment>
 
 ::: {.comment-right}
@@ -465,16 +463,16 @@ It's still unclear what causes the low-$E_a$ region.
 
     # Regression assertion: this phrase should be present inside a comment
     # overlay and not leaked into a main-body list.
-    phrase = 'For people unaccustomed to ESR spectra'
+    phrase = "For people unaccustomed to ESR spectra"
     assert phrase in html_content
     assert '<div class="comment-overlay comment-right"' in html_content
-    assert '<ul>' in html_content
+    assert "<ul>" in html_content
 
     # Confirm the bullet list is inside a comment overlay block.
     overlay_with_list = False
     sections = html_content.split('<div class="comment-overlay comment-right"')
     for section in sections[1:]:
-        if phrase in section and '<ul>' in section:
+        if phrase in section and "<ul>" in section:
             overlay_with_list = True
             break
     assert overlay_with_list
@@ -518,12 +516,18 @@ def test_comment_css_arrow_geometry_constants(tmp_path):
     assert "var(--comment-arrow-width)" in css_content
     assert "var(--comment-arrow-height)" in css_content
 
-    # The configured css variables control arrow height/width and overlap shift.
+    # The configured css variables control arrow height/width and overlap
+    # shift.
     assert f"--comment-arrow-height: {arrow_height_px}px;" in css_content
     assert f"--comment-arrow-width: {arrow_width_px}px;" in css_content
-    assert f"--comment-left-arrow-width: {left_arrow_width_px}px;" in css_content
+    assert (
+        f"--comment-left-arrow-width: {left_arrow_width_px}px;" in css_content
+    )
     assert f"--comment-overlap-shift: {overlap_shift_rem}rem;" in css_content
-    assert f"--comment-overlay-right-shift: {overlay_right_shift_rem}rem;" in css_content
+    assert (
+        f"--comment-overlay-right-shift: {overlay_right_shift_rem}rem;"
+        in css_content
+    )
     assert f"--comment-overlay-rise: {overlay_rise_rem}rem;" in css_content
     assert f"--comment-inline-rise: {inline_rise_rem}rem;" in css_content
 
