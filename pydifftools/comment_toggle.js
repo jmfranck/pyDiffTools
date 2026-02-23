@@ -18,6 +18,13 @@
 
     const viewportLeft = window.scrollX;
     const viewportRight = window.scrollX + window.innerWidth;
+    const overlapShift =
+      parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue(
+          "--comment-overlap-shift"
+        )
+      ) || 0;
+    const placed = [];
 
     overlays.forEach((ov) => {
       const id = ov.getAttribute("data-comment-id");
@@ -61,9 +68,28 @@
       // Put it slightly above the anchor line (tweakable)
       const top = ay - 6;
 
-      ov.style.left = `${left}px`;
+      let shiftedLeft = left;
+      if (overlapShift > 0) {
+        for (let j = 0; j < placed.length; j += 1) {
+          const prior = placed[j];
+          const verticalOverlap = top < prior.bottom && top + oh > prior.top;
+          const horizontalOverlap = shiftedLeft < prior.right && shiftedLeft + ow > prior.left;
+          if (verticalOverlap && horizontalOverlap) {
+            shiftedLeft += overlapShift;
+          }
+        }
+        shiftedLeft = clamp(shiftedLeft, viewportLeft + 4, viewportRight - ow - 4);
+      }
+
+      ov.style.left = `${shiftedLeft}px`;
       ov.style.top = `${top}px`;
       ov.style.visibility = "";
+      placed.push({
+        left: shiftedLeft,
+        right: shiftedLeft + ow,
+        top: top,
+        bottom: top + oh,
+      });
     });
   }
 

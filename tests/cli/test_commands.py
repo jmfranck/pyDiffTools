@@ -483,8 +483,11 @@ It's still unclear what causes the low-$E_a$ region.
 def test_comment_css_arrow_geometry_constants(tmp_path):
     # Keep explicit geometry values in test constants so future style edits can
     # update one place and immediately see behavior changes in this test.
-    arrow_size_px = 8
+    arrow_height_px = 8
+    arrow_width_px = 8
+    left_arrow_width_px = 16
     bubble_separation_rem = 0.5
+    overlap_shift_rem = 1
 
     markdown_file = tmp_path / "notes.md"
     html_file = tmp_path / "notes.html"
@@ -501,27 +504,30 @@ def test_comment_css_arrow_geometry_constants(tmp_path):
         os.chdir(cwd)
 
     css_content = (tmp_path / "comments.css").read_text()
+    js_content = (tmp_path / "comment_toggle.js").read_text()
 
     # Left/right pointer triangles should use the configured arrow size.
     assert "span.comment-pin > span.comment-right::before" in css_content
     assert "span.comment-pin > span.comment-left::before" in css_content
     assert "div.comment-overlay.comment-right::before" in css_content
     assert "div.comment-overlay.comment-left::before" in css_content
-    assert f"left: -{arrow_size_px}px;" in css_content
-    assert f"right: -{arrow_size_px}px;" in css_content
-    assert (
-        f"border-width: {arrow_size_px}px {arrow_size_px}px {arrow_size_px}px 0;"
-        in css_content
-    )
-    assert (
-        f"border-width: {arrow_size_px}px 0 {arrow_size_px}px {arrow_size_px}px;"
-        in css_content
-    )
+    assert "var(--comment-left-arrow-width)" in css_content
+    assert "var(--comment-arrow-width)" in css_content
+    assert "var(--comment-arrow-height)" in css_content
+
+    # The configured css variables control arrow height/width and overlap shift.
+    assert f"--comment-arrow-height: {arrow_height_px}px;" in css_content
+    assert f"--comment-arrow-width: {arrow_width_px}px;" in css_content
+    assert f"--comment-left-arrow-width: {left_arrow_width_px}px;" in css_content
+    assert f"--comment-overlap-shift: {overlap_shift_rem}rem;" in css_content
 
     # Bubble separation (gap) must match the configured value for both sides.
     assert f"left: {bubble_separation_rem}rem;" in css_content
     assert f"right: {bubble_separation_rem}rem;" in css_content
     assert f"--comment-gap: {bubble_separation_rem}rem;" in css_content
+
+    # JS should use the overlap-shift css variable for stacked overlay nudging.
+    assert "--comment-overlap-shift" in js_content
 
 
 def test_mfs_errors_when_no_matching_markdown(tmp_path):

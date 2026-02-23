@@ -259,18 +259,18 @@ span.comment-pin > span.comment-left {
 span.comment-pin > span.comment-right::before {
   content: "";
   position: absolute;
-  left: -8px;
+  left: calc(-1 * var(--comment-left-arrow-width));
   top: 0.55rem;
-  border-width: 8px 8px 8px 0;
+  border-width: var(--comment-arrow-height) var(--comment-left-arrow-width) var(--comment-arrow-height) 0;
   border-style: solid;
   border-color: transparent #5aa0ff transparent transparent;
 }
 span.comment-pin > span.comment-right::after {
   content: "";
   position: absolute;
-  left: -7px;
+  left: calc(-1 * var(--comment-left-arrow-width) + 1px);
   top: 0.55rem;
-  border-width: 8px 8px 8px 0;
+  border-width: var(--comment-arrow-height) var(--comment-left-arrow-width) var(--comment-arrow-height) 0;
   border-style: solid;
   border-color: transparent #eaf3ff transparent transparent;
 }
@@ -279,18 +279,18 @@ span.comment-pin > span.comment-right::after {
 span.comment-pin > span.comment-left::before {
   content: "";
   position: absolute;
-  right: -8px;
+  right: calc(-1 * var(--comment-arrow-width));
   top: 0.55rem;
-  border-width: 8px 0 8px 8px;
+  border-width: var(--comment-arrow-height) 0 var(--comment-arrow-height) var(--comment-arrow-width);
   border-style: solid;
   border-color: transparent transparent transparent #5aa0ff;
 }
 span.comment-pin > span.comment-left::after {
   content: "";
   position: absolute;
-  right: -7px;
+  right: calc(-1 * var(--comment-arrow-width) + 1px);
   top: 0.55rem;
-  border-width: 8px 0 8px 8px;
+  border-width: var(--comment-arrow-height) 0 var(--comment-arrow-height) var(--comment-arrow-width);
   border-style: solid;
   border-color: transparent transparent transparent #eaf3ff;
 }
@@ -360,36 +360,36 @@ div.comment-overlay.comment-left {
 div.comment-overlay.comment-right::before {
   content: "";
   position: absolute;
-  left: -8px;
+  left: calc(-1 * var(--comment-left-arrow-width));
   top: 0.55rem;
-  border-width: 8px 8px 8px 0;
+  border-width: var(--comment-arrow-height) var(--comment-left-arrow-width) var(--comment-arrow-height) 0;
   border-style: solid;
   border-color: transparent #5aa0ff transparent transparent;
 }
 div.comment-overlay.comment-right::after {
   content: "";
   position: absolute;
-  left: -7px;
+  left: calc(-1 * var(--comment-left-arrow-width) + 1px);
   top: 0.55rem;
-  border-width: 8px 8px 8px 0;
+  border-width: var(--comment-arrow-height) var(--comment-left-arrow-width) var(--comment-arrow-height) 0;
   border-style: solid;
   border-color: transparent #eaf3ff transparent transparent;
 }
 div.comment-overlay.comment-left::before {
   content: "";
   position: absolute;
-  right: -8px;
+  right: calc(-1 * var(--comment-arrow-width));
   top: 0.55rem;
-  border-width: 8px 0 8px 8px;
+  border-width: var(--comment-arrow-height) 0 var(--comment-arrow-height) var(--comment-arrow-width);
   border-style: solid;
   border-color: transparent transparent transparent #5aa0ff;
 }
 div.comment-overlay.comment-left::after {
   content: "";
   position: absolute;
-  right: -7px;
+  right: calc(-1 * var(--comment-arrow-width) + 1px);
   top: 0.55rem;
-  border-width: 8px 0 8px 8px;
+  border-width: var(--comment-arrow-height) 0 var(--comment-arrow-height) var(--comment-arrow-width);
   border-style: solid;
   border-color: transparent transparent transparent #eaf3ff;
 }
@@ -406,4 +406,10 @@ span.comment-pin-block {
   height: 0;
   overflow: visible;
 }
-:root { --comment-gap: 0.5rem; }
+:root {
+  --comment-gap: 0.5rem;
+  --comment-overlap-shift: 1rem;
+  --comment-arrow-height: 8px;
+  --comment-arrow-width: 8px;
+  --comment-left-arrow-width: 16px;
+}
