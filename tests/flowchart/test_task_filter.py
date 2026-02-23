@@ -58,10 +58,11 @@ def test_yaml_to_dot_clusters_endpoint_ancestors_in_non_date_mode():
             "root": {"children": ["mid"], "parents": ["top_ep"]},
             "mid": {"children": ["ep"], "parents": ["root"]},
             "ep": {
-                "children": ["child"],
+                "children": ["child", "done_ep"],
                 "parents": ["mid"],
                 "style": "endpoints",
                 "text": "Quantify noise levels from Genesys power supply",
+                "due": "2099-01-02",
             },
             "done_ep": {
                 "children": ["child"],
@@ -77,7 +78,9 @@ def test_yaml_to_dot_clusters_endpoint_ancestors_in_non_date_mode():
 
     assert "subgraph cluster_ep" in dot_text
     assert "subgraph cluster_done_ep" in dot_text
+    assert "pad=0.20" in dot_text
     assert "label=<Quantify noise levels from Genesys power" in dot_text
+    assert 'font color="orange"' in dot_text
     assert "ep [label=" not in dot_text
     assert "done_ep [label=" not in dot_text
     assert "subgraph endpoints" not in dot_text
@@ -86,11 +89,38 @@ def test_yaml_to_dot_clusters_endpoint_ancestors_in_non_date_mode():
     assert " mid;" in dot_text
     assert "color=green;" in dot_text
     assert "penwidth=2;" in dot_text
-    assert "cluster_anchor_ep -> child [ltail=cluster_ep];" in dot_text
+    assert "cluster_anchor_ep -> child [ltail=cluster_ep,color=red];" in dot_text
     assert (
-        "cluster_anchor_done_ep -> child [ltail=cluster_done_ep];"
+        "cluster_anchor_ep -> cluster_anchor_done_ep [ltail=cluster_ep,color=red];"
         in dot_text
     )
+    assert (
+        "cluster_anchor_done_ep -> child [ltail=cluster_done_ep,color=green];"
+        in dot_text
+    )
+
+
+
+def test_yaml_to_dot_cluster_label_keeps_due_without_text():
+    data = {
+        "styles": {
+            "endpoint": {"attrs": {"node": {"color": "red"}}},
+        },
+        "nodes": {
+            "ep": {
+                "children": ["task"],
+                "parents": [],
+                "style": "endpoint",
+                "due": "2099-01-01",
+            },
+            "task": {"children": [], "parents": ["ep"]},
+        },
+    }
+
+    dot_text = yaml_to_dot(data, wrap_width=20, order_by_date=False)
+
+    assert "subgraph cluster_ep" in dot_text
+    assert 'font color="orange"' in dot_text
 
 
 def test_yaml_to_dot_keeps_endpoint_style_in_date_mode():
@@ -116,3 +146,35 @@ def test_yaml_to_dot_keeps_endpoint_style_in_date_mode():
     assert "subgraph endpoints" in dot_text
     assert "node [color=red, fontcolor=red];" in dot_text
     assert "ep [label=" in dot_text
+
+
+def test_yaml_to_dot_endpoint_cluster_edges_render_with_dot(tmp_path):
+    data = {
+        "styles": {
+            "endpoint": {"attrs": {"node": {"color": "red"}}},
+        },
+        "nodes": {
+            "parent_ep": {
+                "children": ["child_ep"],
+                "parents": [],
+                "style": "endpoint",
+                "text": "Parent",
+            },
+            "child_ep": {
+                "children": ["leaf"],
+                "parents": ["parent_ep"],
+                "style": "endpoint",
+                "text": "Child",
+            },
+            "leaf": {"children": [], "parents": ["child_ep"]},
+        },
+    }
+
+    dot_path = tmp_path / "graph.dot"
+    svg_path = tmp_path / "graph.svg"
+    dot_path.write_text(yaml_to_dot(data, order_by_date=False), encoding="utf-8")
+
+    import subprocess
+
+    subprocess.run(["dot", "-Tsvg", str(dot_path), "-o", str(svg_path)], check=True)
+    assert svg_path.exists()

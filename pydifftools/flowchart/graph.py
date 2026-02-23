@@ -406,10 +406,9 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
         "digraph G {",
         "    graph [",
         "        rankdir=LR,",
-        (
-            '        size="10.6,8.1!",   // ~11x8.5 minus margins, excl gives'
-            " exact        margin=0.20,"
-        ),
+        '        size="10.6,8.1!",',
+        "        margin=0.20,",
+        "        pad=0.20,",
         "        ratio=fill,",
         "        splines=true,",
         "        concentrate=true,",
@@ -592,14 +591,13 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
                         lines.append(f"        {key}={value};")
             else:
                 lines.append("        color=black;")
-            if (
-                "text" in data["nodes"][endpoint_name]
-                and data["nodes"][endpoint_name]["text"] is not None
-            ):
+            # Cluster labels should use the same label pipeline as nodes,
+            # including due-date rendering, with wider wrapping.
+            if _node_text_with_due(data["nodes"][endpoint_name]) is not None:
                 lines.append(
                     "        label="
                     + _format_label(
-                        data["nodes"][endpoint_name]["text"],
+                        _node_text_with_due(data["nodes"][endpoint_name]),
                         wrap_width=wrap_width * 2,
                     )
                     + ";"
@@ -653,13 +651,44 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
             if "children" not in data["nodes"][endpoint_name]:
                 continue
             cluster_name = f"cluster_{endpoint_name}"
+            edge_style = ""
+            if (
+                "style" in data["nodes"][endpoint_name]
+                and data["nodes"][endpoint_name]["style"] in data["styles"]
+                and "attrs" in data["styles"][data["nodes"][endpoint_name]["style"]]
+                and "node" in data["styles"][data["nodes"][endpoint_name]["style"]]["attrs"]
+            ):
+                if isinstance(
+                    data["styles"][data["nodes"][endpoint_name]["style"]]["attrs"]["node"],
+                    list,
+                ):
+                    if "color" in data["styles"][data["nodes"][endpoint_name]["style"]]["attrs"]["node"][0]:
+                        edge_style = (
+                            ",color="
+                            + str(
+                                data["styles"][data["nodes"][endpoint_name]["style"]]["attrs"]["node"][0]["color"]
+                            )
+                        )
+                elif "color" in data["styles"][data["nodes"][endpoint_name]["style"]]["attrs"]["node"]:
+                    edge_style = (
+                        ",color="
+                        + str(
+                            data["styles"][data["nodes"][endpoint_name]["style"]]["attrs"]["node"]["color"]
+                        )
+                    )
             for child in data["nodes"][endpoint_name]["children"]:
                 if child not in data["nodes"]:
                     continue
+                # Child endpoints are represented by clusters, so target the
+                # child anchor node to keep endpoint-to-endpoint edges visible
+                # without drawing endpoint nodes directly.
+                edge_target = child
+                if child in endpoint_nodes:
+                    edge_target = f"cluster_anchor_{child}"
                 lines.append(
                     "    "
-                    + f"cluster_anchor_{endpoint_name} -> {child}"
-                    + f" [ltail={cluster_name}];"
+                    + f"cluster_anchor_{endpoint_name} -> {edge_target}"
+                    + f" [ltail={cluster_name}{edge_style}];"
                 )
     lines.append("}")
     return "\n".join(lines)
