@@ -42,6 +42,23 @@ def _make_cli_env(tmp_path):
     return env
 
 
+def write_minimal_bibliography_and_csl(target_dir):
+    # Create citation support files that run_pandoc requires.
+    (target_dir / "references.bib").write_text(
+        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
+    )
+    (target_dir / "style.csl").write_text(
+        '<?xml version="1.0" encoding="utf-8"?>\n<style'
+        ' xmlns="http://purl.org/net/xbiblio/csl" version="1.0"'
+        ' class="in-text">\n  <info>\n    <title>Minimal</title>\n   '
+        " <id>minimal</id>\n    <updated>2023-01-01T00:00:00Z</updated>\n "
+        " </info>\n  <citation>\n    <layout>\n      <text"
+        ' variable="title"/>\n    </layout>\n  </citation>\n  <bibliography>\n'
+        '    <layout>\n      <text variable="title"/>\n    </layout>\n '
+        " </bibliography>\n</style>"
+    )
+
+
 def test_wgrph_missing_file(tmp_path):
     env = _make_cli_env(tmp_path)
     cmd = [
@@ -178,25 +195,7 @@ def test_cpb_hides_low_headers(tmp_path):
     markdown_file = tmp_path / "notes.md"
     markdown_file.write_text(markdown_content)
 
-    # 2. Provide minimal valid BibTeX content
-    (tmp_path / "references.bib").write_text(
-        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
-    )
-
-    # 3. Provide a VALID minimal CSL file.
-    # An empty <style> tag causes 'CiteprocParseError: No citation
-    # element present'.
-    csl_content = (
-        '<?xml version="1.0" encoding="utf-8"?>\n<style'
-        ' xmlns="http://purl.org/net/xbiblio/csl" version="1.0"'
-        ' class="in-text">\n  <info>\n    <title>Minimal</title>\n   '
-        " <id>minimal</id>\n    <updated>2023-01-01T00:00:00Z</updated>\n "
-        " </info>\n  <citation>\n    <layout>\n      <text"
-        ' variable="title"/>\n    </layout>\n  </citation>\n  <bibliography>\n'
-        '    <layout>\n      <text variable="title"/>\n    </layout>\n '
-        " </bibliography>\n</style>"
-    )
-    (tmp_path / "style.csl").write_text(csl_content)
+    write_minimal_bibliography_and_csl(tmp_path)
     html_file = tmp_path / "notes.html"
     cwd = os.getcwd()
     os.chdir(tmp_path)
@@ -358,6 +357,198 @@ def test_run_pandoc_adds_css_lua_and_js_files_from_markdown_directory(
     assert (
         '<script src="' + str(project_dir / "widgets.js") + '"></script>'
     ) in html_content
+
+
+def test_run_pandoc_copies_comment_assets_when_comment_tags_present(
+    tmp_path, monkeypatch
+):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    markdown_file = project_dir / "notes.md"
+    markdown_file.write_text("# Title\n\n<comment>hello</comment>\n")
+    (project_dir / "references.bib").write_text(
+        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
+    )
+    (project_dir / "style.csl").write_text(
+        '<?xml version="1.0" encoding="utf-8"?><style '
+        'xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
+    )
+    html_file = tmp_path / "notes.html"
+
+    monkeypatch.setattr(
+        "pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool"
+    )
+
+    def fake_run(_command):
+        with open(html_file, "w", encoding="utf-8") as fp:
+            fp.write("<html><head></head><body>ok</body></html>")
+
+    monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
+
+    run_pandoc(str(markdown_file), str(html_file))
+
+    assert (project_dir / "comments.css").exists()
+    assert (project_dir / "comment_tags.lua").exists()
+    assert (project_dir / "comment_toggle.js").exists()
+
+
+def test_run_pandoc_comment_tag_regression_end_to_end(tmp_path):
+    # This markdown reproduces the current failing mode where list content
+    # inside <comment> leaks into the main body text.
+    markdown_content = """Because these contributions have a smaller
+linewidth and because the amplitude of the
+derivative signal is inversely proportional
+to the square of the linewidth,
+the spectrum responds correspondingly dramatically
+to contributions from the RMs with low local
+concentration.
+<comment>
+☐ TODO:
+    Include a comparison of actual lines in the
+    plot.
+</comment>
+<comment>
+☐ TODO:
+    Make sure the git repo has the updated
+    version of the plot that you crafted and
+    presented on slack!!
+</comment>
+Correspondingly,
+<comment>
+☐ TODO:
+Here, you want to guide people more
+explicitly through exactly what you are
+talking about:
+
+* For people unaccustomed to ESR spectra, you
+    want to specifically talk in terms of the
+    "initial positive maximum" and the "final
+    minimum".
+* You need to be sure that you're
+    explaining that in this concentration
+    range, you transition from three resolved
+    hyperfine lines to a single, broad line.
+</comment>
+ESR measurements at lower water loading include [@dummy_ref].
+
+<comment>
+☐ TODO:
+    I think a lot of the following caption is
+    description.
+</comment>
+
+::: {.comment-right}
+☐ TODO:
+It's still unclear what causes the low-$E_a$ region.
+:::
+"""
+    markdown_file = tmp_path / "notes.md"
+    html_file = tmp_path / "notes.html"
+    markdown_file.write_text(markdown_content)
+    write_minimal_bibliography_and_csl(tmp_path)
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        run_pandoc(str(markdown_file), str(html_file))
+    finally:
+        os.chdir(cwd)
+
+    html_content = html_file.read_text()
+
+    # Ensure comments generated from <comment> tags and .comment-right blocks
+    # are rendered as bubbles in the output html.
+    assert html_content.count('class="comment-pin"') >= 3
+    assert 'class="comment-right"' in html_content
+
+    # Regression assertion: this phrase should be present inside a comment
+    # overlay and not leaked into a main-body list.
+    phrase = "For people unaccustomed to ESR spectra"
+    assert phrase in html_content
+    assert '<div class="comment-overlay comment-right"' in html_content
+    assert "<ul>" in html_content
+
+    # Confirm the bullet list is inside a comment overlay block.
+    overlay_with_list = False
+    sections = html_content.split('<div class="comment-overlay comment-right"')
+    for section in sections[1:]:
+        if phrase in section and "<ul>" in section:
+            overlay_with_list = True
+            break
+    assert overlay_with_list
+
+
+def test_comment_css_arrow_geometry_constants(tmp_path):
+    # Keep explicit geometry values in test constants so future style edits can
+    # update one place and immediately see behavior changes in this test.
+    arrow_height_px = 8
+    arrow_width_px = 8
+    left_arrow_width_px = 16
+    bubble_separation_rem = 0.5
+    overlap_shift_rem = 1
+    overlay_right_shift_rem = 0.45
+    overlay_rise_rem = 0.65
+    inline_rise_rem = 0.35
+
+    markdown_file = tmp_path / "notes.md"
+    html_file = tmp_path / "notes.html"
+    markdown_file.write_text(
+        "Body [@dummy_ref].\n\n<comment>Inline bubble</comment>\n"
+    )
+    write_minimal_bibliography_and_csl(tmp_path)
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        run_pandoc(str(markdown_file), str(html_file))
+    finally:
+        os.chdir(cwd)
+
+    css_content = (tmp_path / "comments.css").read_text()
+    js_content = (tmp_path / "comment_toggle.js").read_text()
+
+    # Left/right pointer triangles should use the configured arrow size.
+    assert "span.comment-pin > span.comment-right::before" in css_content
+    assert "span.comment-pin > span.comment-left::before" in css_content
+    assert "div.comment-overlay.comment-right::before" in css_content
+    assert "div.comment-overlay.comment-left::before" in css_content
+    assert "var(--comment-left-arrow-width)" in css_content
+    assert "var(--comment-arrow-width)" in css_content
+    assert "var(--comment-arrow-height)" in css_content
+
+    # The configured css variables control arrow height/width and overlap
+    # shift.
+    assert f"--comment-arrow-height: {arrow_height_px}px;" in css_content
+    assert f"--comment-arrow-width: {arrow_width_px}px;" in css_content
+    assert (
+        f"--comment-left-arrow-width: {left_arrow_width_px}px;" in css_content
+    )
+    assert f"--comment-overlap-shift: {overlap_shift_rem}rem;" in css_content
+    assert (
+        f"--comment-overlay-right-shift: {overlay_right_shift_rem}rem;"
+        in css_content
+    )
+    assert f"--comment-overlay-rise: {overlay_rise_rem}rem;" in css_content
+    assert f"--comment-inline-rise: {inline_rise_rem}rem;" in css_content
+
+    # Bubble separation (gap) must match the configured value for both sides.
+    assert f"left: {bubble_separation_rem}rem;" in css_content
+    assert f"right: {bubble_separation_rem}rem;" in css_content
+    assert f"--comment-gap: {bubble_separation_rem}rem;" in css_content
+
+    # JS should convert css length variables to pixels before geometry math,
+    # otherwise rem-based values do not affect rendered spacing correctly.
+    assert "--comment-overlap-shift" in js_content
+    assert "--comment-overlay-right-shift" in js_content
+    assert "--comment-overlay-rise" in js_content
+    assert "--comment-inline-rise" in js_content
+    assert "--comment-gap" in js_content
+    assert "function cssLengthToPx" in js_content
+    assert "function cssVariableLengthPx" in js_content
+    assert "SELECTOR_INLINE" in js_content
+    assert "bubble.style.transform" in js_content
+    assert "left = ax + gap + overlayRightShift" in js_content
+    assert "const top = ay - overlayRise" in js_content
 
 
 def test_mfs_errors_when_no_matching_markdown(tmp_path):

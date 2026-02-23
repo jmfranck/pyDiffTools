@@ -70,6 +70,21 @@ def run_pandoc(filename, html_file):
     # Collect companion files from the markdown file's directory so cpb works
     # even when started from a different working directory.
     source_dir = os.path.dirname(os.path.abspath(filename))
+    # If this markdown uses <comment> tags, copy the packaged comment assets
+    # into the markdown directory before collecting css/lua/js companion files.
+    with open(filename, encoding="utf-8") as fp:
+        markdown_text = fp.read()
+    if "<comment>" in markdown_text:
+        package_dir = os.path.dirname(os.path.abspath(__file__))
+        for asset_name in [
+            "comments.css",
+            "comment_tags.lua",
+            "comment_toggle.js",
+        ]:
+            shutil.copy2(
+                os.path.join(package_dir, asset_name),
+                os.path.join(source_dir, asset_name),
+            )
     localfiles = {}
     for k in ["csl", "bib"]:
         localfiles[k] = [

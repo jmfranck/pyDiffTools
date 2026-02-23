@@ -35,7 +35,13 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-pydifftools = ["diff-doc.js", "xml2xlsx.vbs"]
+pydifftools = [
+    "diff-doc.js",
+    "xml2xlsx.vbs",
+    "comments.css",
+    "comment_tags.lua",
+    "comment_toggle.js",
+]
 
 [tool.black]
 line-length = 79

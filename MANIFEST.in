@@ -3,4 +3,7 @@ include README.rst
 include LICENSE.md
 include pydifftools/diff-doc.js
 include pydifftools/xml2xlsx.vbs
+include pydifftools/comments.css
+include pydifftools/comment_tags.lua
+include pydifftools/comment_toggle.js
 recursive-include example_notebook *
