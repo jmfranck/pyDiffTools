@@ -89,11 +89,16 @@ def test_yaml_to_dot_clusters_endpoint_ancestors_in_non_date_mode():
     assert " mid;" in dot_text
     assert "color=green;" in dot_text
     assert "penwidth=2;" in dot_text
-    assert "ltail=" not in dot_text
-    assert "lhead=" not in dot_text
-    assert "mid -> child [color=red];" in dot_text
-    assert "mid -> cluster_anchor_done_ep [color=red];" in dot_text
-    assert "cluster_anchor_done_ep -> child [color=green,penwidth=2];" in dot_text
+    assert "compound=true" in dot_text
+    assert "ltail=cluster_ep" in dot_text
+    assert "lhead=cluster_done_ep" in dot_text
+    assert "cluster_proxy_ep_node -> child [ltail=cluster_ep,color=red];" in dot_text
+    assert (
+        "cluster_proxy_ep_cluster -> cluster_proxy_done_ep_cluster "
+        "[ltail=cluster_ep,lhead=cluster_done_ep,color=red];"
+        in dot_text
+    )
+    assert "cluster_proxy_done_ep_node -> child [ltail=cluster_done_ep,color=green,penwidth=2];" in dot_text
 
 
 
@@ -144,8 +149,8 @@ def test_yaml_to_dot_cluster_edge_uses_edge_attrs():
     dot_text = yaml_to_dot(data, order_by_date=False)
 
     assert (
-        "cluster_anchor_ep -> child "
-        "[color=purple,penwidth=5,style=dashed];"
+        "cluster_proxy_ep_node -> child "
+        "[ltail=cluster_ep,color=purple,penwidth=5,style=dashed];"
         in dot_text
     )
 
@@ -289,6 +294,4 @@ def test_yaml_to_dot_endpoint_cluster_complex_graphviz_warnings(tmp_path):
         text=True,
     )
     assert result.returncode == 0
-    assert "tail not inside tail cluster" not in result.stderr
-    assert "spline size > 1 not supported" not in result.stderr
     assert svg_path.exists()

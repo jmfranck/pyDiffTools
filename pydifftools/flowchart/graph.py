@@ -518,30 +518,25 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
                     for grandparent_name in data["nodes"][parent_name]["parents"]:
                         parents_to_check.append(grandparent_name)
         if endpoint_nodes:
-            # Keep endpoint clusters from overlapping and leave enough room
-            # for routing in dense plans.
-            lines.append("    graph [nodesep=0.60,ranksep=0.90];")
-
-    endpoint_representative = {}
-    if not order_by_date:
-        # Choose one representative node per endpoint cluster so edge routing
-        # follows normal node-to-node layout heuristics without compound-edge
-        # clipping, which is unstable in some Graphviz versions.
-        for endpoint_name in endpoint_nodes:
-            endpoint_representative[endpoint_name] = f"cluster_anchor_{endpoint_name}"
-            if "parents" in data["nodes"][endpoint_name]:
-                for parent_name in data["nodes"][endpoint_name]["parents"]:
-                    if parent_name in endpoint_clusters[endpoint_name]:
-                        endpoint_representative[endpoint_name] = parent_name
-                        break
-            if (
-                endpoint_representative[endpoint_name]
-                == f"cluster_anchor_{endpoint_name}"
-                and endpoint_clusters[endpoint_name]
-            ):
-                endpoint_representative[endpoint_name] = sorted(
-                    endpoint_clusters[endpoint_name]
-                )[0]
+            has_cluster_boundary_edges = False
+            for endpoint_name in endpoint_nodes:
+                if "children" in data["nodes"][endpoint_name]:
+                    for child in data["nodes"][endpoint_name]["children"]:
+                        if child in data["nodes"]:
+                            has_cluster_boundary_edges = True
+                            break
+                if has_cluster_boundary_edges:
+                    break
+            # Keep clusters from overlapping and give routing enough room.
+            # compound=true is only turned on if endpoint boundary edges exist.
+            if has_cluster_boundary_edges:
+                lines.append(
+                    '    graph [compound=true,nodesep=0.70,ranksep=1.00,pad=0.20];'
+                )
+            else:
+                lines.append(
+                    '    graph [nodesep=0.70,ranksep=1.00,pad=0.20];'
+                )
 
     # Group nodes by their declared style so they share subgraph attributes.
     style_members = {}
@@ -746,21 +741,26 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
             for child in data["nodes"][endpoint_name]["children"]:
                 if child not in data["nodes"]:
                     continue
-                # Route via representative nodes so Graphviz chooses natural
-                # attachment points on cluster borders the same way it does
-                # for ordinary node-to-node edges.
-                edge_source = endpoint_representative[endpoint_name]
-                edge_target = child
+                # Use standard Graphviz cluster routing so edges are clipped
+                # to cluster borders and attach at sensible sides.
+                edge_source = f"cluster_proxy_{endpoint_name}_node"
+                edge_targets = [child]
+                edge_attrs = [f"ltail={cluster_name}"]
                 if child in endpoint_nodes:
-                    edge_target = endpoint_representative[child]
-                if edge_style:
+                    edge_source = f"cluster_proxy_{endpoint_name}_cluster"
+                    edge_targets = [f"cluster_proxy_{child}_cluster"]
+                    edge_attrs.append(f"lhead=cluster_{child}")
+                for edge_target in edge_targets:
+                    final_edge_attrs = list(edge_attrs)
+                    if edge_style:
+                        final_edge_attrs.append(edge_style[1:])
                     lines.append(
                         "    "
                         + f"{edge_source} -> {edge_target}"
-                        + f" [{edge_style[1:]}];"
+                        + " ["
+                        + ",".join(final_edge_attrs)
+                        + "];"
                     )
-                else:
-                    lines.append("    " + f"{edge_source} -> {edge_target};")
     lines.append("}")
     return "\n".join(lines)
 
