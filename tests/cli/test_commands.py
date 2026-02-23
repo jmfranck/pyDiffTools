@@ -291,6 +291,75 @@ def test_mfs_waits_up_to_20_seconds_for_socket(tmp_path):
         os.chdir(cwd)
 
 
+def test_run_pandoc_adds_css_lua_and_js_files_from_markdown_directory(
+    tmp_path, monkeypatch
+):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    markdown_file = project_dir / "notes.md"
+    markdown_file.write_text("# Title\n")
+    (project_dir / "references.bib").write_text(
+        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
+    )
+    (project_dir / "style.csl").write_text(
+        '<?xml version="1.0" encoding="utf-8"?><style '
+        'xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
+    )
+    (project_dir / "site.css").write_text("body { color: red; }\n")
+    (project_dir / "print.css").write_text(
+        "@media print { body { color: black; } }\n"
+    )
+    (project_dir / "cleanup.lua").write_text("return {}\n")
+    (project_dir / "numbers.lua").write_text("return {}\n")
+    (project_dir / "extras.js").write_text('console.log("extras");\n')
+    (project_dir / "widgets.js").write_text('console.log("widgets");\n')
+    html_file = tmp_path / "notes.html"
+    captured_command = {}
+
+    # Skip external tool checks and capture the exact pandoc command.
+    monkeypatch.setattr(
+        "pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool"
+    )
+
+    def fake_run(command):
+        captured_command["value"] = command
+        with open(html_file, "w", encoding="utf-8") as fp:
+            fp.write(
+                '<html><head><script id="MathJax-script" '
+                'src="MathJax-3.1.2/es5/tex-mml-chtml.js"></script></head>'
+                "<body>ok</body></html>"
+            )
+
+    monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
+
+    run_pandoc(str(markdown_file), str(html_file))
+
+    css_pairs = []
+    lua_pairs = []
+    command = captured_command["value"]
+    for index, token in enumerate(command[:-1]):
+        if token == "--css":
+            css_pairs.append(command[index + 1])
+        if token == "--lua-filter":
+            lua_pairs.append(command[index + 1])
+    assert css_pairs == [
+        str(project_dir / "print.css"),
+        str(project_dir / "site.css"),
+    ]
+    assert lua_pairs == [
+        str(project_dir / "cleanup.lua"),
+        str(project_dir / "numbers.lua"),
+    ]
+    html_content = html_file.read_text()
+    assert "MathJax-script" in html_content
+    assert (
+        '<script src="' + str(project_dir / "extras.js") + '"></script>'
+    ) in html_content
+    assert (
+        '<script src="' + str(project_dir / "widgets.js") + '"></script>'
+    ) in html_content
+
+
 def test_mfs_errors_when_no_matching_markdown(tmp_path):
     (tmp_path / "notes.md").write_text("alpha\nbeta\n")
 
