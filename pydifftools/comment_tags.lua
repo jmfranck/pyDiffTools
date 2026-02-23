@@ -1,6 +1,7 @@
 -- comment_tags.lua
 -- Supports:
---   Inline: <comment>...</comment>, <comment-left>...</comment-left>, <comment-right>...</comment-right>
+--   Inline: <comment>...</comment>, <comment-left>...</comment-left>,
+--           <comment-right>...</comment-right>
 --   Block:  same tags wrapping block content (lists, multiple paras, etc.)
 --
 -- Inline output:
@@ -27,9 +28,9 @@ local function raw_block_html(el)
 end
 
 local OPENERS = {
-  ["<comment>"]       = { side = "comment-right", close = "</comment>" },
+  ["<comment>"] = { side = "comment-right", close = "</comment>" },
   ["<comment-right>"] = { side = "comment-right", close = "</comment-right>" },
-  ["<comment-left>"]  = { side = "comment-left",  close = "</comment-left>"  },
+  ["<comment-left>"] = { side = "comment-left", close = "</comment-left>" },
 }
 
 local comment_id = 0
@@ -44,7 +45,7 @@ local function make_inline_comment(side, content_inlines)
 end
 
 local function make_block_anchor(id)
-  -- RawBlock so we don't introduce a <p> wrapper that changes spacing
+  -- RawBlock so we don't introduce a <p> wrapper that changes spacing.
   return pandoc.RawBlock("html",
     '<span class="comment-pin comment-pin-block" data-comment-id="' .. id .. '"></span>')
 end
@@ -69,62 +70,152 @@ local function clone_para_like(block, inlines)
   end
 end
 
+local function split_inline_block_at_tag(block, tag)
+  if not para_like_t(block) then
+    return false, nil, nil
+  end
+
+  local tag_index = nil
+  for j = 1, #block.content do
+    if raw_inline_html(block.content[j]) == tag then
+      tag_index = j
+      break
+    end
+  end
+  if not tag_index then
+    return false, nil, nil
+  end
+
+  local before = pandoc.List()
+  local after = pandoc.List()
+  for j = 1, tag_index - 1 do
+    before:insert(block.content[j])
+  end
+  for j = tag_index + 1, #block.content do
+    after:insert(block.content[j])
+  end
+
+  local before_block = nil
+  local after_block = nil
+  if #before > 0 then
+    before_block = clone_para_like(block, before)
+  end
+  if #after > 0 then
+    after_block = clone_para_like(block, after)
+  end
+
+  return true, before_block, after_block
+end
+
+
+local function split_block_at_closer(block, close_tag)
+  -- Handle direct Para/Plain closer first.
+  if para_like_t(block) then
+    local found, before, after = split_inline_block_at_tag(block, close_tag)
+    if found then
+      local after_blocks = pandoc.List()
+      if after then
+        after_blocks:insert(after)
+      end
+      return true, before, after_blocks
+    end
+    return false, nil, pandoc.List()
+  end
+
+  -- Handle list blocks where the closer can appear inside a list item.
+  if block.t == "BulletList" then
+    local before_items = pandoc.List()
+    local after_blocks = pandoc.List()
+
+    for item_index = 1, #block.content do
+      local this_item = block.content[item_index]
+      local before_item_blocks = pandoc.List()
+
+      for block_index = 1, #this_item do
+        local found, before, nested_after =
+          split_block_at_closer(this_item[block_index], close_tag)
+        if found then
+          if before then
+            before_item_blocks:insert(before)
+          end
+          if #before_item_blocks > 0 then
+            before_items:insert(before_item_blocks)
+          end
+
+          -- Once the comment closes, flatten the remaining list content back
+          -- into normal blocks so we do not leak list text into body lists.
+          for nested_index = 1, #nested_after do
+            after_blocks:insert(nested_after[nested_index])
+          end
+          for k = block_index + 1, #this_item do
+            after_blocks:insert(this_item[k])
+          end
+          for item_tail = item_index + 1, #block.content do
+            for tail_block_index = 1, #block.content[item_tail] do
+              after_blocks:insert(block.content[item_tail][tail_block_index])
+            end
+          end
+
+          local before_block = nil
+          if #before_items > 0 then
+            before_block = pandoc.BulletList(before_items)
+          end
+          return true, before_block, after_blocks
+        else
+          before_item_blocks:insert(this_item[block_index])
+        end
+      end
+
+      if #before_item_blocks > 0 then
+        before_items:insert(before_item_blocks)
+      end
+    end
+
+    return false, nil, pandoc.List()
+  end
+
+  return false, nil, pandoc.List()
+end
+
 -- Detect opener at block level:
 --   1) RawBlock("<comment>")
---   2) first inline of Para/Plain is RawInline("<comment>")
--- Returns: spec, stripped_block_or_nil
+--   2) anywhere inside Para/Plain as RawInline("<comment>")
+-- Returns: spec, before_block_or_nil, after_block_or_nil
 local function detect_block_opener(block)
   local t = raw_block_html(block)
   local spec = t and OPENERS[t] or nil
   if spec then
-    return spec, nil
+    return spec, nil, nil
   end
 
-  if para_like_t(block) and #block.content > 0 then
-    local t0 = raw_inline_html(block.content[1])
-    local spec2 = t0 and OPENERS[t0] or nil
-    if spec2 then
-      local rest = pandoc.List()
-      for k = 2, #block.content do
-        rest:insert(block.content[k])
-      end
-      if #rest == 0 then
-        return spec2, nil
-      else
-        return spec2, clone_para_like(block, rest)
+  if para_like_t(block) then
+    for k, opener_spec in pairs(OPENERS) do
+      local found, before, after = split_inline_block_at_tag(block, k)
+      if found then
+        return opener_spec, before, after
       end
     end
   end
 
-  return nil, nil
+  return nil, nil, nil
 end
 
 -- Detect closer at block level:
 --   1) RawBlock("</comment>")
---   2) last inline of Para/Plain is RawInline("</comment>")
--- Returns: found_bool, stripped_block_or_nil
+--   2) anywhere inside Para/Plain as RawInline("</comment>")
+-- Returns: found_bool, before_block_or_nil, after_block_or_nil
 local function strip_block_closer(block, close_tag)
   local t = raw_block_html(block)
   if t == close_tag then
-    return true, nil
+    return true, nil, pandoc.List()
   end
 
-  if para_like_t(block) and #block.content > 0 then
-    local tn = raw_inline_html(block.content[#block.content])
-    if tn == close_tag then
-      local rest = pandoc.List()
-      for k = 1, #block.content - 1 do
-        rest:insert(block.content[k])
-      end
-      if #rest == 0 then
-        return true, nil
-      else
-        return true, clone_para_like(block, rest)
-      end
-    end
+  local found, before, after_blocks = split_block_at_closer(block, close_tag)
+  if found then
+    return true, before, after_blocks
   end
 
-  return false, nil
+  return false, nil, pandoc.List()
 end
 
 -- Inline comments (mid-paragraph)
@@ -174,27 +265,35 @@ function Blocks(blocks)
   local i, n = 1, #blocks
 
   while i <= n do
-    local spec, stripped_first = detect_block_opener(blocks[i])
+    local spec, before_open, after_open = detect_block_opener(blocks[i])
 
     if not spec then
       out:insert(blocks[i])
       i = i + 1
     else
       local buf = pandoc.List()
-      if stripped_first then
-        buf:insert(stripped_first)
+      if before_open then
+        -- Keep text before the opener in the main document flow.
+        out:insert(before_open)
+      end
+      if after_open then
+        -- Everything after the opener belongs inside the bubble body.
+        buf:insert(after_open)
       end
 
       local j = i + 1
       local found = false
+      local after_close_blocks = pandoc.List()
 
       while j <= n do
-        local is_close, stripped = strip_block_closer(blocks[j], spec.close)
+        local is_close, before_close, after_close_candidate =
+          strip_block_closer(blocks[j], spec.close)
         if is_close then
-          if stripped then
-            buf:insert(stripped)
+          if before_close then
+            buf:insert(before_close)
           end
           found = true
+          after_close_blocks = after_close_candidate
           break
         else
           buf:insert(blocks[j])
@@ -206,6 +305,10 @@ function Blocks(blocks)
         local id = next_id()
         out:insert(make_block_anchor(id))
         out:insert(make_block_overlay(spec.side, id, buf))
+        -- Keep trailing content after the closer in main flow.
+        for after_index = 1, #after_close_blocks do
+          out:insert(after_close_blocks[after_index])
+        end
         i = j + 1
       else
         -- unmatched opener: preserve original block

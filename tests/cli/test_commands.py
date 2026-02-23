@@ -464,15 +464,20 @@ It's still unclear what causes the low-$E_a$ region.
     assert 'class="comment-right"' in html_content
 
     # Regression assertion: this phrase should be present inside a comment
-    # bubble tree, not in plain body nodes. This currently fails and captures
-    # the leak where list text escapes from the <comment> block.
+    # overlay and not leaked into a main-body list.
     phrase = 'For people unaccustomed to ESR spectra'
     assert phrase in html_content
-    phrase_in_comment_tree = (
-        '<div class="comment-overlay' in html_content
-        and phrase in html_content.split('<div class="comment-overlay', 1)[1]
-    )
-    assert phrase_in_comment_tree
+    assert '<div class="comment-overlay comment-right"' in html_content
+    assert '<ul>' in html_content
+
+    # Confirm the bullet list is inside a comment overlay block.
+    overlay_with_list = False
+    sections = html_content.split('<div class="comment-overlay comment-right"')
+    for section in sections[1:]:
+        if phrase in section and '<ul>' in section:
+            overlay_with_list = True
+            break
+    assert overlay_with_list
 
 
 def test_comment_css_arrow_geometry_constants(tmp_path):
