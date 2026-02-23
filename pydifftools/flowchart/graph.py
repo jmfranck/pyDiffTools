@@ -519,9 +519,29 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
                         parents_to_check.append(grandparent_name)
         if endpoint_nodes:
             # Keep endpoint clusters from overlapping and leave enough room
-            # for routing in dense plans while letting Graphviz clip edges
-            # cleanly to cluster borders.
-            lines.append("    graph [compound=true,nodesep=0.60,ranksep=0.90];")
+            # for routing in dense plans.
+            lines.append("    graph [nodesep=0.60,ranksep=0.90];")
+
+    endpoint_representative = {}
+    if not order_by_date:
+        # Choose one representative node per endpoint cluster so edge routing
+        # follows normal node-to-node layout heuristics without compound-edge
+        # clipping, which is unstable in some Graphviz versions.
+        for endpoint_name in endpoint_nodes:
+            endpoint_representative[endpoint_name] = f"cluster_anchor_{endpoint_name}"
+            if "parents" in data["nodes"][endpoint_name]:
+                for parent_name in data["nodes"][endpoint_name]["parents"]:
+                    if parent_name in endpoint_clusters[endpoint_name]:
+                        endpoint_representative[endpoint_name] = parent_name
+                        break
+            if (
+                endpoint_representative[endpoint_name]
+                == f"cluster_anchor_{endpoint_name}"
+                and endpoint_clusters[endpoint_name]
+            ):
+                endpoint_representative[endpoint_name] = sorted(
+                    endpoint_clusters[endpoint_name]
+                )[0]
 
     # Group nodes by their declared style so they share subgraph attributes.
     style_members = {}
@@ -726,26 +746,21 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
             for child in data["nodes"][endpoint_name]["children"]:
                 if child not in data["nodes"]:
                     continue
-                # Child endpoints are represented by clusters, so target the
-                # child anchor node to keep endpoint-to-endpoint edges visible
-                # without drawing endpoint nodes directly.
+                # Route via representative nodes so Graphviz chooses natural
+                # attachment points on cluster borders the same way it does
+                # for ordinary node-to-node edges.
+                edge_source = endpoint_representative[endpoint_name]
                 edge_target = child
-                edge_cluster = ""
                 if child in endpoint_nodes:
-                    edge_target = f"cluster_anchor_{child}"
-                    edge_cluster = f",lhead=cluster_{child}"
+                    edge_target = endpoint_representative[child]
                 if edge_style:
                     lines.append(
                         "    "
-                        + f"cluster_anchor_{endpoint_name} -> {edge_target}"
-                        + f" [ltail={cluster_name}{edge_cluster},{edge_style[1:]}];"
+                        + f"{edge_source} -> {edge_target}"
+                        + f" [{edge_style[1:]}];"
                     )
                 else:
-                    lines.append(
-                        "    "
-                        + f"cluster_anchor_{endpoint_name} -> {edge_target}"
-                        + f" [ltail={cluster_name}{edge_cluster}];"
-                    )
+                    lines.append("    " + f"{edge_source} -> {edge_target};")
     lines.append("}")
     return "\n".join(lines)
 
