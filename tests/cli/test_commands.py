@@ -291,7 +291,9 @@ def test_mfs_waits_up_to_20_seconds_for_socket(tmp_path):
         os.chdir(cwd)
 
 
-def test_run_pandoc_adds_css_lua_and_js_files_from_markdown_directory(tmp_path, monkeypatch):
+def test_run_pandoc_adds_css_lua_and_js_files_from_markdown_directory(
+    tmp_path, monkeypatch
+):
     project_dir = tmp_path / "project"
     project_dir.mkdir()
     markdown_file = project_dir / "notes.md"
@@ -304,22 +306,28 @@ def test_run_pandoc_adds_css_lua_and_js_files_from_markdown_directory(tmp_path, 
         'xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
     )
     (project_dir / "site.css").write_text("body { color: red; }\n")
-    (project_dir / "print.css").write_text("@media print { body { color: black; } }\n")
+    (project_dir / "print.css").write_text(
+        "@media print { body { color: black; } }\n"
+    )
     (project_dir / "cleanup.lua").write_text("return {}\n")
     (project_dir / "numbers.lua").write_text("return {}\n")
-    (project_dir / "extras.js").write_text("console.log(\"extras\");\n")
-    (project_dir / "widgets.js").write_text("console.log(\"widgets\");\n")
+    (project_dir / "extras.js").write_text('console.log("extras");\n')
+    (project_dir / "widgets.js").write_text('console.log("widgets");\n')
     html_file = tmp_path / "notes.html"
     captured_command = {}
 
     # Skip external tool checks and capture the exact pandoc command.
-    monkeypatch.setattr("pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool")
+    monkeypatch.setattr(
+        "pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool"
+    )
 
     def fake_run(command):
         captured_command["value"] = command
         with open(html_file, "w", encoding="utf-8") as fp:
             fp.write(
-                "<html><head><script id=\"MathJax-script\" src=\"MathJax-3.1.2/es5/tex-mml-chtml.js\"></script></head><body>ok</body></html>"
+                '<html><head><script id="MathJax-script" '
+                'src="MathJax-3.1.2/es5/tex-mml-chtml.js"></script></head>'
+                "<body>ok</body></html>"
             )
 
     monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
@@ -345,10 +353,10 @@ def test_run_pandoc_adds_css_lua_and_js_files_from_markdown_directory(tmp_path, 
     html_content = html_file.read_text()
     assert "MathJax-script" in html_content
     assert (
-        "<script src=\"" + str(project_dir / "extras.js") + "\"></script>"
+        '<script src="' + str(project_dir / "extras.js") + '"></script>'
     ) in html_content
     assert (
-        "<script src=\"" + str(project_dir / "widgets.js") + "\"></script>"
+        '<script src="' + str(project_dir / "widgets.js") + '"></script>'
     ) in html_content
 
 
