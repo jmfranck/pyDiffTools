@@ -89,13 +89,13 @@ def test_yaml_to_dot_clusters_endpoint_ancestors_in_non_date_mode():
     assert " mid;" in dot_text
     assert "color=green;" in dot_text
     assert "penwidth=2;" in dot_text
-    assert "cluster_anchor_ep -> child [ltail=cluster_ep,color=red];" in dot_text
+    assert "cluster_anchor_ep -> child [color=red];" in dot_text
     assert (
-        "cluster_anchor_ep -> cluster_anchor_done_ep [ltail=cluster_ep,color=red];"
+        "cluster_anchor_ep -> cluster_anchor_done_ep [color=red];"
         in dot_text
     )
     assert (
-        "cluster_anchor_done_ep -> child [ltail=cluster_done_ep,color=green,penwidth=2];"
+        "cluster_anchor_done_ep -> child [color=green,penwidth=2];"
         in dot_text
     )
 
@@ -149,7 +149,7 @@ def test_yaml_to_dot_cluster_edge_uses_edge_attrs():
 
     assert (
         "cluster_anchor_ep -> child "
-        "[ltail=cluster_ep,color=purple,penwidth=5,style=dashed];"
+        "[color=purple,penwidth=5,style=dashed];"
         in dot_text
     )
 
@@ -228,3 +228,71 @@ def test_yaml_to_dot_default_style_sets_global_node_attrs():
     dot_text = yaml_to_dot(data, order_by_date=False)
 
     assert "node [fillcolor=mintcream, style=filled];" in dot_text
+
+
+def test_yaml_to_dot_endpoint_cluster_complex_graphviz_warnings(tmp_path):
+    # Regression for large endpoint-to-endpoint routing that previously
+    # triggered Graphviz compound-edge warnings and SIGABRT.
+    data = {
+        "styles": {
+            "endpoint": {"attrs": {"node": {"color": "red"}}},
+        },
+        "nodes": {
+            "generalBackground": {
+                "children": ["operatorOverloadDraft", "RSIstyleDraft"],
+                "parents": [],
+                "style": "endpoint",
+                "text": "general",
+            },
+            "improvedRelaxation": {
+                "children": ["RSIstyleDraft"],
+                "parents": [],
+                "style": "endpoint",
+                "text": "improved",
+            },
+            "routineODNPGoal": {
+                "children": ["RSIstyleDraft", "ODNPgoal"],
+                "parents": [],
+                "style": "endpoint",
+                "text": "routine",
+            },
+            "ODNPgoal": {
+                "children": ["WaterInterlock"],
+                "parents": ["routineODNPGoal"],
+                "style": "endpoint",
+                "text": "goal",
+            },
+            "operatorOverloadDraft": {
+                "children": ["WaterInterlock"],
+                "parents": ["generalBackground"],
+                "style": "endpoint",
+                "text": "op",
+            },
+            "RSIstyleDraft": {
+                "children": ["WaterInterlock"],
+                "parents": ["generalBackground", "improvedRelaxation", "routineODNPGoal"],
+                "style": "endpoint",
+                "text": "rsi",
+            },
+            "WaterInterlock": {
+                "children": [],
+                "parents": ["ODNPgoal", "operatorOverloadDraft", "RSIstyleDraft"],
+            },
+        },
+    }
+
+    dot_path = tmp_path / "complex.dot"
+    svg_path = tmp_path / "complex.svg"
+    dot_path.write_text(yaml_to_dot(data, order_by_date=False), encoding="utf-8")
+
+    import subprocess
+
+    result = subprocess.run(
+        ["dot", "-Tsvg", str(dot_path), "-o", str(svg_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert "tail not inside tail cluster" not in result.stderr
+    assert "spline size > 1 not supported" not in result.stderr
+    assert svg_path.exists()

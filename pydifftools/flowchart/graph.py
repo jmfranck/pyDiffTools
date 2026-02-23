@@ -518,13 +518,11 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
                     for grandparent_name in data["nodes"][parent_name]["parents"]:
                         parents_to_check.append(grandparent_name)
         if endpoint_nodes:
-            # Compound edges are required so ``ltail`` can attach edges to
-            # cluster boundaries rather than individual tail nodes.
             # Keep endpoint clusters from overlapping and leave enough room
-            # for cluster-to-cluster routing in dense plans.
-            lines.append(
-                "    graph [compound=true,nodesep=0.60,ranksep=0.90];"
-            )
+            # for routing in dense plans. We intentionally avoid Graphviz
+            # compound-edge clipping attrs here because they can trigger
+            # intermittent crashes on some endpoint-cluster layouts.
+            lines.append("    graph [nodesep=0.60,ranksep=0.90];")
 
     # Group nodes by their declared style so they share subgraph attributes.
     style_members = {}
@@ -735,11 +733,17 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
                 edge_target = child
                 if child in endpoint_nodes:
                     edge_target = f"cluster_anchor_{child}"
-                lines.append(
-                    "    "
-                    + f"cluster_anchor_{endpoint_name} -> {edge_target}"
-                    + f" [ltail={cluster_name}{edge_style}];"
-                )
+                if edge_style:
+                    lines.append(
+                        "    "
+                        + f"cluster_anchor_{endpoint_name} -> {edge_target}"
+                        + f" [{edge_style[1:]}];"
+                    )
+                else:
+                    lines.append(
+                        "    "
+                        + f"cluster_anchor_{endpoint_name} -> {edge_target};"
+                    )
     lines.append("}")
     return "\n".join(lines)
 
