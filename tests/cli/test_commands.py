@@ -42,6 +42,25 @@ def _make_cli_env(tmp_path):
     return env
 
 
+
+
+def write_minimal_bibliography_and_csl(target_dir):
+    # Create citation support files that run_pandoc requires.
+    (target_dir / "references.bib").write_text(
+        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
+    )
+    (target_dir / "style.csl").write_text(
+        '<?xml version="1.0" encoding="utf-8"?>\n<style'
+        ' xmlns="http://purl.org/net/xbiblio/csl" version="1.0"'
+        ' class="in-text">\n  <info>\n    <title>Minimal</title>\n   '
+        ' <id>minimal</id>\n    <updated>2023-01-01T00:00:00Z</updated>\n '
+        ' </info>\n  <citation>\n    <layout>\n      <text'
+        ' variable="title"/>\n    </layout>\n  </citation>\n  <bibliography>\n'
+        '    <layout>\n      <text variable="title"/>\n    </layout>\n '
+        ' </bibliography>\n</style>'
+    )
+
+
 def test_wgrph_missing_file(tmp_path):
     env = _make_cli_env(tmp_path)
     cmd = [
@@ -178,25 +197,7 @@ def test_cpb_hides_low_headers(tmp_path):
     markdown_file = tmp_path / "notes.md"
     markdown_file.write_text(markdown_content)
 
-    # 2. Provide minimal valid BibTeX content
-    (tmp_path / "references.bib").write_text(
-        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
-    )
-
-    # 3. Provide a VALID minimal CSL file.
-    # An empty <style> tag causes 'CiteprocParseError: No citation
-    # element present'.
-    csl_content = (
-        '<?xml version="1.0" encoding="utf-8"?>\n<style'
-        ' xmlns="http://purl.org/net/xbiblio/csl" version="1.0"'
-        ' class="in-text">\n  <info>\n    <title>Minimal</title>\n   '
-        " <id>minimal</id>\n    <updated>2023-01-01T00:00:00Z</updated>\n "
-        " </info>\n  <citation>\n    <layout>\n      <text"
-        ' variable="title"/>\n    </layout>\n  </citation>\n  <bibliography>\n'
-        '    <layout>\n      <text variable="title"/>\n    </layout>\n '
-        " </bibliography>\n</style>"
-    )
-    (tmp_path / "style.csl").write_text(csl_content)
+    write_minimal_bibliography_and_csl(tmp_path)
     html_file = tmp_path / "notes.html"
     cwd = os.getcwd()
     os.chdir(tmp_path)
@@ -391,6 +392,128 @@ def test_run_pandoc_copies_comment_assets_when_comment_tags_present(
     assert (project_dir / "comments.css").exists()
     assert (project_dir / "comment_tags.lua").exists()
     assert (project_dir / "comment_toggle.js").exists()
+
+
+def test_run_pandoc_comment_tag_regression_end_to_end(tmp_path):
+    # This markdown reproduces the current failing mode where list content
+    # inside <comment> leaks into the main body text.
+    markdown_content = """Because these contributions have a smaller
+linewidth and because the amplitude of the
+derivative signal is inversely proportional
+to the square of the linewidth,
+the spectrum responds correspondingly dramatically
+to contributions from the RMs with low local
+concentration.
+<comment>
+☐ TODO:
+	Include a comparison of actual lines in the
+	plot.
+</comment>
+<comment>
+☐ TODO:
+	Make sure the git repo has the updated
+	version of the plot that you crafted and
+	presented on slack!!
+</comment>
+Correspondingly,
+<comment>
+☐ TODO:
+Here, you want to guide people more
+explicitly through exactly what you are
+talking about:
+
+* For people unaccustomed to ESR spectra, you
+	want to specifically talk in terms of the
+	"initial positive maximum" and the "final
+	minimum".
+* You need to be sure that you're
+	explaining that in this concentration
+	range, you transition from three resolved
+	hyperfine lines to a single, broad line.
+</comment>
+ESR measurements at lower water loading include [@dummy_ref].
+
+<comment>
+☐ TODO:
+	I think a lot of the following caption is
+	description.
+</comment>
+
+::: {.comment-right}
+☐ TODO:
+It's still unclear what causes the low-$E_a$ region.
+:::
+"""
+    markdown_file = tmp_path / "notes.md"
+    html_file = tmp_path / "notes.html"
+    markdown_file.write_text(markdown_content)
+    write_minimal_bibliography_and_csl(tmp_path)
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        run_pandoc(str(markdown_file), str(html_file))
+    finally:
+        os.chdir(cwd)
+
+    html_content = html_file.read_text()
+
+    # Ensure comments generated from <comment> tags and .comment-right blocks
+    # are rendered as bubbles in the output html.
+    assert html_content.count('class="comment-pin"') >= 3
+    assert 'class="comment-right"' in html_content
+
+    # Regression assertion: this phrase should be present inside a comment
+    # bubble tree, not in plain body nodes. This currently fails and captures
+    # the leak where list text escapes from the <comment> block.
+    phrase = 'For people unaccustomed to ESR spectra'
+    assert phrase in html_content
+    phrase_in_comment_tree = (
+        '<div class="comment-overlay' in html_content
+        and phrase in html_content.split('<div class="comment-overlay', 1)[1]
+    )
+    assert phrase_in_comment_tree
+
+
+def test_comment_css_arrow_geometry_constants(tmp_path):
+    # Keep explicit geometry values in test constants so future style edits can
+    # update one place and immediately see behavior changes in this test.
+    arrow_size_px = 8
+    bubble_separation_rem = 0.5
+
+    markdown_file = tmp_path / "notes.md"
+    html_file = tmp_path / "notes.html"
+    markdown_file.write_text(
+        "Body [@dummy_ref].\n\n<comment>Inline bubble</comment>\n"
+    )
+    write_minimal_bibliography_and_csl(tmp_path)
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        run_pandoc(str(markdown_file), str(html_file))
+    finally:
+        os.chdir(cwd)
+
+    css_content = (tmp_path / "comments.css").read_text()
+
+    # Left/right pointer triangles should use the configured arrow size.
+    assert f"left: -{arrow_size_px}px;" in css_content
+    assert f"right: -{arrow_size_px}px;" in css_content
+    assert (
+        f"border-width: {arrow_size_px}px {arrow_size_px}px {arrow_size_px}px 0;"
+        in css_content
+    )
+    assert (
+        f"border-width: {arrow_size_px}px 0 {arrow_size_px}px {arrow_size_px}px;"
+        in css_content
+    )
+
+    # Bubble separation (gap) must match the configured value for both sides.
+    assert f"left: {bubble_separation_rem}rem;" in css_content
+    assert f"right: {bubble_separation_rem}rem;" in css_content
+    assert f"--comment-gap: {bubble_separation_rem}rem;" in css_content
+
 
 def test_mfs_errors_when_no_matching_markdown(tmp_path):
     (tmp_path / "notes.md").write_text("alpha\nbeta\n")
