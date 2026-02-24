@@ -402,6 +402,13 @@ def _append_node(
 
 
 def yaml_to_dot(data, wrap_width=55, order_by_date=False):
+    def _attrs_to_dot_str(attrs):
+        if isinstance(attrs, list):
+            if not attrs:
+                return ""
+            attrs = attrs[0]
+        return ", ".join(f"{k}={v}" for k, v in attrs.items())
+
     lines = [
         "digraph G {",
         "    graph [",
@@ -423,6 +430,14 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
         data["nodes"] = {}
     if "styles" not in data:
         data["styles"] = {}
+    default_style = data["styles"].get("default", {})
+    default_attrs = default_style.get("attrs", {})
+    for scope in ("graph", "node", "edge"):
+        if scope not in default_attrs:
+            continue
+        attr_str = _attrs_to_dot_str(default_attrs[scope])
+        if attr_str:
+            lines.append(f"    {scope} [{attr_str}];")
     ordered_names = None
     sort_order = None
     ordered_set = None
@@ -461,6 +476,8 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
             )
 
     for style_name in data["styles"]:
+        if style_name == "default":
+            continue
         if style_name not in style_members:
             continue
         if not style_members[style_name]:
@@ -470,20 +487,9 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
             "attrs" in data["styles"][style_name]
             and "node" in data["styles"][style_name]["attrs"]
         ):
-            if isinstance(data["styles"][style_name]["attrs"]["node"], list):
-                attr_str = ", ".join(
-                    f"{k}={v}"
-                    for k, v in data["styles"][style_name]["attrs"]["node"][
-                        0
-                    ].items()
-                )
-            else:
-                attr_str = ", ".join(
-                    f"{k}={v}"
-                    for k, v in data["styles"][style_name]["attrs"][
-                        "node"
-                    ].items()
-                )
+            attr_str = _attrs_to_dot_str(
+                data["styles"][style_name]["attrs"]["node"]
+            )
             lines.append(f"        node [{attr_str}];")
         for node_name in style_members[style_name]:
             _append_node(

@@ -1,9 +1,17 @@
 import subprocess
 import time
 import shutil
+import math
+import xml.etree.ElementTree as ET
 from pathlib import Path
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
+try:
+    from watchdog.events import FileSystemEventHandler
+    from watchdog.observers import Observer
+except ImportError:  # pragma: no cover - allows build_graph tests without watchdog
+    class FileSystemEventHandler:  # type: ignore[no-redef]
+        pass
+
+    Observer = None  # type: ignore[assignment]
 from pydifftools.command_registry import register_command
 from pydifftools.browser_lifecycle import (
     browser_window_is_alive,
@@ -42,6 +50,167 @@ def close_chrome(driver):
     close_browser_window(driver)
 
 
+def _svg_style_get(style_text, key):
+    for piece in style_text.split(";"):
+        piece = piece.strip()
+        if not piece or ":" not in piece:
+            continue
+        found_key, found_value = piece.split(":", 1)
+        if found_key.strip() == key:
+            return found_value.strip()
+    return None
+
+
+def _svg_style_set(style_text, key, value):
+    parts = []
+    replaced = False
+    for piece in style_text.split(";"):
+        piece = piece.strip()
+        if not piece:
+            continue
+        if ":" not in piece:
+            parts.append(piece)
+            continue
+        found_key, _ = piece.split(":", 1)
+        if found_key.strip() == key:
+            parts.append(f"{key}:{value}")
+            replaced = True
+        else:
+            parts.append(piece)
+    if not replaced:
+        parts.append(f"{key}:{value}")
+    return ";".join(parts)
+
+
+def _svg_get_float_attr(shape, attr_name, default_value):
+    if attr_name in shape.attrib:
+        try:
+            return float(shape.attrib[attr_name])
+        except ValueError:
+            pass
+    if "style" in shape.attrib:
+        styled = _svg_style_get(shape.attrib["style"], attr_name)
+        if styled is not None:
+            try:
+                return float(styled)
+            except ValueError:
+                pass
+    return default_value
+
+
+def _svg_set_stroke(shape, color, stroke_width=None):
+    shape.set("stroke", color)
+    if stroke_width is not None:
+        shape.set("stroke-width", f"{stroke_width:g}")
+    if "style" in shape.attrib:
+        shape.set("style", _svg_style_set(shape.attrib["style"], "stroke", color))
+        if stroke_width is not None:
+            shape.set(
+                "style",
+                _svg_style_set(
+                    shape.attrib["style"], "stroke-width", f"{stroke_width:g}"
+                ),
+            )
+
+
+def _svg_set_fill(shape, color):
+    shape.set("fill", color)
+    if "style" in shape.attrib:
+        shape.set("style", _svg_style_set(shape.attrib["style"], "fill", color))
+
+
+def _svg_stroke_color(shape):
+    if "stroke" in shape.attrib:
+        return shape.attrib["stroke"].strip().lower()
+    if "style" in shape.attrib:
+        styled = _svg_style_get(shape.attrib["style"], "stroke")
+        if styled:
+            return styled.strip().lower()
+    return None
+
+
+def _svg_shape_is_red(shape):
+    stroke = _svg_stroke_color(shape)
+    if stroke is None:
+        return False
+    return stroke in {"red", "#ff0000", "#f00", "rgb(255,0,0)"}
+
+
+def _svg_shape_bounds(shape, namespace):
+    if shape.tag == f"{namespace}polygon" and "points" in shape.attrib:
+        coords = []
+        for pair in shape.attrib["points"].strip().split(" "):
+            if not pair:
+                continue
+            xy = pair.split(",")
+            if len(xy) != 2:
+                continue
+            try:
+                coords.append((float(xy[0]), float(xy[1])))
+            except ValueError:
+                return None
+        if coords:
+            return (
+                min(x for x, y in coords),
+                max(x for x, y in coords),
+                min(y for x, y in coords),
+                max(y for x, y in coords),
+            )
+    if shape.tag == f"{namespace}rect":
+        try:
+            x = float(shape.attrib["x"])
+            y = float(shape.attrib["y"])
+            width = float(shape.attrib["width"])
+            height = float(shape.attrib["height"])
+        except (KeyError, ValueError):
+            return None
+        return (x, x + width, y, y + height)
+    if shape.tag == f"{namespace}ellipse":
+        try:
+            cx = float(shape.attrib["cx"])
+            cy = float(shape.attrib["cy"])
+            rx = float(shape.attrib["rx"])
+            ry = float(shape.attrib["ry"])
+        except (KeyError, ValueError):
+            return None
+        return (cx - rx, cx + rx, cy - ry, cy + ry)
+    return None
+
+
+def _svg_expanded_outline(shape, namespace, expand, stroke_color, stroke_width):
+    bounds = _svg_shape_bounds(shape, namespace)
+    if bounds is None:
+        return None
+    x_min, x_max, y_min, y_max = bounds
+    if shape.tag == f"{namespace}ellipse":
+        cx = (x_min + x_max) / 2.0
+        cy = (y_min + y_max) / 2.0
+        return ET.Element(
+            f"{namespace}ellipse",
+            {
+                "cx": f"{cx:.2f}",
+                "cy": f"{cy:.2f}",
+                "rx": f"{((x_max - x_min) / 2.0) + expand:.2f}",
+                "ry": f"{((y_max - y_min) / 2.0) + expand:.2f}",
+                "fill": "none",
+                "stroke": stroke_color,
+                "stroke-width": f"{stroke_width:g}",
+            },
+        )
+    return ET.Element(
+        f"{namespace}rect",
+        {
+            "x": f"{x_min - expand:.2f}",
+            "y": f"{y_min - expand:.2f}",
+            "width": f"{(x_max - x_min) + 2.0 * expand:.2f}",
+            "height": f"{(y_max - y_min) + 2.0 * expand:.2f}",
+            "fill": "none",
+            "stroke": stroke_color,
+            "stroke-width": f"{stroke_width:g}",
+        },
+    )
+
+
 def build_graph(
     yaml_file,
     dot_file,
@@ -70,6 +239,198 @@ def build_graph(
         ["dot", "-Tsvg", str(dot_file), "-o", str(svg_file)],
         check=True,
     )
+    if not order_by_date:
+        # In dependency view mode, each node explicitly tagged with
+        # ``style: endpoint`` defines a project color. A project includes the
+        # endpoint plus ancestors, but stops before any ancestor that is
+        # itself an endpoint.
+        endpoints = set()
+        for name, node_data in data["nodes"].items():
+            if node_data.get("style") == "endpoint":
+                endpoints.add(name)
+
+        projects = {}
+        for endpoint in sorted(endpoints):
+            projects[endpoint] = [endpoint]
+            ancestors_to_visit = []
+            if "parents" in data["nodes"][endpoint]:
+                for parent in data["nodes"][endpoint]["parents"]:
+                    ancestors_to_visit.append(parent)
+            already_seen = set([endpoint])
+            while ancestors_to_visit:
+                ancestor = ancestors_to_visit.pop()
+                if ancestor in already_seen:
+                    continue
+                already_seen.add(ancestor)
+                if ancestor in endpoints:
+                    continue
+                projects[endpoint].append(ancestor)
+                if (
+                    ancestor in data["nodes"]
+                    and "parents" in data["nodes"][ancestor]
+                ):
+                    for parent in data["nodes"][ancestor]["parents"]:
+                        ancestors_to_visit.append(parent)
+
+        svg_tree = ET.parse(str(svg_file))
+        svg_root = svg_tree.getroot()
+        namespace = ""
+        if svg_root.tag.startswith("{"):
+            namespace = svg_root.tag[: svg_root.tag.find("}") + 1]
+
+        title_to_group = {}
+        node_title_to_group = {}
+        for group in svg_root.iter(f"{namespace}g"):
+            for child in group:
+                if child.tag == f"{namespace}title" and child.text is not None:
+                    title = child.text.strip()
+                    title_to_group[title] = group
+                    if group.attrib.get("class") == "node":
+                        node_title_to_group[title] = group
+
+        color_count = len(projects)
+        endpoint_colors = {}
+        if color_count > 0:
+            # Build a high-saturation rainbow in Lab space with equal lightness
+            # and evenly spaced a/b angles so each endpoint stands out.
+            for index, endpoint in enumerate(sorted(projects.keys())):
+                angle = 2.0 * math.pi * float(index) / float(color_count)
+                lab_l = 65.0
+                lab_a = 78.0 * math.cos(angle)
+                lab_b = 78.0 * math.sin(angle)
+                y = (lab_l + 16.0) / 116.0
+                x = y + (lab_a / 500.0)
+                z = y - (lab_b / 200.0)
+                if x**3 > 0.008856:
+                    x = x**3
+                else:
+                    x = (x - (16.0 / 116.0)) / 7.787
+                if y**3 > 0.008856:
+                    y = y**3
+                else:
+                    y = (y - (16.0 / 116.0)) / 7.787
+                if z**3 > 0.008856:
+                    z = z**3
+                else:
+                    z = (z - (16.0 / 116.0)) / 7.787
+                x = 95.047 * x / 100.0
+                y = 100.000 * y / 100.0
+                z = 108.883 * z / 100.0
+                rgb_r = x * 3.2406 + y * -1.5372 + z * -0.4986
+                rgb_g = x * -0.9689 + y * 1.8758 + z * 0.0415
+                rgb_b = x * 0.0557 + y * -0.2040 + z * 1.0570
+                if rgb_r > 0.0031308:
+                    rgb_r = 1.055 * (rgb_r ** (1.0 / 2.4)) - 0.055
+                else:
+                    rgb_r = 12.92 * rgb_r
+                if rgb_g > 0.0031308:
+                    rgb_g = 1.055 * (rgb_g ** (1.0 / 2.4)) - 0.055
+                else:
+                    rgb_g = 12.92 * rgb_g
+                if rgb_b > 0.0031308:
+                    rgb_b = 1.055 * (rgb_b ** (1.0 / 2.4)) - 0.055
+                else:
+                    rgb_b = 12.92 * rgb_b
+                rgb_r = int(round(min(1.0, max(0.0, rgb_r)) * 255.0))
+                rgb_g = int(round(min(1.0, max(0.0, rgb_g)) * 255.0))
+                rgb_b = int(round(min(1.0, max(0.0, rgb_b)) * 255.0))
+                endpoint_colors[endpoint] = (
+                    f"#{rgb_r:02x}{rgb_g:02x}{rgb_b:02x}"
+                )
+
+        # Build reverse membership so we can color edges by source-side
+        # project assignment after SVG generation.
+        node_to_projects = {}
+        for endpoint in projects:
+            for node_name in projects[endpoint]:
+                if node_name not in node_to_projects:
+                    node_to_projects[node_name] = []
+                node_to_projects[node_name].append(endpoint)
+
+        # Color each edge by the project of the source node (left side without
+        # arrowhead), preferring a project that both source and target share.
+        for group in svg_root.iter(f"{namespace}g"):
+            if "class" not in group.attrib or group.attrib["class"] != "edge":
+                continue
+            edge_title = None
+            for child in group:
+                if child.tag == f"{namespace}title" and child.text is not None:
+                    edge_title = child.text.strip()
+                    break
+            if edge_title is None or "->" not in edge_title:
+                continue
+            source_name = edge_title.split("->", 1)[0].strip()
+            target_name = edge_title.split("->", 1)[1].strip()
+            edge_color = None
+            if source_name in node_to_projects and target_name in node_to_projects:
+                shared_projects = []
+                for endpoint in node_to_projects[source_name]:
+                    if endpoint in node_to_projects[target_name]:
+                        shared_projects.append(endpoint)
+                if shared_projects:
+                    edge_color = endpoint_colors[sorted(shared_projects)[0]]
+            if edge_color is None and source_name in node_to_projects:
+                edge_color = endpoint_colors[
+                    sorted(node_to_projects[source_name])[0]
+                ]
+            if edge_color is None:
+                continue
+            for child in group:
+                if child.tag in (f"{namespace}path", f"{namespace}polygon"):
+                    _svg_set_stroke(child, edge_color)
+                    if child.tag == f"{namespace}polygon":
+                        _svg_set_fill(child, edge_color)
+
+        # Color node borders by project membership after edge coloring. Nodes
+        # that belong to multiple projects get concentric transparent outlines.
+        for node_name, memberships in node_to_projects.items():
+            if node_name not in node_title_to_group:
+                continue
+            colors = [
+                endpoint_colors[endpoint]
+                for endpoint in sorted(set(memberships))
+                if endpoint in endpoint_colors
+            ]
+            if not colors:
+                continue
+            group = node_title_to_group[node_name]
+            border_shape = None
+            border_index = None
+            for index, child in enumerate(list(group)):
+                if child.tag not in (
+                    f"{namespace}polygon",
+                    f"{namespace}rect",
+                    f"{namespace}ellipse",
+                    f"{namespace}path",
+                ):
+                    continue
+                border_shape = child
+                border_index = index
+                break
+            if border_shape is None or border_index is None:
+                continue
+            if _svg_shape_is_red(border_shape):
+                continue
+            base_stroke_width = _svg_get_float_attr(
+                border_shape, "stroke-width", 1.0
+            )
+            _svg_set_stroke(border_shape, colors[0], stroke_width=base_stroke_width)
+            inserts = []
+            for ring_index, ring_color in enumerate(colors[1:], start=1):
+                outline = _svg_expanded_outline(
+                    border_shape,
+                    namespace,
+                    expand=base_stroke_width * ring_index,
+                    stroke_color=ring_color,
+                    stroke_width=base_stroke_width,
+                )
+                if outline is None:
+                    continue
+                inserts.append((border_index + ring_index, outline))
+            for insert_index, outline in reversed(inserts):
+                group.insert(insert_index, outline)
+
+        svg_tree.write(str(svg_file), encoding="utf-8", xml_declaration=True)
     return data
 
 

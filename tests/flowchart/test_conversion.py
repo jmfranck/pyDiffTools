@@ -25,3 +25,24 @@ def test_yaml_to_dot(tmp_path):
     assert (
         generated_dot.read_text().rstrip() == expected_dot.read_text().rstrip()
     )
+
+
+def test_yaml_to_dot_emits_default_edge_and_node_attrs():
+    dot = graph.yaml_to_dot(
+        {
+            "nodes": {
+                "a": {"text": "A", "children": ["b"]},
+                "b": {"text": "B"},
+            },
+            "styles": {
+                "default": {
+                    "attrs": {
+                        "edge": [{"penwidth": 5, "style": "solid"}],
+                        "node": [{"fillcolor": "white", "style": "filled"}],
+                    }
+                }
+            },
+        }
+    )
+    assert "edge [penwidth=5, style=solid];" in dot
+    assert "node [fillcolor=white, style=filled];" in dot
