@@ -1,15 +1,14 @@
 digraph G {
     graph [
         rankdir=LR,
-        size="10.6,8.1!",
         margin=0.20,
         pad=0.20,
-        ratio=fill,
         splines=true,
-        concentrate=true,
+        concentrate=false,
         center=true,
-        nodesep=0.25,
-        ranksep=0.35
+        compound=true,
+        nodesep=0.70,
+        ranksep=1.00
     ];
     node [shape=box,width=0.5];
     subgraph group1 {

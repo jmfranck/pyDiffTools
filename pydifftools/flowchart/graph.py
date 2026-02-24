@@ -427,15 +427,14 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False, cluster_endpoints=True
         "digraph G {",
         "    graph [",
         "        rankdir=LR,",
-        '        size="10.6,8.1!",',
         "        margin=0.20,",
         "        pad=0.20,",
-        "        ratio=fill,",
         "        splines=true,",
-        "        concentrate=true,",
+        "        concentrate=false,",
         "        center=true,",
-        "        nodesep=0.25,",
-        "        ranksep=0.35",
+        "        compound=true,",
+        "        nodesep=0.70,",
+        "        ranksep=1.00",
         "    ];",
         "    node [shape=box,width=0.5];",
     ]
@@ -518,21 +517,6 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False, cluster_endpoints=True
                 if "parents" in data["nodes"][parent_name]:
                     for grandparent_name in data["nodes"][parent_name]["parents"]:
                         parents_to_check.append(grandparent_name)
-        if endpoint_nodes:
-            has_cluster_boundary_edges = False
-            for endpoint_name in endpoint_nodes:
-                if "children" in data["nodes"][endpoint_name]:
-                    for child in data["nodes"][endpoint_name]["children"]:
-                        if child in data["nodes"]:
-                            has_cluster_boundary_edges = True
-                            break
-                if has_cluster_boundary_edges:
-                    break
-            # Keep clusters from overlapping and give routing enough room.
-            # compound=true is only turned on if endpoint boundary edges exist.
-            lines.append(
-                '    graph [compound=true,concentrate=false,nodesep=0.70,ranksep=1.00,pad=0.20];'
-            )
 
     node_cluster_memberships = {}
     if cluster_mode:
@@ -635,6 +619,15 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False, cluster_endpoints=True
             )
             for node_name in sorted(endpoint_clusters[endpoint_name]):
                 lines.append(f"        {node_name};")
+            # Keep the anchor near real cluster content so cluster-edge
+            # routing does not drop to a dangling bottom point.
+            if endpoint_clusters[endpoint_name]:
+                lines.append(
+                    "        "
+                    + f"cluster_anchor_{endpoint_name} -> "
+                    + sorted(endpoint_clusters[endpoint_name])[0]
+                    + " [style=invis,weight=0.1];"
+                )
             lines.append("    }")
 
     if order_by_date:
@@ -773,6 +766,8 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False, cluster_endpoints=True
                 edge_attrs = [
                     f"ltail=cluster_{source_cluster}",
                     f"lhead=cluster_{target_cluster}",
+                    "tailport=e",
+                    "headport=w",
                 ]
                 if edge_style:
                     edge_attrs.append(edge_style[1:])
