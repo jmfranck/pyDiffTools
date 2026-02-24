@@ -626,7 +626,7 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False, cluster_endpoints=True
                     "        "
                     + f"cluster_anchor_{endpoint_name} -> "
                     + sorted(endpoint_clusters[endpoint_name])[0]
-                    + " [style=invis,weight=0.1];"
+                    + " [style=invis,weight=1];"
                 )
             lines.append("    }")
 
@@ -662,7 +662,7 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False, cluster_endpoints=True
                         if child in endpoint_nodes:
                             continue
                         if child in data["nodes"]:
-                            lines.append(f"    {name} -> {child};")
+                            lines.append(f"    {name} -> {child} [weight=1];")
 
             cluster_edges = set()
             # Build cluster-to-cluster edges from every dependency where both
@@ -768,6 +768,7 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False, cluster_endpoints=True
                     f"lhead=cluster_{target_cluster}",
                     "tailport=e",
                     "headport=w",
+                    "weight=100",
                 ]
                 if edge_style:
                     edge_attrs.append(edge_style[1:])
@@ -786,7 +787,7 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False, cluster_endpoints=True
                 if "children" in data["nodes"][name]:
                     for child in data["nodes"][name]["children"]:
                         if child in data["nodes"]:
-                            lines.append(f"    {name} -> {child};")
+                            lines.append(f"    {name} -> {child} [weight=1];")
     lines.append("}")
     return "\n".join(lines)
 

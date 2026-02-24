@@ -35,7 +35,7 @@ def test_write_dot_filters_to_incomplete_ancestors(tmp_path):
     assert "parent1" in dot_text
     assert "grandparent" in dot_text
     assert "root" in dot_text
-    assert "parent1 -> target" in dot_text
+    assert "parent1 -> target [weight=1];" in dot_text
 
 
 def test_yaml_to_dot_clusters_endpoint_ancestors_in_non_date_mode():
@@ -95,6 +95,7 @@ def test_yaml_to_dot_clusters_endpoint_ancestors_in_non_date_mode():
     assert "lhead=cluster_done_ep" in dot_text
     assert "tailport=e" in dot_text
     assert "headport=w" in dot_text
+    assert "weight=100" in dot_text
     assert "color=red" in dot_text
     assert "cluster_proxy_ep_node -> child" not in dot_text
     assert "cluster_proxy_done_ep_node -> child" not in dot_text
@@ -172,7 +173,7 @@ def test_yaml_to_dot_no_clustering_restores_plain_edges():
 
     assert "subgraph cluster_ep" not in dot_text
     assert "ep [label=" in dot_text
-    assert "ep -> child;" in dot_text
+    assert "ep -> child [weight=1];" in dot_text
 
 def test_yaml_to_dot_keeps_endpoint_style_in_date_mode():
     data = {
