@@ -4,10 +4,14 @@ import shutil
 import math
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
 try:
     from watchdog.events import FileSystemEventHandler
     from watchdog.observers import Observer
-except ImportError:  # pragma: no cover - allows build_graph tests without watchdog
+except (
+    ImportError
+):  # pragma: no cover - allows build_graph tests without watchdog
+
     class FileSystemEventHandler:  # type: ignore[no-redef]
         pass
 
@@ -103,7 +107,9 @@ def _svg_set_stroke(shape, color, stroke_width=None):
     if stroke_width is not None:
         shape.set("stroke-width", f"{stroke_width:g}")
     if "style" in shape.attrib:
-        shape.set("style", _svg_style_set(shape.attrib["style"], "stroke", color))
+        shape.set(
+            "style", _svg_style_set(shape.attrib["style"], "stroke", color)
+        )
         if stroke_width is not None:
             shape.set(
                 "style",
@@ -116,7 +122,9 @@ def _svg_set_stroke(shape, color, stroke_width=None):
 def _svg_set_fill(shape, color):
     shape.set("fill", color)
     if "style" in shape.attrib:
-        shape.set("style", _svg_style_set(shape.attrib["style"], "fill", color))
+        shape.set(
+            "style", _svg_style_set(shape.attrib["style"], "fill", color)
+        )
 
 
 def _svg_stroke_color(shape):
@@ -177,7 +185,9 @@ def _svg_shape_bounds(shape, namespace):
     return None
 
 
-def _svg_expanded_outline(shape, namespace, expand, stroke_color, stroke_width):
+def _svg_expanded_outline(
+    shape, namespace, expand, stroke_color, stroke_width
+):
     bounds = _svg_shape_bounds(shape, namespace)
     if bounds is None:
         return None
@@ -295,7 +305,7 @@ def build_graph(
             # and evenly spaced a/b angles so each endpoint stands out.
             for index, endpoint in enumerate(sorted(projects.keys())):
                 angle = 2.0 * math.pi * float(index) / float(color_count)
-                lab_l = 65.0
+                lab_l = 50.0
                 lab_a = 78.0 * math.cos(angle)
                 lab_b = 78.0 * math.sin(angle)
                 y = (lab_l + 16.0) / 116.0
@@ -362,7 +372,10 @@ def build_graph(
             source_name = edge_title.split("->", 1)[0].strip()
             target_name = edge_title.split("->", 1)[1].strip()
             edge_color = None
-            if source_name in node_to_projects and target_name in node_to_projects:
+            if (
+                source_name in node_to_projects
+                and target_name in node_to_projects
+            ):
                 shared_projects = []
                 for endpoint in node_to_projects[target_name]:
                     if endpoint in node_to_projects[source_name]:
@@ -414,13 +427,19 @@ def build_graph(
             base_stroke_width = _svg_get_float_attr(
                 border_shape, "stroke-width", 1.0
             )
-            _svg_set_stroke(border_shape, colors[0], stroke_width=base_stroke_width)
+            _svg_set_stroke(
+                border_shape, colors[0], stroke_width=base_stroke_width
+            )
             inserts = []
             for ring_index, ring_color in enumerate(colors[1:], start=1):
                 outline = _svg_expanded_outline(
                     border_shape,
                     namespace,
-                    expand=base_stroke_width * ring_index,
+                    # Graphviz's emitted geometry can effectively make a
+                    # one-line-width expansion render as only ~half-width
+                    # visual offset, so push each added ring out by two
+                    # stroke widths per ring to keep borders distinct.
+                    expand=2.0 * base_stroke_width * ring_index,
                     stroke_color=ring_color,
                     stroke_width=base_stroke_width,
                 )
@@ -518,9 +537,7 @@ class GraphEventHandler(FileSystemEventHandler):
         "yaml": "Path to the flowchart YAML file",
         "wrap_width": "Line wrap width used when generating node labels",
         "d": "Render nodes by date without showing connections",
-        "t": (
-            "Task name to focus on (show incomplete ancestor tasks only)"
-        ),
+        "t": ("Task name to focus on (show incomplete ancestor tasks only)"),
     },
 )
 def wgrph(yaml, wrap_width=55, d=False, t=None):
