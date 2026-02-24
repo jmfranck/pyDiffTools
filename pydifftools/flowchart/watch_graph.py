@@ -1,6 +1,8 @@
 import subprocess
 import time
 import shutil
+import math
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -70,6 +72,218 @@ def build_graph(
         ["dot", "-Tsvg", str(dot_file), "-o", str(svg_file)],
         check=True,
     )
+    if not order_by_date:
+        # In dependency view mode, each endpoint drives a "project" bubble.
+        # A project includes the endpoint plus ancestors, but stops before any
+        # ancestor that is itself an endpoint.
+        endpoints = set()
+        for name in data["nodes"]:
+            if "children" not in data["nodes"][name]:
+                endpoints.add(name)
+                continue
+            if not data["nodes"][name]["children"]:
+                endpoints.add(name)
+
+        projects = {}
+        for endpoint in sorted(endpoints):
+            projects[endpoint] = [endpoint]
+            ancestors_to_visit = []
+            if "parents" in data["nodes"][endpoint]:
+                for parent in data["nodes"][endpoint]["parents"]:
+                    ancestors_to_visit.append(parent)
+            already_seen = set([endpoint])
+            while ancestors_to_visit:
+                ancestor = ancestors_to_visit.pop()
+                if ancestor in already_seen:
+                    continue
+                already_seen.add(ancestor)
+                if ancestor in endpoints:
+                    continue
+                projects[endpoint].append(ancestor)
+                if (
+                    ancestor in data["nodes"]
+                    and "parents" in data["nodes"][ancestor]
+                ):
+                    for parent in data["nodes"][ancestor]["parents"]:
+                        ancestors_to_visit.append(parent)
+
+        svg_tree = ET.parse(str(svg_file))
+        svg_root = svg_tree.getroot()
+        namespace = ""
+        if svg_root.tag.startswith("{"):
+            namespace = svg_root.tag[: svg_root.tag.find("}") + 1]
+
+        title_to_group = {}
+        graph_group = None
+        for group in svg_root.iter(f"{namespace}g"):
+            if "class" in group.attrib and group.attrib["class"] == "graph":
+                graph_group = group
+            for child in group:
+                if child.tag == f"{namespace}title" and child.text is not None:
+                    title_to_group[child.text.strip()] = group
+
+        color_count = len(projects)
+        endpoint_colors = {}
+        if color_count > 0:
+            # Build a high-saturation rainbow in Lab space with equal lightness
+            # and evenly spaced a/b angles so each endpoint stands out.
+            for index, endpoint in enumerate(sorted(projects.keys())):
+                angle = 2.0 * math.pi * float(index) / float(color_count)
+                lab_l = 65.0
+                lab_a = 78.0 * math.cos(angle)
+                lab_b = 78.0 * math.sin(angle)
+                y = (lab_l + 16.0) / 116.0
+                x = y + (lab_a / 500.0)
+                z = y - (lab_b / 200.0)
+                if x**3 > 0.008856:
+                    x = x**3
+                else:
+                    x = (x - (16.0 / 116.0)) / 7.787
+                if y**3 > 0.008856:
+                    y = y**3
+                else:
+                    y = (y - (16.0 / 116.0)) / 7.787
+                if z**3 > 0.008856:
+                    z = z**3
+                else:
+                    z = (z - (16.0 / 116.0)) / 7.787
+                x = 95.047 * x / 100.0
+                y = 100.000 * y / 100.0
+                z = 108.883 * z / 100.0
+                rgb_r = x * 3.2406 + y * -1.5372 + z * -0.4986
+                rgb_g = x * -0.9689 + y * 1.8758 + z * 0.0415
+                rgb_b = x * 0.0557 + y * -0.2040 + z * 1.0570
+                if rgb_r > 0.0031308:
+                    rgb_r = 1.055 * (rgb_r ** (1.0 / 2.4)) - 0.055
+                else:
+                    rgb_r = 12.92 * rgb_r
+                if rgb_g > 0.0031308:
+                    rgb_g = 1.055 * (rgb_g ** (1.0 / 2.4)) - 0.055
+                else:
+                    rgb_g = 12.92 * rgb_g
+                if rgb_b > 0.0031308:
+                    rgb_b = 1.055 * (rgb_b ** (1.0 / 2.4)) - 0.055
+                else:
+                    rgb_b = 12.92 * rgb_b
+                rgb_r = int(round(min(1.0, max(0.0, rgb_r)) * 255.0))
+                rgb_g = int(round(min(1.0, max(0.0, rgb_g)) * 255.0))
+                rgb_b = int(round(min(1.0, max(0.0, rgb_b)) * 255.0))
+                endpoint_colors[endpoint] = (
+                    f"#{rgb_r:02x}{rgb_g:02x}{rgb_b:02x}"
+                )
+
+        for endpoint in endpoint_colors:
+            if endpoint not in title_to_group:
+                continue
+            for shape in title_to_group[endpoint]:
+                if shape.tag in (
+                    f"{namespace}polygon",
+                    f"{namespace}rect",
+                    f"{namespace}ellipse",
+                    f"{namespace}path",
+                ):
+                    shape.set("stroke", endpoint_colors[endpoint])
+                    shape.set("stroke-width", "2.5")
+
+        if graph_group is not None and projects:
+            bubble_layer = ET.Element(
+                f"{namespace}g", {"id": "project-bubbles", "class": "bubbles"}
+            )
+            for endpoint in sorted(projects.keys()):
+                points = []
+                for node_name in projects[endpoint]:
+                    if node_name not in title_to_group:
+                        continue
+                    for shape in title_to_group[node_name]:
+                        if shape.tag == f"{namespace}polygon" and "points" in shape.attrib:
+                            coords = []
+                            for pair in shape.attrib["points"].strip().split(" "):
+                                if not pair:
+                                    continue
+                                xy = pair.split(",")
+                                if len(xy) == 2:
+                                    coords.append((float(xy[0]), float(xy[1])))
+                            if coords:
+                                min_x = min(x for x, y in coords) - 10.0
+                                max_x = max(x for x, y in coords) + 10.0
+                                min_y = min(y for x, y in coords) - 10.0
+                                max_y = max(y for x, y in coords) + 10.0
+                                points.append((min_x, min_y))
+                                points.append((max_x, min_y))
+                                points.append((max_x, max_y))
+                                points.append((min_x, max_y))
+                        if shape.tag == f"{namespace}ellipse":
+                            cx = float(shape.attrib["cx"])
+                            cy = float(shape.attrib["cy"])
+                            rx = float(shape.attrib["rx"]) + 10.0
+                            ry = float(shape.attrib["ry"]) + 10.0
+                            points.append((cx - rx, cy - ry))
+                            points.append((cx + rx, cy - ry))
+                            points.append((cx + rx, cy + ry))
+                            points.append((cx - rx, cy + ry))
+                        if shape.tag == f"{namespace}rect":
+                            x = float(shape.attrib["x"]) - 10.0
+                            y = float(shape.attrib["y"]) - 10.0
+                            w = float(shape.attrib["width"]) + 20.0
+                            h = float(shape.attrib["height"]) + 20.0
+                            points.append((x, y))
+                            points.append((x + w, y))
+                            points.append((x + w, y + h))
+                            points.append((x, y + h))
+                if len(points) < 3:
+                    continue
+                center_x = sum(x for x, y in points) / float(len(points))
+                center_y = sum(y for x, y in points) / float(len(points))
+                points = sorted(
+                    points,
+                    key=lambda p: math.atan2(p[1] - center_y, p[0] - center_x),
+                )
+                hull = []
+                for point in points + [points[0], points[1]]:
+                    while len(hull) >= 2:
+                        cross = (
+                            (hull[-1][0] - hull[-2][0])
+                            * (point[1] - hull[-2][1])
+                            - (hull[-1][1] - hull[-2][1])
+                            * (point[0] - hull[-2][0])
+                        )
+                        if cross > 0:
+                            break
+                        hull.pop()
+                    hull.append(point)
+                hull = hull[:-2]
+                if len(hull) < 3:
+                    continue
+                path_parts = [f"M {hull[0][0]:.2f},{hull[0][1]:.2f}"]
+                for index in range(len(hull)):
+                    prev_point = hull[(index - 1) % len(hull)]
+                    point = hull[index]
+                    next_point = hull[(index + 1) % len(hull)]
+                    control_x = point[0] + (next_point[0] - prev_point[0]) * 0.22
+                    control_y = point[1] + (next_point[1] - prev_point[1]) * 0.22
+                    path_parts.append(
+                        f"Q {control_x:.2f},{control_y:.2f}"
+                        f" {next_point[0]:.2f},{next_point[1]:.2f}"
+                    )
+                path_parts.append("Z")
+                bubble_path = ET.Element(
+                    f"{namespace}path",
+                    {
+                        "id": f"project-bubble-{endpoint}",
+                        "d": " ".join(path_parts),
+                        "fill": "#00000011",
+                        "stroke": endpoint_colors[endpoint],
+                        "stroke-width": "3",
+                    },
+                )
+                bubble_layer.append(bubble_path)
+
+            insert_index = 0
+            for index, child in enumerate(list(graph_group)):
+                if child.tag == f"{namespace}polygon":
+                    insert_index = index + 1
+            graph_group.insert(insert_index, bubble_layer)
+            svg_tree.write(str(svg_file), encoding="utf-8", xml_declaration=True)
     return data
 
 
