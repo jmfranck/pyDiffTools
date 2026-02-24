@@ -51,6 +51,7 @@ def build_graph(
     order_by_date=False,
     prev_data=None,
     target_task=None,
+    no_clustering=False,
 ):
     # Graphviz is required for dot -> svg rendering.
     if shutil.which("dot") is None:
@@ -66,6 +67,7 @@ def build_graph(
         old_data=prev_data,
         validate_due_dates=True,
         filter_task=target_task,
+        no_clustering=no_clustering,
     )
     subprocess.run(
         ["dot", "-Tsvg", str(dot_file), "-o", str(svg_file)],
@@ -88,6 +90,7 @@ class GraphEventHandler(FileSystemEventHandler):
         data=None,
         order_by_date=False,
         target_task=None,
+        no_clustering=False,
         debounce=0.25,
     ):
         self.yaml_file = Path(yaml_file)
@@ -101,6 +104,7 @@ class GraphEventHandler(FileSystemEventHandler):
         self.data = data
         self.order_by_date = order_by_date
         self.target_task = target_task
+        self.no_clustering = no_clustering
         self.debounce = debounce
         self._last_handled = 0.0
         self._last_mtime = None
@@ -123,6 +127,7 @@ class GraphEventHandler(FileSystemEventHandler):
                     self.order_by_date,
                     self.data,
                     self.target_task,
+                    self.no_clustering,
                 )
             except Exception:
                 # If the graph fails to build (e.g. invalid date), close the
@@ -161,9 +166,10 @@ class GraphEventHandler(FileSystemEventHandler):
         "t": (
             "Task name to focus on (show incomplete ancestor tasks only)"
         ),
+        "no_clustering": "Disable endpoint clustering and render classic node-only graph",
     },
 )
-def wgrph(yaml, wrap_width=55, d=False, t=None):
+def wgrph(yaml, wrap_width=55, d=False, t=None, no_clustering=False):
     # Selenium is only required when actually launching the watcher, so it is
     # imported here to avoid breaking the command-line tools when the optional
     # dependency is not installed.
@@ -191,7 +197,9 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
     # Use date ordering when requested so boxes appear in calendar order.
     # Render the initial graph, optionally restricting to incomplete ancestors
     # of a target task.
-    data = build_graph(yaml_file, dot_file, svg_file, wrap_width, d, None, t)
+    data = build_graph(
+        yaml_file, dot_file, svg_file, wrap_width, d, None, t, no_clustering
+    )
     html_file.write_text(
         "<html><body style='margin:0'><embed id='svg-view'"
         " type='image/svg+xml'"
@@ -211,6 +219,7 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
         data,
         d,
         t,
+        no_clustering,
     )
     observer = Observer()
     observer.schedule(event_handler, yaml_file.parent, recursive=False)

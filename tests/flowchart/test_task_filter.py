@@ -92,13 +92,13 @@ def test_yaml_to_dot_clusters_endpoint_ancestors_in_non_date_mode():
     assert "compound=true" in dot_text
     assert "ltail=cluster_ep" in dot_text
     assert "lhead=cluster_done_ep" in dot_text
-    assert "cluster_proxy_ep_node -> child [ltail=cluster_ep,color=red];" in dot_text
     assert (
         "cluster_proxy_ep_cluster -> cluster_proxy_done_ep_cluster "
         "[ltail=cluster_ep,lhead=cluster_done_ep,color=red];"
         in dot_text
     )
-    assert "cluster_proxy_done_ep_node -> child [ltail=cluster_done_ep,color=green,penwidth=2];" in dot_text
+    assert "cluster_proxy_ep_node -> child" not in dot_text
+    assert "cluster_proxy_done_ep_node -> child" not in dot_text
 
 
 
@@ -148,12 +148,32 @@ def test_yaml_to_dot_cluster_edge_uses_edge_attrs():
 
     dot_text = yaml_to_dot(data, order_by_date=False)
 
-    assert (
-        "cluster_proxy_ep_node -> child "
-        "[ltail=cluster_ep,color=purple,penwidth=5,style=dashed];"
-        in dot_text
-    )
+    # Endpoint->noncluster dependencies are intentionally omitted in
+    # clustering mode because only cluster-to-cluster edges are drawn.
+    assert "cluster_proxy_ep_node -> child" not in dot_text
 
+
+def test_yaml_to_dot_no_clustering_restores_plain_edges():
+    data = {
+        "styles": {
+            "endpoint": {"attrs": {"node": {"color": "red"}}},
+        },
+        "nodes": {
+            "ep": {
+                "children": ["child"],
+                "parents": [],
+                "style": "endpoint",
+                "text": "Endpoint",
+            },
+            "child": {"children": [], "parents": ["ep"]},
+        },
+    }
+
+    dot_text = yaml_to_dot(data, order_by_date=False, cluster_endpoints=False)
+
+    assert "subgraph cluster_ep" not in dot_text
+    assert "ep [label=" in dot_text
+    assert "ep -> child;" in dot_text
 
 def test_yaml_to_dot_keeps_endpoint_style_in_date_mode():
     data = {

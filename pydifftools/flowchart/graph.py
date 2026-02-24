@@ -422,7 +422,7 @@ def _style_attrs(data, style_name, attr_name):
         return data["styles"][style_name]["attrs"][attr_name]
     return {}
 
-def yaml_to_dot(data, wrap_width=55, order_by_date=False):
+def yaml_to_dot(data, wrap_width=55, order_by_date=False, cluster_endpoints=True):
     lines = [
         "digraph G {",
         "    graph [",
@@ -486,7 +486,8 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
     )
     endpoint_nodes = set()
     endpoint_clusters = {}
-    if not order_by_date:
+    cluster_mode = (not order_by_date) and cluster_endpoints
+    if cluster_mode:
         # Build one cluster per endpoint-like node. Each cluster contains
         # non-endpoint ancestors of that endpoint, and ancestor walks stop
         # when another endpoint-like node is reached.
@@ -538,12 +539,22 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
                     '    graph [nodesep=0.70,ranksep=1.00,pad=0.20];'
                 )
 
+    node_cluster_memberships = {}
+    if cluster_mode:
+        # Track all clusters that each non-endpoint ancestor belongs to so
+        # dependency edges can be upgraded to cluster-to-cluster edges.
+        for endpoint_name in endpoint_clusters:
+            for node_name in endpoint_clusters[endpoint_name]:
+                if node_name not in node_cluster_memberships:
+                    node_cluster_memberships[node_name] = set()
+                node_cluster_memberships[node_name].add(endpoint_name)
+
     # Group nodes by their declared style so they share subgraph attributes.
     style_members = {}
     for name in data["nodes"]:
         if order_by_date and name not in ordered_set:
             continue
-        if not order_by_date and name in endpoint_nodes:
+        if cluster_mode and name in endpoint_nodes:
             # Endpoint nodes are represented by clusters in non-date mode.
             continue
         if "style" in data["nodes"][name] and data["nodes"][name]["style"]:
@@ -578,7 +589,7 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
     if ordered_names is None:
         ordered_names = list(data["nodes"].keys())
     for name in ordered_names:
-        if not order_by_date and name in endpoint_nodes:
+        if cluster_mode and name in endpoint_nodes:
             continue
         if name in handled:
             continue
@@ -591,7 +602,7 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
             order_by_date,
             sort_order,
         )
-    if not order_by_date:
+    if cluster_mode:
         # Draw one explicit cluster per endpoint using the endpoint text for
         # the cluster label and applying endpoint style attributes to the
         # cluster box itself.
@@ -652,115 +663,137 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
                 f" {ordered_names[index + column_count]} [style=invis];"
             )
     else:
-        # Draw regular task edges, excluding endpoint-like nodes because they
-        # are represented by clusters in non-date mode.
-        for name in data["nodes"]:
-            if name in endpoint_nodes:
-                continue
-            if "children" in data["nodes"][name]:
-                for child in data["nodes"][name]["children"]:
-                    if child in endpoint_nodes:
-                        continue
-                    lines.append(f"    {name} -> {child};")
-
-        # Draw edges from each endpoint cluster to the endpoint's children.
-        for endpoint_name in endpoint_nodes:
-            if "children" not in data["nodes"][endpoint_name]:
-                continue
-            cluster_name = f"cluster_{endpoint_name}"
-            edge_style = ""
-            if "style" in data["nodes"][endpoint_name]:
-                # Edge attrs override node attrs for cluster-origin edges.
-                if _style_attrs(data, data["nodes"][endpoint_name]["style"], "edge"):
-                    if "color" in _style_attrs(
-                        data, data["nodes"][endpoint_name]["style"], "edge"
-                    ):
-                        edge_style += (
-                            ",color="
-                            + str(
-                                _style_attrs(
-                                    data,
-                                    data["nodes"][endpoint_name]["style"],
-                                    "edge",
-                                )["color"]
-                            )
-                        )
-                    if "penwidth" in _style_attrs(
-                        data, data["nodes"][endpoint_name]["style"], "edge"
-                    ):
-                        edge_style += (
-                            ",penwidth="
-                            + str(
-                                _style_attrs(
-                                    data,
-                                    data["nodes"][endpoint_name]["style"],
-                                    "edge",
-                                )["penwidth"]
-                            )
-                        )
-                    if "style" in _style_attrs(
-                        data, data["nodes"][endpoint_name]["style"], "edge"
-                    ):
-                        edge_style += (
-                            ",style="
-                            + str(
-                                _style_attrs(
-                                    data,
-                                    data["nodes"][endpoint_name]["style"],
-                                    "edge",
-                                )["style"]
-                            )
-                        )
-                elif _style_attrs(data, data["nodes"][endpoint_name]["style"], "node"):
-                    if "color" in _style_attrs(
-                        data, data["nodes"][endpoint_name]["style"], "node"
-                    ):
-                        edge_style += (
-                            ",color="
-                            + str(
-                                _style_attrs(
-                                    data,
-                                    data["nodes"][endpoint_name]["style"],
-                                    "node",
-                                )["color"]
-                            )
-                        )
-                    if "penwidth" in _style_attrs(
-                        data, data["nodes"][endpoint_name]["style"], "node"
-                    ):
-                        edge_style += (
-                            ",penwidth="
-                            + str(
-                                _style_attrs(
-                                    data,
-                                    data["nodes"][endpoint_name]["style"],
-                                    "node",
-                                )["penwidth"]
-                            )
-                        )
-            for child in data["nodes"][endpoint_name]["children"]:
-                if child not in data["nodes"]:
+        if cluster_mode:
+            # Keep direct edges only for dependencies where both ends are
+            # ordinary (non-endpoint) nodes.
+            for name in data["nodes"]:
+                if name in endpoint_nodes:
                     continue
-                # Use standard Graphviz cluster routing so edges are clipped
-                # to cluster borders and attach at sensible sides.
-                edge_source = f"cluster_proxy_{endpoint_name}_node"
-                edge_targets = [child]
-                edge_attrs = [f"ltail={cluster_name}"]
-                if child in endpoint_nodes:
-                    edge_source = f"cluster_proxy_{endpoint_name}_cluster"
-                    edge_targets = [f"cluster_proxy_{child}_cluster"]
-                    edge_attrs.append(f"lhead=cluster_{child}")
-                for edge_target in edge_targets:
-                    final_edge_attrs = list(edge_attrs)
-                    if edge_style:
-                        final_edge_attrs.append(edge_style[1:])
-                    lines.append(
-                        "    "
-                        + f"{edge_source} -> {edge_target}"
-                        + " ["
-                        + ",".join(final_edge_attrs)
-                        + "];"
-                    )
+                if "children" in data["nodes"][name]:
+                    for child in data["nodes"][name]["children"]:
+                        if child in endpoint_nodes:
+                            continue
+                        if child in data["nodes"]:
+                            lines.append(f"    {name} -> {child};")
+
+            cluster_edges = set()
+            # Build cluster-to-cluster edges from every dependency where both
+            # endpoints belong to endpoint clusters.
+            for parent_name in data["nodes"]:
+                parent_clusters = set()
+                if parent_name in endpoint_nodes:
+                    parent_clusters.add(parent_name)
+                if parent_name in node_cluster_memberships:
+                    for endpoint_name in node_cluster_memberships[parent_name]:
+                        parent_clusters.add(endpoint_name)
+                if "children" in data["nodes"][parent_name]:
+                    for child_name in data["nodes"][parent_name]["children"]:
+                        if child_name not in data["nodes"]:
+                            continue
+                        child_clusters = set()
+                        if child_name in endpoint_nodes:
+                            child_clusters.add(child_name)
+                        if child_name in node_cluster_memberships:
+                            for endpoint_name in node_cluster_memberships[child_name]:
+                                child_clusters.add(endpoint_name)
+                        for source_cluster in parent_clusters:
+                            for target_cluster in child_clusters:
+                                if source_cluster != target_cluster:
+                                    cluster_edges.add((source_cluster, target_cluster))
+
+            for source_cluster, target_cluster in sorted(cluster_edges):
+                edge_style = ""
+                if "style" in data["nodes"][source_cluster]:
+                    # Edge attrs override node attrs for cluster-origin edges.
+                    if _style_attrs(data, data["nodes"][source_cluster]["style"], "edge"):
+                        if "color" in _style_attrs(
+                            data, data["nodes"][source_cluster]["style"], "edge"
+                        ):
+                            edge_style += (
+                                ",color="
+                                + str(
+                                    _style_attrs(
+                                        data,
+                                        data["nodes"][source_cluster]["style"],
+                                        "edge",
+                                    )["color"]
+                                )
+                            )
+                        if "penwidth" in _style_attrs(
+                            data, data["nodes"][source_cluster]["style"], "edge"
+                        ):
+                            edge_style += (
+                                ",penwidth="
+                                + str(
+                                    _style_attrs(
+                                        data,
+                                        data["nodes"][source_cluster]["style"],
+                                        "edge",
+                                    )["penwidth"]
+                                )
+                            )
+                        if "style" in _style_attrs(
+                            data, data["nodes"][source_cluster]["style"], "edge"
+                        ):
+                            edge_style += (
+                                ",style="
+                                + str(
+                                    _style_attrs(
+                                        data,
+                                        data["nodes"][source_cluster]["style"],
+                                        "edge",
+                                    )["style"]
+                                )
+                            )
+                    elif _style_attrs(data, data["nodes"][source_cluster]["style"], "node"):
+                        if "color" in _style_attrs(
+                            data, data["nodes"][source_cluster]["style"], "node"
+                        ):
+                            edge_style += (
+                                ",color="
+                                + str(
+                                    _style_attrs(
+                                        data,
+                                        data["nodes"][source_cluster]["style"],
+                                        "node",
+                                    )["color"]
+                                )
+                            )
+                        if "penwidth" in _style_attrs(
+                            data, data["nodes"][source_cluster]["style"], "node"
+                        ):
+                            edge_style += (
+                                ",penwidth="
+                                + str(
+                                    _style_attrs(
+                                        data,
+                                        data["nodes"][source_cluster]["style"],
+                                        "node",
+                                    )["penwidth"]
+                                )
+                            )
+                edge_attrs = [
+                    f"ltail=cluster_{source_cluster}",
+                    f"lhead=cluster_{target_cluster}",
+                ]
+                if edge_style:
+                    edge_attrs.append(edge_style[1:])
+                lines.append(
+                    "    "
+                    + f"cluster_proxy_{source_cluster}_cluster"
+                    + " -> "
+                    + f"cluster_proxy_{target_cluster}_cluster"
+                    + " ["
+                    + ",".join(edge_attrs)
+                    + "];"
+                )
+        else:
+            # --no-clustering path: render all dependency edges normally.
+            for name in data["nodes"]:
+                if "children" in data["nodes"][name]:
+                    for child in data["nodes"][name]["children"]:
+                        if child in data["nodes"]:
+                            lines.append(f"    {name} -> {child};")
     lines.append("}")
     return "\n".join(lines)
 
@@ -789,6 +822,7 @@ def write_dot_from_yaml(
     old_data=None,
     validate_due_dates=False,
     filter_task=None,
+    no_clustering=False,
 ):
     data = load_graph_yaml(str(yaml_path), old_data=old_data)
     _normalize_graph_dates(data)
@@ -899,7 +933,10 @@ def write_dot_from_yaml(
                     if parent in incomplete_ancestors
                 ]
     dot_str = yaml_to_dot(
-        data_for_dot, wrap_width=wrap_width, order_by_date=order_by_date
+        data_for_dot,
+        wrap_width=wrap_width,
+        order_by_date=order_by_date,
+        cluster_endpoints=(not no_clustering),
     )
     Path(dot_path).write_text(dot_str)
     if update_yaml:
