@@ -10,10 +10,12 @@
   allow the test to fail and include the exact install commands in the response.
 - Prefer the conda base environment for installs and tests, so version selection
   is handled by conda activation instead of per-command env vars.
-- Recommended flow for test INSIDE WEB CONTAINER:
+- Recommended flow for test INSIDE WEB/CLOUD CONTAINER:
   1. source /root/conda/etc/profile.d/conda.sh && conda activate base && python -m pip install -e . --no-build-isolation
 	2. source /root/conda/etc/profile.d/conda.sh && conda activate base && python -m pytest
 - Recommended flow for test LOCALLY (inside vscode IDE):
-  1. ~/base/bin/python -m pytest
-	2. Note that *all required packages are already installed* and you are NOT
-		 allowed to mess with the base environment.  Nor should you need to!
+	1. DO NOT create a .venv directory inside the repo!!
+  2. Run tests with: ~/base/bin/python -m pytest
+	3. Note that *all required packages are already installed in the base
+		 environment* and you are NOT allowed to mess with the base environment.
+		 Nor should you need to!
