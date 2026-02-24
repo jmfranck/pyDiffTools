@@ -298,7 +298,8 @@ def _node_text_with_due(node):
 
     # Completed tasks should always show their calendar date so the original
     # deadline remains visible even if it was today or overdue when finished.
-    is_completed = "style" in node and node["style"] == "completed"
+    style_name = str(node.get("style", ""))
+    is_completed = "complete" in style_name
     # Replace the actual date with high-visibility notices when the deadline
     # is today or overdue.  These are rendered in a bold 12 pt font so they are
     # immediately noticeable in the diagram.  Completed tasks skip these
@@ -657,10 +658,7 @@ def write_dot_from_yaml(
         for name in ancestors:
             if name not in data["nodes"]:
                 continue
-            if (
-                "style" in data["nodes"][name]
-                and data["nodes"][name]["style"] == "completed"
-            ):
+            if "complete" in str(data["nodes"][name].get("style", "")):
                 continue
             incomplete_ancestors.add(name)
         data_for_dot = {"nodes": {}, "styles": {}}

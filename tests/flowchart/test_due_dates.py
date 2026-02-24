@@ -91,6 +91,22 @@ def test_completed_overdue_shows_actual_date():
     assert "OVERDUE" not in dot
 
 
+def test_completedendpoint_overdue_shows_actual_date():
+    data = {
+        "nodes": {
+            "Task": {
+                "due": "2024-05-08",
+                "children": [],
+                "parents": [],
+                "style": "completedendpoint",
+            },
+        }
+    }
+    dot = yaml_to_dot(data)
+    assert '<font color="green">5/8/24</font>' in dot
+    assert "OVERDUE" not in dot
+
+
 def test_original_due_display():
     data = {
         "nodes": {
