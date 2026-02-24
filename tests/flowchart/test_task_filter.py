@@ -90,13 +90,7 @@ def test_yaml_to_dot_clusters_endpoint_ancestors_in_non_date_mode():
     assert "color=green;" in dot_text
     assert "penwidth=2;" in dot_text
     assert "compound=true" in dot_text
-    assert "ltail=cluster_ep" in dot_text
-    assert "lhead=cluster_done_ep" in dot_text
-    assert (
-        "cluster_proxy_ep_cluster -> cluster_proxy_done_ep_cluster "
-        "[ltail=cluster_ep,lhead=cluster_done_ep,color=red];"
-        in dot_text
-    )
+    assert "cluster_proxy_ep_cluster -> cluster_proxy_done_ep_cluster [color=red];" in dot_text
     assert "cluster_proxy_ep_node -> child" not in dot_text
     assert "cluster_proxy_done_ep_node -> child" not in dot_text
 
@@ -314,4 +308,7 @@ def test_yaml_to_dot_endpoint_cluster_complex_graphviz_warnings(tmp_path):
         text=True,
     )
     assert result.returncode == 0
+    assert "tail not inside tail cluster" not in result.stderr
+    assert "head not inside head cluster" not in result.stderr
+    assert "spline size > 1 not supported" not in result.stderr
     assert svg_path.exists()
