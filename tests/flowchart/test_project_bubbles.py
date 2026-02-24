@@ -116,20 +116,21 @@ nodes:
         assert border_shapes[0].attrib["stroke"] == endpoint_color
 
 
-def test_edge_color_comes_from_source_project(tmp_path):
+def test_edge_color_comes_from_child_project(tmp_path):
     yaml_file = tmp_path / "graph.yaml"
     dot_file = tmp_path / "graph.dot"
     svg_file = tmp_path / "graph.svg"
     yaml_file.write_text(
         """
 nodes:
-  root:
-    text: Root
-    children: [left, right]
-  left:
+  left_endpoint:
     text: Left Endpoint
     style: endpoint
-  right:
+    children: [mid]
+  mid:
+    text: Mid
+    children: [right_endpoint]
+  right_endpoint:
     text: Right Endpoint
     style: endpoint
 """.strip()
@@ -153,16 +154,21 @@ nodes:
                 break
         if title is None:
             continue
-        if group.attrib["class"] == "node" and title in ("left", "right"):
+        if group.attrib["class"] == "node" and title in (
+            "left_endpoint",
+            "right_endpoint",
+        ):
             node_colors[title] = _node_border_shapes(group, namespace)[0].attrib["stroke"]
-        if group.attrib["class"] == "edge" and title in ("root->left", "root->right"):
+        if group.attrib["class"] == "edge" and title == "left_endpoint->mid":
             for child in group:
                 if child.tag == f"{namespace}path" and "stroke" in child.attrib:
                     edge_colors[title] = child.attrib["stroke"]
                     break
 
-    assert edge_colors["root->left"] == node_colors["left"]
-    assert edge_colors["root->right"] == node_colors["right"]
+    assert (
+        edge_colors["left_endpoint->mid"] == node_colors["right_endpoint"]
+    )
+    assert edge_colors["left_endpoint->mid"] != node_colors["left_endpoint"]
 
 
 def test_nonterminal_styled_endpoint_drives_project_coloring(tmp_path):

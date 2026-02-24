@@ -14,6 +14,6 @@
   1. source /root/conda/etc/profile.d/conda.sh && conda activate base && python -m pip install -e . --no-build-isolation
 	2. source /root/conda/etc/profile.d/conda.sh && conda activate base && python -m pytest
 - Recommended flow for test LOCALLY (inside vscode IDE):
-  1. source /home/jmfranck/base/bin/activate && pytest
+  1. ~/base/bin/python -m pytest
 	2. Note that *all required packages are already installed* and you are NOT
 		 allowed to mess with the base environment.  Nor should you need to!

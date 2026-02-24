@@ -347,8 +347,8 @@ def build_graph(
                     node_to_projects[node_name] = []
                 node_to_projects[node_name].append(endpoint)
 
-        # Color each edge by the project of the source node (left side without
-        # arrowhead), preferring a project that both source and target share.
+        # Color each edge by the project of the target node (arrowhead/child
+        # side), preferring a project that both source and target share.
         for group in svg_root.iter(f"{namespace}g"):
             if "class" not in group.attrib or group.attrib["class"] != "edge":
                 continue
@@ -364,14 +364,14 @@ def build_graph(
             edge_color = None
             if source_name in node_to_projects and target_name in node_to_projects:
                 shared_projects = []
-                for endpoint in node_to_projects[source_name]:
-                    if endpoint in node_to_projects[target_name]:
+                for endpoint in node_to_projects[target_name]:
+                    if endpoint in node_to_projects[source_name]:
                         shared_projects.append(endpoint)
                 if shared_projects:
                     edge_color = endpoint_colors[sorted(shared_projects)[0]]
-            if edge_color is None and source_name in node_to_projects:
+            if edge_color is None and target_name in node_to_projects:
                 edge_color = endpoint_colors[
-                    sorted(node_to_projects[source_name])[0]
+                    sorted(node_to_projects[target_name])[0]
                 ]
             if edge_color is None:
                 continue
