@@ -95,9 +95,7 @@ def test_yaml_to_dot_clusters_endpoint_ancestors_in_non_date_mode():
     assert "lhead=cluster_done_ep" in dot_text
     assert "cluster_anchor_ep -> child" in dot_text
     assert "cluster_anchor_done_ep -> child" in dot_text
-    assert "mid -> cluster_anchor_ep [lhead=cluster_ep,headport=w,weight=1];" in dot_text
-    assert "tailport=e" in dot_text
-    assert "headport=w" in dot_text
+    assert "mid -> cluster_anchor_ep [weight=1];" in dot_text
     assert "weight=100" in dot_text
     assert "color=red" in dot_text
     assert "cluster_proxy_ep_node -> child" not in dot_text
@@ -153,7 +151,7 @@ def test_yaml_to_dot_cluster_edge_uses_edge_attrs():
 
     assert (
         "cluster_anchor_ep -> child "
-        "[ltail=cluster_ep,tailport=e,weight=100,color=purple,penwidth=5,style=dashed];"
+        "[weight=100,color=purple,penwidth=5,style=dashed];"
         in dot_text
     )
 

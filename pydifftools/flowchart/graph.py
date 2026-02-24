@@ -737,8 +737,6 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False, cluster_endpoints=True
                         and child_name not in endpoint_nodes
                     ):
                         edge_attrs = [
-                            f"ltail=cluster_{parent_name}",
-                            "tailport=e",
                             "weight=100",
                         ]
                         edge_style = _cluster_edge_style(data, parent_name)
@@ -763,16 +761,12 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False, cluster_endpoints=True
                             + f"{parent_name}"
                             + " -> "
                             + f"cluster_anchor_{child_name}"
-                            + " ["
-                            + f"lhead=cluster_{child_name},headport=w,weight=1"
-                            + "];"
+                            + " [weight=1];"
                         )
                         continue
                     edge_attrs = [
                         f"ltail=cluster_{parent_name}",
                         f"lhead=cluster_{child_name}",
-                        "tailport=e",
-                        "headport=w",
                         "weight=100",
                     ]
                     edge_style = _cluster_edge_style(data, parent_name)
