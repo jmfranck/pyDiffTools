@@ -530,14 +530,9 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False, cluster_endpoints=True
                     break
             # Keep clusters from overlapping and give routing enough room.
             # compound=true is only turned on if endpoint boundary edges exist.
-            if has_cluster_boundary_edges:
-                lines.append(
-                    '    graph [compound=true,concentrate=false,nodesep=0.70,ranksep=1.00,pad=0.20];'
-                )
-            else:
-                lines.append(
-                    '    graph [concentrate=false,nodesep=0.70,ranksep=1.00,pad=0.20];'
-                )
+            lines.append(
+                '    graph [compound=true,concentrate=false,nodesep=0.70,ranksep=1.00,pad=0.20];'
+            )
 
     node_cluster_memberships = {}
     if cluster_mode:
@@ -772,29 +767,24 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False, cluster_endpoints=True
                                     )["penwidth"]
                                 )
                             )
-                # Keep these as proxy-to-proxy edges to avoid Graphviz
-                # cluster clipping warnings/crashes in dense plans.
-                edge_attrs = []
+                # Route cluster edges through cluster anchors so Graphviz
+                # clips edges to cluster borders instead of creating unnamed
+                # implicit nodes outside clusters.
+                edge_attrs = [
+                    f"ltail=cluster_{source_cluster}",
+                    f"lhead=cluster_{target_cluster}",
+                ]
                 if edge_style:
                     edge_attrs.append(edge_style[1:])
-                if edge_attrs:
-                    lines.append(
-                        "    "
-                        + f"cluster_proxy_{source_cluster}_cluster"
-                        + " -> "
-                        + f"cluster_proxy_{target_cluster}_cluster"
-                        + " ["
-                        + ",".join(edge_attrs)
-                        + "];"
-                    )
-                else:
-                    lines.append(
-                        "    "
-                        + f"cluster_proxy_{source_cluster}_cluster"
-                        + " -> "
-                        + f"cluster_proxy_{target_cluster}_cluster"
-                        + ";"
-                    )
+                lines.append(
+                    "    "
+                    + f"cluster_anchor_{source_cluster}"
+                    + " -> "
+                    + f"cluster_anchor_{target_cluster}"
+                    + " ["
+                    + ",".join(edge_attrs)
+                    + "];"
+                )
         else:
             # --no-clustering path: render all dependency edges normally.
             for name in data["nodes"]:

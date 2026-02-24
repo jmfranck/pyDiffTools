@@ -90,7 +90,10 @@ def test_yaml_to_dot_clusters_endpoint_ancestors_in_non_date_mode():
     assert "color=green;" in dot_text
     assert "penwidth=2;" in dot_text
     assert "compound=true" in dot_text
-    assert "cluster_proxy_ep_cluster -> cluster_proxy_done_ep_cluster [color=red];" in dot_text
+    assert "cluster_anchor_ep -> cluster_anchor_done_ep" in dot_text
+    assert "ltail=cluster_ep" in dot_text
+    assert "lhead=cluster_done_ep" in dot_text
+    assert "color=red" in dot_text
     assert "cluster_proxy_ep_node -> child" not in dot_text
     assert "cluster_proxy_done_ep_node -> child" not in dot_text
 
