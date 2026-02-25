@@ -189,6 +189,8 @@ div.csl-indent {
 /* Shared visual style */
 div.comment-right,
 div.comment-left,
+.comment-overlay.comment-right,
+.comment-overlay.comment-left,
 span.comment-pin > span.comment-right,
 span.comment-pin > span.comment-left {
   box-sizing: border-box;
@@ -326,14 +328,29 @@ span.comment-pin > span.comment-left::after {
     height: auto;
   }
 
+  .comment-overlay.comment-margin-left {
+    position: static !important;
+    float: none !important;
+    clear: none !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    display: block !important;
+    box-sizing: border-box;
+    margin: 0.4em 0 !important;
+  }
+
+  .comment-inline-break-marker {
+    display: inline !important;
+  }
+
   span.comment-pin > span.comment-right::before,
   span.comment-pin > span.comment-right::after,
   span.comment-pin > span.comment-left::before,
   span.comment-pin > span.comment-left::after,
-  div.comment-overlay.comment-right::before,
-  div.comment-overlay.comment-right::after,
-  div.comment-overlay.comment-left::before,
-  div.comment-overlay.comment-left::after {
+  .comment-overlay.comment-right::before,
+  .comment-overlay.comment-right::after,
+  .comment-overlay.comment-left::before,
+  .comment-overlay.comment-left::after {
     display: none;
   }
 }
@@ -342,7 +359,7 @@ span.comment-pin > span.comment-left::after {
 }
 /* --- Overlay block comments emitted by Lua (contain ul/paras/etc) --- */
 
-div.comment-overlay {
+.comment-overlay {
   position: absolute;
   z-index: 100;          /* above text */
   margin: 0 !important;  /* do not participate in normal layout */
@@ -351,13 +368,23 @@ div.comment-overlay {
 }
 
 /* Ensure overlay uses the same visual bubble styling */
-div.comment-overlay.comment-right,
-div.comment-overlay.comment-left {
+.comment-overlay.comment-right,
+.comment-overlay.comment-left {
   width: 22rem;          /* match your current bubble width */
 }
 
+/* Margin-mode inline comments should use the narrower left-margin bubble size. */
+.comment-overlay.comment-inline-margin,
+.comment-overlay.comment-margin-left {
+  width: 11rem;
+}
+
+.comment-inline-break-marker {
+  display: none;
+}
+
 /* Pointer triangles for overlay block comments */
-div.comment-overlay.comment-right::before {
+.comment-overlay.comment-right::before {
   content: "";
   position: absolute;
   left: calc(-1 * var(--comment-left-arrow-width));
@@ -366,7 +393,7 @@ div.comment-overlay.comment-right::before {
   border-style: solid;
   border-color: transparent #5aa0ff transparent transparent;
 }
-div.comment-overlay.comment-right::after {
+.comment-overlay.comment-right::after {
   content: "";
   position: absolute;
   left: calc(-1 * var(--comment-left-arrow-width) + 1px);
@@ -375,7 +402,7 @@ div.comment-overlay.comment-right::after {
   border-style: solid;
   border-color: transparent #eaf3ff transparent transparent;
 }
-div.comment-overlay.comment-left::before {
+.comment-overlay.comment-left::before {
   content: "";
   position: absolute;
   right: calc(-1 * var(--comment-arrow-width));
@@ -384,7 +411,7 @@ div.comment-overlay.comment-left::before {
   border-style: solid;
   border-color: transparent transparent transparent #5aa0ff;
 }
-div.comment-overlay.comment-left::after {
+.comment-overlay.comment-left::after {
   content: "";
   position: absolute;
   right: calc(-1 * var(--comment-arrow-width) + 1px);

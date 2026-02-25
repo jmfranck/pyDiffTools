@@ -16,6 +16,7 @@ from .browser_lifecycle import browser_window_is_alive, close_browser_window
 
 FORWARD_SEARCH_HOST = "127.0.0.1"
 FORWARD_SEARCH_PORT = 51235
+MARGIN_COMMENTS_FILTER_MARKER = "-- PYDIFFTOOLS_SPECIAL_MARGIN_COMMENTS_FILTER"
 
 
 def forward_search_listener(stop_event, search_queue):
@@ -44,7 +45,54 @@ def forward_search_listener(stop_event, search_queue):
     server.close()
 
 
-def run_pandoc(filename, html_file):
+def _file_contains_text(path, text):
+    if not os.path.exists(path):
+        return False
+    with open(path, encoding="utf-8") as fp:
+        return text in fp.read()
+
+
+def _is_margin_comments_filter(path):
+    return _file_contains_text(path, MARGIN_COMMENTS_FILTER_MARKER)
+
+
+def _set_comment_filter_mode(source_dir, comments_to_margin):
+    package_dir = os.path.dirname(os.path.abspath(__file__))
+    active_filter = os.path.join(source_dir, "comment_tags.lua")
+    inactive_filter = os.path.join(source_dir, "comment_tags.lua.inactive")
+    packaged_default = os.path.join(package_dir, "comment_tags.lua")
+    packaged_margin = os.path.join(package_dir, "comment_tags_margin.lua")
+
+    active_is_margin = _is_margin_comments_filter(active_filter)
+    inactive_is_margin = _is_margin_comments_filter(inactive_filter)
+
+    if comments_to_margin:
+        if active_is_margin:
+            return
+        if os.path.exists(active_filter):
+            os.replace(active_filter, inactive_filter)
+        shutil.copy2(packaged_margin, active_filter)
+        return
+
+    if active_is_margin:
+        if os.path.exists(inactive_filter) and not inactive_is_margin:
+            temp_filter = active_filter + ".swap_tmp"
+            os.replace(active_filter, temp_filter)
+            os.replace(inactive_filter, active_filter)
+            os.replace(temp_filter, inactive_filter)
+        else:
+            os.replace(active_filter, inactive_filter)
+            shutil.copy2(packaged_default, active_filter)
+        return
+
+    if not os.path.exists(active_filter):
+        if os.path.exists(inactive_filter) and not inactive_is_margin:
+            os.replace(inactive_filter, active_filter)
+        else:
+            shutil.copy2(packaged_default, active_filter)
+
+
+def run_pandoc(filename, html_file, comments_to_margin=False):
     # Pandoc and pandoc-crossref must be installed for HTML rendering.
     if shutil.which("pandoc") is None:
         raise RuntimeError(
@@ -76,17 +124,14 @@ def run_pandoc(filename, html_file):
         markdown_text = fp.read()
     if "<comment>" in markdown_text:
         package_dir = os.path.dirname(os.path.abspath(__file__))
-        for asset_name in [
-            "comments.css",
-            "comment_tags.lua",
-            "comment_toggle.js",
-        ]:
+        for asset_name in ["comments.css", "comment_toggle.js"]:
             target_path = os.path.join(source_dir, asset_name)
             if not os.path.exists(target_path):
                 shutil.copy2(
                     os.path.join(package_dir, asset_name),
                     target_path,
                 )
+        _set_comment_filter_mode(source_dir, comments_to_margin)
     localfiles = {}
     for k in ["csl", "bib"]:
         localfiles[k] = [
@@ -189,9 +234,10 @@ def run_pandoc(filename, html_file):
 
 
 class Handler(FileSystemEventHandler):
-    def __init__(self, filename, observer):
+    def __init__(self, filename, observer, comments_to_margin=False):
         self.observer = observer
         self.filename = filename
+        self.comments_to_margin = comments_to_margin
         self.html_file = filename.rsplit(".", 1)[0] + ".html"
         self.init_firefox()
 
@@ -201,7 +247,11 @@ class Handler(FileSystemEventHandler):
         from selenium import webdriver
 
         self.firefox = webdriver.Chrome()
-        run_pandoc(self.filename, self.html_file)
+        run_pandoc(
+            self.filename,
+            self.html_file,
+            comments_to_margin=self.comments_to_margin,
+        )
         if not os.path.exists(self.html_file):
             print("html doesn't exist")
         self.append_autorefresh()
@@ -213,7 +263,11 @@ class Handler(FileSystemEventHandler):
         if os.path.normpath(
             os.path.abspath(event.src_path)
         ) == os.path.normpath(os.path.abspath(self.filename)):
-            run_pandoc(self.filename, self.html_file)
+            run_pandoc(
+                self.filename,
+                self.html_file,
+                comments_to_margin=self.comments_to_margin,
+            )
             self.append_autorefresh()
             try:
                 self.firefox.refresh()
@@ -238,8 +292,8 @@ class Handler(FileSystemEventHandler):
             "div.comment-left, div.comment-right, " +
             "span.comment-pin > span.comment-left, " +
             "span.comment-pin > span.comment-right, " +
-            "div.comment-overlay.comment-left, " +
-            "div.comment-overlay.comment-right";
+            ".comment-overlay.comment-left, " +
+            ".comment-overlay.comment-right";
 
         // When the page is about to be unloaded, save the current scroll\
 position
@@ -337,11 +391,19 @@ position
 
 @register_command(
     "continuous pandoc build.  Like latexmk, but for markdown!",
-    help={"filename": "Markdown or TeX file to watch for changes"},
+    help={
+        "filename": "Markdown or TeX file to watch for changes",
+        "comments_to_margin": (
+            "Temporarily replace comment_tags.lua with the special margin "
+            "comments filter for printing."
+        ),
+    },
 )
-def cpb(filename):
+def cpb(filename, comments_to_margin=False):
     observer = Observer()
-    event_handler = Handler(filename, observer)
+    event_handler = Handler(
+        filename, observer, comments_to_margin=comments_to_margin
+    )
     search_queue = queue.Queue()
     stop_event = threading.Event()
     socket_thread = threading.Thread(

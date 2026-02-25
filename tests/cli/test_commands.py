@@ -443,6 +443,54 @@ def test_append_autorefresh_persists_comment_hidden_state(tmp_path):
     assert "classList.add('comment-hidden')" in html_content
 
 
+def test_comment_filter_mode_switches_to_margin_and_back(tmp_path):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    active_filter = project_dir / "comment_tags.lua"
+    inactive_filter = project_dir / "comment_tags.lua.inactive"
+    active_filter.write_text("normal filter\n")
+
+    continuous._set_comment_filter_mode(str(project_dir), True)
+    active_margin = active_filter.read_text()
+    assert continuous.MARGIN_COMMENTS_FILTER_MARKER in active_margin
+    assert inactive_filter.read_text() == "normal filter\n"
+
+    continuous._set_comment_filter_mode(str(project_dir), False)
+    assert active_filter.read_text() == "normal filter\n"
+    assert continuous.MARGIN_COMMENTS_FILTER_MARKER in inactive_filter.read_text()
+
+
+def test_comment_filter_mode_restores_repo_default_when_inactive_missing(tmp_path):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    active_filter = project_dir / "comment_tags.lua"
+    inactive_filter = project_dir / "comment_tags.lua.inactive"
+
+    margin_repo_filter = (
+        Path(continuous.__file__).resolve().parent / "comment_tags_margin.lua"
+    )
+    active_filter.write_text(margin_repo_filter.read_text())
+
+    continuous._set_comment_filter_mode(str(project_dir), False)
+
+    assert active_filter.exists()
+    assert inactive_filter.exists()
+    assert continuous.MARGIN_COMMENTS_FILTER_MARKER not in active_filter.read_text()
+    assert continuous.MARGIN_COMMENTS_FILTER_MARKER in inactive_filter.read_text()
+
+
+def test_margin_comment_filter_uses_overlay_style_for_inline_comments():
+    margin_filter = (
+        Path(continuous.__file__).resolve().parent / "comment_tags_margin.lua"
+    ).read_text()
+    assert "comment-inline-margin" in margin_filter
+    assert "comment-margin-left" in margin_filter
+    assert "comment-inline-break-before" in margin_filter
+    assert "comment-inline-break-after" in margin_filter
+    assert "comment-pin comment-pin-block" in margin_filter
+    assert 'pandoc.RawInline(' in margin_filter
+
+
 def test_run_pandoc_comment_tag_regression_end_to_end(tmp_path):
     # This markdown reproduces the current failing mode where list content
     # inside <comment> leaks into the main body text.
@@ -561,8 +609,10 @@ def test_comment_css_arrow_geometry_constants(tmp_path):
     # Left/right pointer triangles should use the configured arrow size.
     assert "span.comment-pin > span.comment-right::before" in css_content
     assert "span.comment-pin > span.comment-left::before" in css_content
-    assert "div.comment-overlay.comment-right::before" in css_content
-    assert "div.comment-overlay.comment-left::before" in css_content
+    assert ".comment-overlay.comment-right::before" in css_content
+    assert ".comment-overlay.comment-left::before" in css_content
+    assert ".comment-overlay.comment-margin-left" in css_content
+    assert ".comment-inline-break-marker" in css_content
     assert "var(--comment-left-arrow-width)" in css_content
     assert "var(--comment-arrow-width)" in css_content
     assert "var(--comment-arrow-height)" in css_content
@@ -597,6 +647,8 @@ def test_comment_css_arrow_geometry_constants(tmp_path):
     assert "function cssLengthToPx" in js_content
     assert "function cssVariableLengthPx" in js_content
     assert "SELECTOR_INLINE" in js_content
+    assert "useMobileFlow" in js_content
+    assert 'comment-margin-left' in js_content
     assert "bubble.style.transform" in js_content
     assert "left = ax + gap + overlayRightShift" in js_content
     assert "const top = ay - overlayRise" in js_content

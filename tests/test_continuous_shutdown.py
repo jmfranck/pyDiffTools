@@ -35,9 +35,10 @@ class FakeThread:
 
 
 class FakeHandler:
-    def __init__(self, filename, observer):
+    def __init__(self, filename, observer, comments_to_margin=False, **kwargs):
         self.filename = filename
         self.observer = observer
+        self.comments_to_margin = comments_to_margin
         self.firefox = object()
 
     def forward_search(self, _search_text):

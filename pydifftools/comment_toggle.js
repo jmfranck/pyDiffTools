@@ -3,9 +3,9 @@
   const SELECTOR_BUBBLE =
     "div.comment-left, div.comment-right, " +
     "span.comment-pin > span.comment-left, span.comment-pin > span.comment-right, " +
-    "div.comment-overlay.comment-left, div.comment-overlay.comment-right";
+    ".comment-overlay.comment-left, .comment-overlay.comment-right";
 
-  const SELECTOR_OVERLAY = "div.comment-overlay[data-comment-id]";
+  const SELECTOR_OVERLAY = ".comment-overlay[data-comment-id]";
   const SELECTOR_ANCHOR = 'span.comment-pin-block[data-comment-id]';
   const SELECTOR_INLINE =
     "span.comment-pin > span.comment-right, span.comment-pin > span.comment-left";
@@ -34,6 +34,7 @@
   }
 
   function positionComments() {
+    const useMobileFlow = window.matchMedia("(max-width: 900px)").matches;
     // Inline comment bubbles are absolutely positioned relative to a zero-width
     // pin. We nudge overlapping bubbles so adjacent <comment> tags visibly
     // separate, and we raise the bubbles so the pointer aims at the source point.
@@ -97,6 +98,15 @@
       );
       if (!anchor) return;
 
+      if (useMobileFlow && ov.classList.contains("comment-margin-left")) {
+        // Let CSS place margin-mode comments in-flow in narrow layouts.
+        ov.style.position = "";
+        ov.style.visibility = "";
+        ov.style.left = "";
+        ov.style.top = "";
+        return;
+      }
+
       // Ensure measurable
       ov.style.position = "absolute";
       ov.style.visibility = "hidden";
@@ -115,9 +125,15 @@
       // Anchor point in document coords
       const ax = a.left + window.scrollX;
       const ay = a.top + window.scrollY;
+      const bodyRect = document.body.getBoundingClientRect();
+      const bodyLeft = bodyRect.left + window.scrollX;
 
       let left;
-      if (ov.classList.contains("comment-left")) {
+      if (ov.classList.contains("comment-margin-left")) {
+        // Margin-mode comments should live entirely in the left margin like
+        // floated .comment-left bubbles, not just to the left of the anchor.
+        left = bodyLeft - gap - ow;
+      } else if (ov.classList.contains("comment-left")) {
         left = ax - gap - ow;
       } else {
         // default right; add configurable shift so the arrow points back to
