@@ -4,6 +4,7 @@ import sys
 import time
 from pathlib import Path
 from unittest.mock import patch
+from pydifftools import continuous
 from pydifftools.continuous import run_pandoc
 from pydifftools.command_line import mfs
 
@@ -390,6 +391,56 @@ def test_run_pandoc_copies_comment_assets_when_comment_tags_present(
     assert (project_dir / "comments.css").exists()
     assert (project_dir / "comment_tags.lua").exists()
     assert (project_dir / "comment_toggle.js").exists()
+
+
+def test_run_pandoc_does_not_overwrite_existing_comment_assets(
+    tmp_path, monkeypatch
+):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    markdown_file = project_dir / "notes.md"
+    markdown_file.write_text("# Title\n\n<comment>hello</comment>\n")
+    (project_dir / "references.bib").write_text(
+        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
+    )
+    (project_dir / "style.csl").write_text(
+        '<?xml version="1.0" encoding="utf-8"?><style '
+        'xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
+    )
+    for asset_name in ["comments.css", "comment_tags.lua", "comment_toggle.js"]:
+        (project_dir / asset_name).write_text(f"local override {asset_name}\n")
+    html_file = tmp_path / "notes.html"
+
+    monkeypatch.setattr(
+        "pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool"
+    )
+
+    def fake_run(_command):
+        with open(html_file, "w", encoding="utf-8") as fp:
+            fp.write("<html><head></head><body>ok</body></html>")
+
+    monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
+
+    run_pandoc(str(markdown_file), str(html_file))
+
+    for asset_name in ["comments.css", "comment_tags.lua", "comment_toggle.js"]:
+        assert (project_dir / asset_name).read_text() == (
+            f"local override {asset_name}\n"
+        )
+
+
+def test_append_autorefresh_persists_comment_hidden_state(tmp_path):
+    html_file = tmp_path / "notes.html"
+    html_file.write_text("<html><head></head><body>ok</body></html>")
+
+    fake_handler = type("FakeHandler", (), {"html_file": str(html_file)})()
+    continuous.Handler.append_autorefresh(fake_handler)
+
+    html_content = html_file.read_text()
+    assert "commentHiddenBubbleIndexes" in html_content
+    assert "commentBubbleSelector" in html_content
+    assert "classList.contains('comment-hidden')" in html_content
+    assert "classList.add('comment-hidden')" in html_content
 
 
 def test_run_pandoc_comment_tag_regression_end_to_end(tmp_path):

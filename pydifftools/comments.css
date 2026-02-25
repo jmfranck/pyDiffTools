@@ -242,7 +242,7 @@ span.comment-pin > span.comment-right,
 span.comment-pin > span.comment-left {
   position: absolute;
   top: -0.35em;
-  width: 11rem;   /* match block width */
+  width: 22em;   /* match block width */
   display: block;
   z-index: 50;
 }
@@ -353,7 +353,7 @@ div.comment-overlay {
 /* Ensure overlay uses the same visual bubble styling */
 div.comment-overlay.comment-right,
 div.comment-overlay.comment-left {
-  width: 11rem;          /* match your current bubble width */
+  width: 22rem;          /* match your current bubble width */
 }
 
 /* Pointer triangles for overlay block comments */

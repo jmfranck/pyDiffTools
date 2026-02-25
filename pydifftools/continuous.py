@@ -81,10 +81,12 @@ def run_pandoc(filename, html_file):
             "comment_tags.lua",
             "comment_toggle.js",
         ]:
-            shutil.copy2(
-                os.path.join(package_dir, asset_name),
-                os.path.join(source_dir, asset_name),
-            )
+            target_path = os.path.join(source_dir, asset_name)
+            if not os.path.exists(target_path):
+                shutil.copy2(
+                    os.path.join(package_dir, asset_name),
+                    target_path,
+                )
     localfiles = {}
     for k in ["csl", "bib"]:
         localfiles[k] = [
@@ -232,14 +234,51 @@ class Handler(FileSystemEventHandler):
     <script id="MathJax-script" async src="MathJax-3.1.2/es5/tex-mml-chtml.js"\
 ></script>
     <script>
+        var commentBubbleSelector =
+            "div.comment-left, div.comment-right, " +
+            "span.comment-pin > span.comment-left, " +
+            "span.comment-pin > span.comment-right, " +
+            "div.comment-overlay.comment-left, " +
+            "div.comment-overlay.comment-right";
+
         // When the page is about to be unloaded, save the current scroll\
 position
         window.addEventListener('beforeunload', function() {
             sessionStorage.setItem('scrollPosition', window.scrollY);
+            var hiddenCommentIndexes = [];
+            var bubbles = document.querySelectorAll(commentBubbleSelector);
+            bubbles.forEach(function(bubble, index) {
+                if (bubble.classList.contains('comment-hidden')) {
+                    hiddenCommentIndexes.push(index);
+                }
+            });
+            sessionStorage.setItem(
+                'commentHiddenBubbleIndexes',
+                JSON.stringify(hiddenCommentIndexes)
+            );
         });
 
-        // When the page has loaded, scroll to the previous scroll position
+        // When the page has loaded, restore hidden comments and scroll position
         window.addEventListener('load', function() {
+            var hiddenCommentIndexes = sessionStorage.getItem(
+                'commentHiddenBubbleIndexes'
+            );
+            if (hiddenCommentIndexes) {
+                try {
+                    var hiddenIndexes = JSON.parse(hiddenCommentIndexes);
+                    var bubbles = document.querySelectorAll(
+                        commentBubbleSelector
+                    );
+                    hiddenIndexes.forEach(function(index) {
+                        if (bubbles[index]) {
+                            bubbles[index].classList.add('comment-hidden');
+                        }
+                    });
+                } catch (_error) {
+                    // Ignore malformed session state and continue loading.
+                }
+                sessionStorage.removeItem('commentHiddenBubbleIndexes');
+            }
             var scrollPosition = sessionStorage.getItem('scrollPosition');
             if (scrollPosition) {
                 window.scrollTo(0, scrollPosition);
