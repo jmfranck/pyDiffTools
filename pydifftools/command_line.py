@@ -796,8 +796,35 @@ def pmd(arguments):
     p1.wait()
 
 
+def _subcommand_help_hint(prog):
+    return (
+        f"*** Run '{prog} --help <subcommand>' to learn about "
+        "subcommand options. ***"
+    )
+
+
+class PyDiffArgumentParser(argparse.ArgumentParser):
+    """ArgumentParser with a clearer root-level missing-subcommand hint."""
+
+    def __init__(self, *args, is_root_parser=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._pydifft_is_root_parser = is_root_parser
+
+    def error(self, message):
+        if self._pydifft_is_root_parser:
+            self.print_usage(sys.stderr)
+            hint = _subcommand_help_hint(self.prog)
+            self.exit(2, f"{self.prog}: error: {message}\n{hint}\n")
+        super().error(message)
+
+
 def build_parser():
-    parser = argparse.ArgumentParser()
+    parser = PyDiffArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        is_root_parser=True,
+    )
+    parser.epilog = _subcommand_help_hint(parser.prog)
+    parser._pydifft_subparsers = {}
     subparsers = parser.add_subparsers(dest="command")
     subparsers.required = True
     for name, spec in _COMMAND_SPECS.items():
@@ -823,10 +850,18 @@ def build_parser():
                 action.completer = FilesCompleter(
                     allowednames=["*.yaml", "*.yml"]
                 )
+            if (
+                FilesCompleter is not None
+                and name == "cpb"
+                and action.dest == "filename"
+            ):
+                # Provide Markdown-only completions for continuous pandoc build.
+                action.completer = FilesCompleter(allowednames=["*.md"])
             if name == "wgrph" and action.dest == "t":
                 # Offer case-insensitive completions for incomplete task names.
                 action.completer = wgrph_task_completer
         subparser.set_defaults(_handler=spec["handler"])
+        parser._pydifft_subparsers[name] = subparser
     return parser
 
 
@@ -859,6 +894,11 @@ def main(argv=None):
     if not argv:
         parser.print_help()
         return
+    if argv[0] in ("-h", "--help") and len(argv) > 1:
+        subcommand = argv[1]
+        if subcommand in parser._pydifft_subparsers:
+            parser._pydifft_subparsers[subcommand].print_help()
+            return
     namespace = parser.parse_args(argv)
     handler = namespace._handler
     handler_kwargs = dict(vars(namespace))

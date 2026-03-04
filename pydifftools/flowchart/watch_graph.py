@@ -185,6 +185,48 @@ def _svg_shape_bounds(shape, namespace):
     return None
 
 
+def _svg_parse_viewbox(svg_root):
+    viewbox = svg_root.attrib.get("viewBox")
+    if viewbox is None:
+        return None
+    parts = viewbox.replace(",", " ").split()
+    if len(parts) != 4:
+        return None
+    try:
+        return tuple(float(part) for part in parts)
+    except ValueError:
+        return None
+
+
+def _svg_add_canvas_padding(svg_root, padding=8.0):
+    # Graphviz emits a tight canvas; add small fixed padding so post-processed
+    # outlines and anti-aliased strokes are never clipped at edges.
+    viewbox = _svg_parse_viewbox(svg_root)
+    if viewbox is None:
+        return
+
+    view_x, view_y, view_w, view_h = viewbox
+    if view_w <= 0.0 or view_h <= 0.0:
+        return
+
+    new_view_x = view_x - padding
+    new_view_y = view_y - padding
+    new_view_w = view_w + 2.0 * padding
+    new_view_h = view_h + 2.0 * padding
+    svg_root.set(
+        "viewBox",
+        f"{new_view_x:.2f} {new_view_y:.2f} {new_view_w:.2f} {new_view_h:.2f}",
+    )
+
+
+def _watch_html(svg_file):
+    return (
+        "<html><body style='margin:0'><embed id='svg-view'"
+        " style='display:block;' type='image/svg+xml'"
+        f" src='{svg_file.name}?t={time.time()}'/></body></html>"
+    )
+
+
 def _svg_expanded_outline(
     shape, namespace, expand, stroke_color, stroke_width
 ):
@@ -249,6 +291,12 @@ def build_graph(
         ["dot", "-Tsvg", str(dot_file), "-o", str(svg_file)],
         check=True,
     )
+    svg_tree = ET.parse(str(svg_file))
+    svg_root = svg_tree.getroot()
+    namespace = ""
+    if svg_root.tag.startswith("{"):
+        namespace = svg_root.tag[: svg_root.tag.find("}") + 1]
+
     if not order_by_date:
         # In dependency view mode, each node explicitly tagged with
         # ``style: endpoint`` defines a project color. A project includes the
@@ -281,12 +329,6 @@ def build_graph(
                 ):
                     for parent in data["nodes"][ancestor]["parents"]:
                         ancestors_to_visit.append(parent)
-
-        svg_tree = ET.parse(str(svg_file))
-        svg_root = svg_tree.getroot()
-        namespace = ""
-        if svg_root.tag.startswith("{"):
-            namespace = svg_root.tag[: svg_root.tag.find("}") + 1]
 
         title_to_group = {}
         node_title_to_group = {}
@@ -449,7 +491,8 @@ def build_graph(
             for insert_index, outline in reversed(inserts):
                 group.insert(insert_index, outline)
 
-        svg_tree.write(str(svg_file), encoding="utf-8", xml_declaration=True)
+    _svg_add_canvas_padding(svg_root, padding=24.0)
+    svg_tree.write(str(svg_file), encoding="utf-8", xml_declaration=True)
     return data
 
 
@@ -565,11 +608,7 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
     # Render the initial graph, optionally restricting to incomplete ancestors
     # of a target task.
     data = build_graph(yaml_file, dot_file, svg_file, wrap_width, d, None, t)
-    html_file.write_text(
-        "<html><body style='margin:0'><embed id='svg-view'"
-        " type='image/svg+xml'"
-        f" src='{svg_file.name}?t={time.time()}'/></body></html>"
-    )
+    html_file.write_text(_watch_html(svg_file))
     options = Options()
     driver = start_chrome(webdriver, options, html_file)
     event_handler = GraphEventHandler(

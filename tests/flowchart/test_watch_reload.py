@@ -3,7 +3,7 @@ import subprocess
 import pytest
 
 from pydifftools.flowchart.graph import write_dot_from_yaml
-from pydifftools.flowchart.watch_graph import _reload_svg
+from pydifftools.flowchart.watch_graph import _reload_svg, _watch_html
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -42,3 +42,12 @@ def test_reload_preserves_view(tmp_path):
     driver.quit()
     assert zoom_before == zoom_after
     assert scroll_before == scroll_after
+
+
+def test_watch_html_uses_block_embed(tmp_path):
+    svg_file = tmp_path / "graph.svg"
+    html = _watch_html(svg_file)
+    assert "<body style='margin:0'>" in html
+    assert "style='display:block;'" in html
+    assert "id='svg-view'" in html
+    assert "type='image/svg+xml'" in html
