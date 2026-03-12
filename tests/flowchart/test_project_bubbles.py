@@ -319,3 +319,34 @@ nodes:
 
     assert hub_color == root_color
     assert leaf_color != hub_color
+
+def test_build_graph_adds_task_links_to_all_nodes(tmp_path):
+    yaml_file = tmp_path / "graph.yaml"
+    dot_file = tmp_path / "graph.dot"
+    svg_file = tmp_path / "graph.svg"
+    yaml_file.write_text(
+        """
+nodes:
+  first_task:
+    text: First Task
+    children: [second_task]
+  second_task:
+    text: Second Task
+""".strip()
+    )
+
+    build_graph(yaml_file, dot_file, svg_file, wrap_width=55, order_by_date=False)
+
+    tree = ET.parse(svg_file)
+    root = tree.getroot()
+    namespace = _svg_namespace(root)
+    links = list(root.iter(f"{namespace}a"))
+
+    hrefs = []
+    for link in links:
+        for attr_name in link.attrib:
+            if attr_name.endswith("}href"):
+                hrefs.append(link.attrib[attr_name])
+
+    assert "/?t=first_task" in hrefs
+    assert "/?t=second_task" in hrefs

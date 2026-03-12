@@ -378,28 +378,24 @@ def _normalize_graph_dates(data):
 def _append_node(
     lines, indent, node_name, data, wrap_width, order_by_date, sort_order
 ):
-    # Add a node line with an optional sort hint so Graphviz keeps date order.
-    if node_name in data["nodes"]:
-        label = _node_label(
-            _node_text_with_due(data["nodes"][node_name]), wrap_width
+    # Every rendered DOT node corresponds to a real YAML node, so build the
+    # label directly from that node and prepend the task-link marker line.
+    label = _node_label(_node_text_with_due(data["nodes"][node_name]), wrap_width)
+    task_link_line = (
+        f'<font point-size="7">__WGRPH_TASK_LINK__:{node_name}</font>'
+    )
+    if label:
+        label = "<" + task_link_line + '<br align="left"/>' + label[1:]
+    else:
+        label = "<" + task_link_line + '<br align="left"/>' + ">"
+
+    if order_by_date:
+        lines.append(
+            f"{indent}{node_name} [label={label},"
+            f" sortv={sort_order[node_name]}];"
         )
     else:
-        label = ""
-    if label:
-        if order_by_date:
-            lines.append(
-                f"{indent}{node_name} [label={label},"
-                f" sortv={sort_order[node_name]}];"
-            )
-        else:
-            lines.append(f"{indent}{node_name} [label={label}];")
-    else:
-        if order_by_date:
-            lines.append(
-                f"{indent}{node_name} [sortv={sort_order[node_name]}];"
-            )
-        else:
-            lines.append(f"{indent}{node_name};")
+        lines.append(f"{indent}{node_name} [label={label}];")
 
 
 def yaml_to_dot(data, wrap_width=55, order_by_date=False):
