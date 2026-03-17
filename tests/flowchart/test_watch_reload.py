@@ -46,12 +46,17 @@ def test_reload_preserves_view(tmp_path):
 
 def test_watch_html_uses_block_embed(tmp_path):
     svg_file = tmp_path / "graph.svg"
-    html = _watch_html("/graph.svg", "/?d=1")
+    html = _watch_html("/graph.svg", False)
     assert "<body style='margin:0'>" in html
-    assert "style='display:block;width:100%;height:calc(100vh - 2.2em);'" in html
+    assert "style='display:block;'" in html
     assert "id='svg-view'" in html
     assert "type='image/svg+xml'" in html
     assert "<a href='/?d=1'>date-ordered</a>" in html
+
+
+def test_watch_html_shows_dependency_link_in_date_mode():
+    html = _watch_html("/graph.svg", True)
+    assert "<a href='/'>dependency-ordered</a>" in html
 
 
 class FakeObserver:

@@ -229,15 +229,20 @@ def _svg_add_canvas_padding(svg_root, padding=8.0):
     )
 
 
-def _watch_html(svg_url, date_ordered_url):
-    # The local preview page points the embed to a server URL so query-string
-    # toggles (?t=... and ?d=1) can trigger server-side graph rebuilds.
+def _watch_html(svg_url, order_by_date):
+    # Keep the SVG as the page's main content so browser zoom behavior matches
+    # the original watcher experience (the graph scales, not just footer text).
+    # The footer link toggles between dependency/date views depending on mode.
+    footer_label = "date-ordered"
+    footer_url = "/?d=1"
+    if order_by_date:
+        footer_label = "dependency-ordered"
+        footer_url = "/"
     return (
         "<html><body style='margin:0'>"
-        "<embed id='svg-view' style='display:block;width:100%;height:calc(100vh - 2.2em);'"
-        f" type='image/svg+xml' src='{svg_url}'/>"
+        f"<embed id='svg-view' style='display:block;' type='image/svg+xml' src='{svg_url}'/>"
         "<p style='margin:0.4em 0.8em;font-family:sans-serif;font-size:13px;'>"
-        f"<a href='{date_ordered_url}'>date-ordered</a>"
+        f"<a href='{footer_url}'>{footer_label}</a>"
         "</p>"
         "</body></html>"
     )
@@ -633,7 +638,6 @@ class FlowchartPreviewServer:
         self.server_thread = None
         self.base_url = None
         self.svg_url = None
-        self.date_ordered_url = None
 
     def start(self):
         event_handler = self.event_handler
@@ -695,7 +699,7 @@ class FlowchartPreviewServer:
                         event_handler.state["target_task"],
                     )
 
-                body = _watch_html("/graph.svg", "/?d=1")
+                body = _watch_html("/graph.svg", event_handler.state["order_by_date"])
                 body_bytes = body.encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -712,7 +716,6 @@ class FlowchartPreviewServer:
         port = self.httpd.server_address[1]
         self.base_url = f"http://{self.host}:{port}/"
         self.svg_url = f"http://{self.host}:{port}/graph.svg"
-        self.date_ordered_url = f"http://{self.host}:{port}/?d=1"
         # Start serving immediately so the first browser navigation does not
         # block waiting for the watcher loop to call handle_request.
         self.server_thread = threading.Thread(
@@ -816,8 +819,13 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
             preview_server.serve_pending_request()
             # Exit the watcher when the browser window is closed so the CLI
             # process does not stay alive in the background.
+            # Navigation between / and /?t=... can briefly report liveness
+            # errors while Chrome swaps documents. Require two consecutive dead
+            # checks so click navigation is not mistaken for a closed window.
             if not browser_window_is_alive(event_handler.driver):
-                break
+                time.sleep(0.2)
+                if not browser_window_is_alive(event_handler.driver):
+                    break
     except KeyboardInterrupt:
         pass
     finally:
