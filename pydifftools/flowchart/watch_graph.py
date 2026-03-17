@@ -2,9 +2,9 @@ import subprocess
 import time
 import shutil
 import math
+import threading
 import urllib.parse
 import http.server
-import socketserver
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -630,6 +630,7 @@ class FlowchartPreviewServer:
         self.event_handler = event_handler
         self.host = host
         self.httpd = None
+        self.server_thread = None
         self.base_url = None
         self.svg_url = None
         self.date_ordered_url = None
@@ -706,22 +707,31 @@ class FlowchartPreviewServer:
             def log_message(self, format, *args):
                 return
 
-        self.httpd = socketserver.TCPServer((self.host, 0), Handler)
-        # Run request handling in the main watcher loop. A short timeout keeps
-        # the CLI responsive while still serving GET requests quickly.
-        self.httpd.timeout = 0.25
+        self.httpd = http.server.ThreadingHTTPServer((self.host, 0), Handler)
+        self.httpd.daemon_threads = True
         port = self.httpd.server_address[1]
         self.base_url = f"http://{self.host}:{port}/"
         self.svg_url = f"http://{self.host}:{port}/graph.svg"
         self.date_ordered_url = f"http://{self.host}:{port}/?d=1"
+        # Start serving immediately so the first browser navigation does not
+        # block waiting for the watcher loop to call handle_request.
+        self.server_thread = threading.Thread(
+            target=self.httpd.serve_forever,
+            daemon=True,
+        )
+        self.server_thread.start()
 
     def serve_pending_request(self):
-        if self.httpd is not None:
-            self.httpd.handle_request()
+        # The server runs in a background thread; this method remains for
+        # compatibility with the watcher loop call site.
+        return
 
     def stop(self):
         if self.httpd is not None:
+            self.httpd.shutdown()
             self.httpd.server_close()
+        if self.server_thread is not None:
+            self.server_thread.join(timeout=1.0)
 
 
 
