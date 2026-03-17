@@ -52,3 +52,87 @@ def test_watch_html_uses_block_embed(tmp_path):
     assert "id='svg-view'" in html
     assert "type='image/svg+xml'" in html
     assert "<a href='/?d=1'>date-ordered</a>" in html
+
+
+class FakeObserver:
+    def __init__(self):
+        self.stopped = False
+        self.joined = False
+
+    def schedule(self, handler, path, recursive=False):
+        self.handler = handler
+        self.path = path
+        self.recursive = recursive
+
+    def start(self):
+        return
+
+    def stop(self):
+        self.stopped = True
+
+    def join(self):
+        self.joined = True
+
+
+class FakePreviewServer:
+    latest = None
+
+    def __init__(self, event_handler):
+        self.event_handler = event_handler
+        self.base_url = "http://127.0.0.1:9999/"
+        self.svg_url = "http://127.0.0.1:9999/graph.svg"
+        self.started = False
+        self.stopped = False
+        self.served = 0
+        FakePreviewServer.latest = self
+
+    def start(self):
+        self.started = True
+
+    def serve_pending_request(self):
+        self.served += 1
+
+    def stop(self):
+        self.stopped = True
+
+
+def test_wgrph_stops_preview_server_when_browser_window_closed(tmp_path, monkeypatch):
+    # Build a minimal yaml graph for the command to read.
+    yaml_file = tmp_path / "graph.yaml"
+    yaml_file.write_text("nodes:\n  task_a:\n    text: Task A\n")
+
+    close_calls = []
+
+    # Replace expensive components so the command loop can run as a fast
+    # unit test.
+    monkeypatch.setattr(
+        "pydifftools.flowchart.watch_graph.build_graph",
+        lambda *args, **kwargs: {"nodes": {"task_a": {"text": "Task A"}}},
+    )
+    monkeypatch.setattr(
+        "pydifftools.flowchart.watch_graph.start_chrome",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        "pydifftools.flowchart.watch_graph.browser_window_is_alive",
+        lambda _driver: False,
+    )
+    monkeypatch.setattr(
+        "pydifftools.flowchart.watch_graph.close_chrome",
+        close_calls.append,
+    )
+    monkeypatch.setattr("pydifftools.flowchart.watch_graph.Observer", FakeObserver)
+    monkeypatch.setattr(
+        "pydifftools.flowchart.watch_graph.FlowchartPreviewServer",
+        FakePreviewServer,
+    )
+
+    from pydifftools.flowchart.watch_graph import wgrph
+
+    wgrph(str(yaml_file))
+
+    # The browser shutdown path must also stop the local preview server.
+    assert FakePreviewServer.latest is not None
+    assert FakePreviewServer.latest.started is True
+    assert FakePreviewServer.latest.stopped is True
+    assert len(close_calls) == 1
