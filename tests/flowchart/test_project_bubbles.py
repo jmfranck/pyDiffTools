@@ -25,7 +25,8 @@ def _node_border_shapes(group, namespace):
     return [
         child
         for child in group
-        if child.tag in (f"{namespace}polygon", f"{namespace}rect", f"{namespace}ellipse")
+        if child.tag
+        in (f"{namespace}polygon", f"{namespace}rect", f"{namespace}ellipse")
         and "stroke" in child.attrib
     ]
 
@@ -80,8 +81,7 @@ def test_build_graph_colors_node_borders_and_removes_bubbles(tmp_path):
     yaml_file = tmp_path / "graph.yaml"
     dot_file = tmp_path / "graph.dot"
     svg_file = tmp_path / "graph.svg"
-    yaml_file.write_text(
-        """
+    yaml_file.write_text("""
 nodes:
   root:
     text: Root
@@ -95,10 +95,11 @@ nodes:
   end2:
     text: End 2
     style: endpoint
-""".strip()
-    )
+""".strip())
 
-    build_graph(yaml_file, dot_file, svg_file, wrap_width=55, order_by_date=False)
+    build_graph(
+        yaml_file, dot_file, svg_file, wrap_width=55, order_by_date=False
+    )
 
     tree = ET.parse(svg_file)
     root = tree.getroot()
@@ -111,8 +112,12 @@ nodes:
         for group in root.iter(f"{namespace}g")
     )
 
-    end1_stroke = _node_border_shapes(nodes["end1"], namespace)[0].attrib["stroke"]
-    end2_stroke = _node_border_shapes(nodes["end2"], namespace)[0].attrib["stroke"]
+    end1_stroke = _node_border_shapes(nodes["end1"], namespace)[0].attrib[
+        "stroke"
+    ]
+    end2_stroke = _node_border_shapes(nodes["end2"], namespace)[0].attrib[
+        "stroke"
+    ]
 
     root_shapes = _node_border_shapes(nodes["root"], namespace)
     root_strokes = [shape.attrib["stroke"] for shape in root_shapes]
@@ -123,7 +128,8 @@ nodes:
     transparent_outlines = [
         shape
         for shape in root_shapes
-        if shape.tag == f"{namespace}rect" and shape.attrib.get("fill") == "none"
+        if shape.tag == f"{namespace}rect"
+        and shape.attrib.get("fill") == "none"
     ]
     assert transparent_outlines
 
@@ -132,8 +138,7 @@ def test_viewbox_contains_postprocessed_geometry(tmp_path):
     yaml_file = tmp_path / "graph.yaml"
     dot_file = tmp_path / "graph.dot"
     svg_file = tmp_path / "graph.svg"
-    yaml_file.write_text(
-        """
+    yaml_file.write_text("""
 nodes:
   bottom_left:
     text: Bottom Left
@@ -147,10 +152,11 @@ nodes:
   endpoint_b:
     text: Endpoint B
     style: endpoint
-""".strip()
-    )
+""".strip())
 
-    build_graph(yaml_file, dot_file, svg_file, wrap_width=55, order_by_date=False)
+    build_graph(
+        yaml_file, dot_file, svg_file, wrap_width=55, order_by_date=False
+    )
 
     tree = ET.parse(svg_file)
     root = tree.getroot()
@@ -181,7 +187,9 @@ nodes:
                 content_bounds, _bounds_from_points(element.attrib["points"])
             )
         elif element.tag == f"{namespace}rect":
-            content_bounds = _union_bounds(content_bounds, _rect_bounds(element))
+            content_bounds = _union_bounds(
+                content_bounds, _rect_bounds(element)
+            )
         elif element.tag == f"{namespace}ellipse":
             content_bounds = _union_bounds(
                 content_bounds, _ellipse_bounds(element)
@@ -202,8 +210,7 @@ def test_project_for_single_endpoint_colors_ancestors(tmp_path):
     yaml_file = tmp_path / "graph.yaml"
     dot_file = tmp_path / "graph.dot"
     svg_file = tmp_path / "graph.svg"
-    yaml_file.write_text(
-        """
+    yaml_file.write_text("""
 nodes:
   root:
     text: Root
@@ -214,19 +221,20 @@ nodes:
   child_endpoint:
     text: Child Endpoint
     style: endpoint
-""".strip()
-    )
+""".strip())
 
-    build_graph(yaml_file, dot_file, svg_file, wrap_width=55, order_by_date=False)
+    build_graph(
+        yaml_file, dot_file, svg_file, wrap_width=55, order_by_date=False
+    )
 
     tree = ET.parse(svg_file)
     root = tree.getroot()
     namespace = _svg_namespace(root)
     nodes = _node_groups_by_title(root, namespace)
 
-    endpoint_color = _node_border_shapes(nodes["child_endpoint"], namespace)[0].attrib[
-        "stroke"
-    ]
+    endpoint_color = _node_border_shapes(nodes["child_endpoint"], namespace)[
+        0
+    ].attrib["stroke"]
     for node_name in ("root", "middle"):
         border_shapes = _node_border_shapes(nodes[node_name], namespace)
         assert border_shapes[0].attrib["stroke"] == endpoint_color
@@ -236,8 +244,7 @@ def test_edge_color_comes_from_child_project(tmp_path):
     yaml_file = tmp_path / "graph.yaml"
     dot_file = tmp_path / "graph.dot"
     svg_file = tmp_path / "graph.svg"
-    yaml_file.write_text(
-        """
+    yaml_file.write_text("""
 nodes:
   left_endpoint:
     text: Left Endpoint
@@ -249,10 +256,11 @@ nodes:
   right_endpoint:
     text: Right Endpoint
     style: endpoint
-""".strip()
-    )
+""".strip())
 
-    build_graph(yaml_file, dot_file, svg_file, wrap_width=55, order_by_date=False)
+    build_graph(
+        yaml_file, dot_file, svg_file, wrap_width=55, order_by_date=False
+    )
 
     tree = ET.parse(svg_file)
     root = tree.getroot()
@@ -274,16 +282,19 @@ nodes:
             "left_endpoint",
             "right_endpoint",
         ):
-            node_colors[title] = _node_border_shapes(group, namespace)[0].attrib["stroke"]
+            node_colors[title] = _node_border_shapes(group, namespace)[
+                0
+            ].attrib["stroke"]
         if group.attrib["class"] == "edge" and title == "left_endpoint->mid":
             for child in group:
-                if child.tag == f"{namespace}path" and "stroke" in child.attrib:
+                if (
+                    child.tag == f"{namespace}path"
+                    and "stroke" in child.attrib
+                ):
                     edge_colors[title] = child.attrib["stroke"]
                     break
 
-    assert (
-        edge_colors["left_endpoint->mid"] == node_colors["right_endpoint"]
-    )
+    assert edge_colors["left_endpoint->mid"] == node_colors["right_endpoint"]
     assert edge_colors["left_endpoint->mid"] != node_colors["left_endpoint"]
 
 
@@ -291,8 +302,7 @@ def test_nonterminal_styled_endpoint_drives_project_coloring(tmp_path):
     yaml_file = tmp_path / "graph.yaml"
     dot_file = tmp_path / "graph.dot"
     svg_file = tmp_path / "graph.svg"
-    yaml_file.write_text(
-        """
+    yaml_file.write_text("""
 nodes:
   root:
     text: Root
@@ -303,39 +313,47 @@ nodes:
     children: [leaf]
   leaf:
     text: Plain Leaf
-""".strip()
-    )
+""".strip())
 
-    build_graph(yaml_file, dot_file, svg_file, wrap_width=55, order_by_date=False)
+    build_graph(
+        yaml_file, dot_file, svg_file, wrap_width=55, order_by_date=False
+    )
 
     tree = ET.parse(svg_file)
     root = tree.getroot()
     namespace = _svg_namespace(root)
     nodes = _node_groups_by_title(root, namespace)
 
-    hub_color = _node_border_shapes(nodes["hub"], namespace)[0].attrib["stroke"]
-    root_color = _node_border_shapes(nodes["root"], namespace)[0].attrib["stroke"]
-    leaf_color = _node_border_shapes(nodes["leaf"], namespace)[0].attrib["stroke"]
+    hub_color = _node_border_shapes(nodes["hub"], namespace)[0].attrib[
+        "stroke"
+    ]
+    root_color = _node_border_shapes(nodes["root"], namespace)[0].attrib[
+        "stroke"
+    ]
+    leaf_color = _node_border_shapes(nodes["leaf"], namespace)[0].attrib[
+        "stroke"
+    ]
 
     assert hub_color == root_color
     assert leaf_color != hub_color
+
 
 def test_build_graph_adds_task_links_to_all_nodes(tmp_path):
     yaml_file = tmp_path / "graph.yaml"
     dot_file = tmp_path / "graph.dot"
     svg_file = tmp_path / "graph.svg"
-    yaml_file.write_text(
-        """
+    yaml_file.write_text("""
 nodes:
   first_task:
     text: First Task
     children: [second_task]
   second_task:
     text: Second Task
-""".strip()
-    )
+""".strip())
 
-    build_graph(yaml_file, dot_file, svg_file, wrap_width=55, order_by_date=False)
+    build_graph(
+        yaml_file, dot_file, svg_file, wrap_width=55, order_by_date=False
+    )
 
     tree = ET.parse(svg_file)
     root = tree.getroot()

@@ -380,7 +380,9 @@ def _append_node(
 ):
     # Every rendered DOT node corresponds to a real YAML node, so build the
     # label directly from that node and prepend the task-link marker line.
-    label = _node_label(_node_text_with_due(data["nodes"][node_name]), wrap_width)
+    label = _node_label(
+        _node_text_with_due(data["nodes"][node_name]), wrap_width
+    )
     task_link_line = (
         f'<font point-size="7">__WGRPH_TASK_LINK__:{node_name}</font>'
     )
@@ -644,10 +646,7 @@ def write_dot_from_yaml(
             if parent in ancestors:
                 continue
             ancestors.add(parent)
-            if (
-                parent in data["nodes"]
-                and "parents" in data["nodes"][parent]
-            ):
+            if parent in data["nodes"] and "parents" in data["nodes"][parent]:
                 for grandparent in data["nodes"][parent]["parents"]:
                     parents_to_check.append(grandparent)
         incomplete_ancestors = set()

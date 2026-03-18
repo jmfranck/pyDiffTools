@@ -10,7 +10,6 @@ from selenium.webdriver.chrome.service import Service
 
 
 def test_reload_preserves_view(tmp_path):
-
     dot_file = tmp_path / "graph.dot"
     svg_file = tmp_path / "graph.svg"
     html_file = tmp_path / "view.html"
@@ -45,7 +44,6 @@ def test_reload_preserves_view(tmp_path):
 
 
 def test_watch_html_uses_block_embed(tmp_path):
-    svg_file = tmp_path / "graph.svg"
     html = _watch_html("/graph.svg", False)
     assert "<body style='margin:0'>" in html
     assert "style='display:block;'" in html
@@ -101,7 +99,9 @@ class FakePreviewServer:
         self.stopped = True
 
 
-def test_wgrph_stops_preview_server_when_browser_window_closed(tmp_path, monkeypatch):
+def test_wgrph_stops_preview_server_when_browser_window_closed(
+    tmp_path, monkeypatch
+):
     # Build a minimal yaml graph for the command to read.
     yaml_file = tmp_path / "graph.yaml"
     yaml_file.write_text("nodes:\n  task_a:\n    text: Task A\n")
@@ -126,7 +126,9 @@ def test_wgrph_stops_preview_server_when_browser_window_closed(tmp_path, monkeyp
         "pydifftools.flowchart.watch_graph.close_chrome",
         close_calls.append,
     )
-    monkeypatch.setattr("pydifftools.flowchart.watch_graph.Observer", FakeObserver)
+    monkeypatch.setattr(
+        "pydifftools.flowchart.watch_graph.Observer", FakeObserver
+    )
     monkeypatch.setattr(
         "pydifftools.flowchart.watch_graph.FlowchartPreviewServer",
         FakePreviewServer,

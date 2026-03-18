@@ -40,7 +40,10 @@ def test_due_dates_render():
         in dot
     )
     # Nodes that only declare a due date still render the value in orange.
-    assert '<font point-size="7">__WGRPH_TASK_LINK__:Alt</font><br align="left"/><font color="orange">3/4/26</font>' in dot
+    assert (
+        '<font point-size="7">__WGRPH_TASK_LINK__:Alt</font>'
+        '<br align="left"/><font color="orange">3/4/26</font>'
+    ) in dot
 
 
 def test_completed_due_is_green():

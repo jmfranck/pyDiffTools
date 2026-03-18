@@ -240,7 +240,8 @@ def _watch_html(svg_url, order_by_date):
         footer_url = "/"
     return (
         "<html><body style='margin:0'>"
-        f"<embed id='svg-view' style='display:block;' type='image/svg+xml' src='{svg_url}'/>"
+        "<embed id='svg-view' style='display:block;' type='image/svg+xml'"
+        f" src='{svg_url}'/>"
         "<p style='margin:0.4em 0.8em;font-family:sans-serif;font-size:13px;'>"
         f"<a href='{footer_url}'>{footer_label}</a>"
         "</p>"
@@ -284,7 +285,6 @@ def _svg_expanded_outline(
     )
 
 
-
 def _svg_add_task_links(svg_root, namespace):
     # Replace marker text emitted in DOT labels with clickable links. Graphviz
     # generates one <text> item per line, so the marker occupies its own row.
@@ -302,12 +302,13 @@ def _svg_add_task_links(svg_root, namespace):
             task_name = child.text[len(link_marker) :]
             child.text = task_name
             link = ET.Element(f"{namespace}a")
-            link.set(f"{{{xlink_ns}}}href", f"/?t={urllib.parse.quote(task_name)}")
+            link.set(
+                f"{{{xlink_ns}}}href", f"/?t={urllib.parse.quote(task_name)}"
+            )
             link.set("target", "_top")
             link.append(child)
             group.remove(child)
             group.insert(index, link)
-
 
 
 def build_graph(
@@ -699,7 +700,9 @@ class FlowchartPreviewServer:
                         event_handler.state["target_task"],
                     )
 
-                body = _watch_html("/graph.svg", event_handler.state["order_by_date"])
+                body = _watch_html(
+                    "/graph.svg", event_handler.state["order_by_date"]
+                )
                 body_bytes = body.encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -737,7 +740,6 @@ class FlowchartPreviewServer:
             self.server_thread.join(timeout=1.0)
 
 
-
 @register_command(
     "Watch a flowchart YAML file, rebuild DOT/SVG output, and open the"
     " preview",
@@ -745,7 +747,7 @@ class FlowchartPreviewServer:
         "yaml": "Path to the flowchart YAML file",
         "wrap_width": "Line wrap width used when generating node labels",
         "d": "Render nodes by date without showing connections",
-        "t": ("Task name to focus on (show incomplete ancestor tasks only)"),
+        "t": "Task name to focus on (show incomplete ancestor tasks only)",
     },
 )
 def wgrph(yaml, wrap_width=55, d=False, t=None):
@@ -807,7 +809,11 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
     event_handler.driver = driver
 
     if t is not None and str(t).strip():
-        driver.get(preview_server.base_url + "?t=" + urllib.parse.quote(str(t).strip()))
+        driver.get(
+            preview_server.base_url
+            + "?t="
+            + urllib.parse.quote(str(t).strip())
+        )
     elif d:
         driver.get(preview_server.base_url + "?d=1")
 
