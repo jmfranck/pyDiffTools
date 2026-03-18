@@ -2,6 +2,9 @@ import subprocess
 import time
 import shutil
 import math
+import threading
+import urllib.parse
+import http.server
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -24,12 +27,19 @@ from pydifftools.browser_lifecycle import (
 from .graph import write_dot_from_yaml
 
 
-def _reload_svg(driver, svg_file: Path) -> None:
+def _reload_svg(driver, svg_src) -> None:
     """Refresh the embedded SVG while preserving zoom and scroll."""
     zoom = driver.execute_script("return window.visualViewport.scale")
     scroll_x = driver.execute_script("return window.scrollX")
     scroll_y = driver.execute_script("return window.scrollY")
-    svg_uri = svg_file.resolve().as_uri() + f"?t={time.time()}"
+    if isinstance(svg_src, Path):
+        svg_uri = svg_src.resolve().as_uri()
+    else:
+        svg_uri = str(svg_src)
+    if "?" in svg_uri:
+        svg_uri = svg_uri + f"&ts={time.time()}"
+    else:
+        svg_uri = svg_uri + f"?ts={time.time()}"
     driver.execute_async_script(
         "const [src,z,x,y,done]=arguments;const"
         " s=document.getElementById('svg-view');s.onload=function()"
@@ -42,10 +52,10 @@ def _reload_svg(driver, svg_file: Path) -> None:
     )
 
 
-def start_chrome(webdriver, options, html_file):
-    # Launch Chrome and display the local SVG preview HTML file.
+def start_chrome(webdriver, options, preview_url):
+    # Launch Chrome and display the local SVG preview page from the server.
     driver = webdriver.Chrome(options=options)
-    driver.get(html_file.resolve().as_uri())
+    driver.get(preview_url)
     return driver
 
 
@@ -219,11 +229,23 @@ def _svg_add_canvas_padding(svg_root, padding=8.0):
     )
 
 
-def _watch_html(svg_file):
+def _watch_html(svg_url, order_by_date):
+    # Keep the SVG as the page's main content so browser zoom behavior matches
+    # the original watcher experience (the graph scales, not just footer text).
+    # The footer link toggles between dependency/date views depending on mode.
+    footer_label = "date-ordered"
+    footer_url = "/?d=1"
+    if order_by_date:
+        footer_label = "dependency-ordered"
+        footer_url = "/"
     return (
-        "<html><body style='margin:0'><embed id='svg-view'"
-        " style='display:block;' type='image/svg+xml'"
-        f" src='{svg_file.name}?t={time.time()}'/></body></html>"
+        "<html><body style='margin:0'>"
+        "<embed id='svg-view' style='display:block;' type='image/svg+xml'"
+        f" src='{svg_url}'/>"
+        "<p style='margin:0.4em 0.8em;font-family:sans-serif;font-size:13px;'>"
+        f"<a href='{footer_url}'>{footer_label}</a>"
+        "</p>"
+        "</body></html>"
     )
 
 
@@ -263,6 +285,32 @@ def _svg_expanded_outline(
     )
 
 
+def _svg_add_task_links(svg_root, namespace):
+    # Replace marker text emitted in DOT labels with clickable links. Graphviz
+    # generates one <text> item per line, so the marker occupies its own row.
+    xlink_ns = "http://www.w3.org/1999/xlink"
+    ET.register_namespace("xlink", xlink_ns)
+    link_marker = "__WGRPH_TASK_LINK__:"
+    for group in svg_root.iter(f"{namespace}g"):
+        if "class" not in group.attrib or group.attrib["class"] != "node":
+            continue
+        for index, child in enumerate(list(group)):
+            if child.tag != f"{namespace}text" or child.text is None:
+                continue
+            if not child.text.startswith(link_marker):
+                continue
+            task_name = child.text[len(link_marker) :]
+            child.text = task_name
+            link = ET.Element(f"{namespace}a")
+            link.set(
+                f"{{{xlink_ns}}}href", f"/?t={urllib.parse.quote(task_name)}"
+            )
+            link.set("target", "_top")
+            link.append(child)
+            group.remove(child)
+            group.insert(index, link)
+
+
 def build_graph(
     yaml_file,
     dot_file,
@@ -296,6 +344,8 @@ def build_graph(
     namespace = ""
     if svg_root.tag.startswith("{"):
         namespace = svg_root.tag[: svg_root.tag.find("}") + 1]
+
+    _svg_add_task_links(svg_root, namespace)
 
     if not order_by_date:
         # In dependency view mode, each node explicitly tagged with
@@ -502,27 +552,30 @@ class GraphEventHandler(FileSystemEventHandler):
         yaml_file,
         dot_file,
         svg_file,
-        html_file=None,
+        preview_url=None,
+        svg_url=None,
         driver=None,
         options=None,
         webdriver=None,
         wrap_width=55,
         data=None,
-        order_by_date=False,
-        target_task=None,
+        state=None,
         debounce=0.25,
     ):
         self.yaml_file = Path(yaml_file)
         self.dot_file = Path(dot_file)
         self.svg_file = Path(svg_file)
-        self.html_file = None if html_file is None else Path(html_file)
+        self.preview_url = preview_url
+        self.svg_url = svg_url
         self.driver = driver
         self.options = options
         self.webdriver = webdriver
         self.wrap_width = wrap_width
         self.data = data
-        self.order_by_date = order_by_date
-        self.target_task = target_task
+        if state is None:
+            self.state = {"order_by_date": False, "target_task": None}
+        else:
+            self.state = state
         self.debounce = debounce
         self._last_handled = 0.0
         self._last_mtime = None
@@ -542,9 +595,9 @@ class GraphEventHandler(FileSystemEventHandler):
                     self.dot_file,
                     self.svg_file,
                     self.wrap_width,
-                    self.order_by_date,
+                    self.state["order_by_date"],
                     self.data,
-                    self.target_task,
+                    self.state["target_task"],
                 )
             except Exception:
                 # If the graph fails to build (e.g. invalid date), close the
@@ -558,19 +611,133 @@ class GraphEventHandler(FileSystemEventHandler):
                 if (
                     self.webdriver is not None
                     and self.options is not None
-                    and self.html_file is not None
+                    and self.preview_url is not None
                 ):
                     self.driver = start_chrome(
-                        self.webdriver, self.options, self.html_file
+                        self.webdriver, self.options, self.preview_url
                     )
                 else:
-                    # Allow legacy/test usage without a live driver.
-                    _reload_svg(self.driver, self.svg_file)
+                    # Allow test/legacy usage where no browser driver exists.
+                    if self.svg_url is not None:
+                        _reload_svg(self.driver, self.svg_url)
+                    else:
+                        _reload_svg(self.driver, self.svg_file)
                     self._last_mtime = self.yaml_file.stat().st_mtime
                     return
+            if self.svg_url is not None:
+                _reload_svg(self.driver, self.svg_url)
             else:
                 _reload_svg(self.driver, self.svg_file)
             self._last_mtime = self.yaml_file.stat().st_mtime
+
+
+class FlowchartPreviewServer:
+    def __init__(self, event_handler, host="127.0.0.1"):
+        self.event_handler = event_handler
+        self.host = host
+        self.httpd = None
+        self.server_thread = None
+        self.base_url = None
+        self.svg_url = None
+
+    def start(self):
+        event_handler = self.event_handler
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                parsed = urllib.parse.urlparse(self.path)
+                if parsed.path == "/graph.svg":
+                    svg_bytes = event_handler.svg_file.read_bytes()
+                    self.send_response(200)
+                    self.send_header(
+                        "Content-Type", "image/svg+xml; charset=utf-8"
+                    )
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(svg_bytes)
+                    return
+
+                if parsed.path != "/" and parsed.path != "/index.html":
+                    self.send_error(404)
+                    return
+
+                # Parse query args so GET requests control graph mode.
+                params = urllib.parse.parse_qs(
+                    parsed.query, keep_blank_values=True
+                )
+                order_by_date = event_handler.state["order_by_date"]
+                target_task = event_handler.state["target_task"]
+                if "d" in params:
+                    d_value = params["d"][-1]
+                    order_by_date = d_value in (
+                        "1",
+                        "true",
+                        "yes",
+                        "on",
+                        "",
+                    )
+                if "t" in params:
+                    t_value = params["t"][-1].strip()
+                    if t_value:
+                        target_task = t_value
+                        order_by_date = False
+                    else:
+                        target_task = None
+
+                if (
+                    order_by_date != event_handler.state["order_by_date"]
+                    or target_task != event_handler.state["target_task"]
+                ):
+                    event_handler.state["order_by_date"] = order_by_date
+                    event_handler.state["target_task"] = target_task
+                    event_handler.data = build_graph(
+                        event_handler.yaml_file,
+                        event_handler.dot_file,
+                        event_handler.svg_file,
+                        event_handler.wrap_width,
+                        event_handler.state["order_by_date"],
+                        event_handler.data,
+                        event_handler.state["target_task"],
+                    )
+
+                body = _watch_html(
+                    "/graph.svg", event_handler.state["order_by_date"]
+                )
+                body_bytes = body.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body_bytes)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body_bytes)
+
+            def log_message(self, format, *args):
+                return
+
+        self.httpd = http.server.ThreadingHTTPServer((self.host, 0), Handler)
+        self.httpd.daemon_threads = True
+        port = self.httpd.server_address[1]
+        self.base_url = f"http://{self.host}:{port}/"
+        self.svg_url = f"http://{self.host}:{port}/graph.svg"
+        # Start serving immediately so the first browser navigation does not
+        # block waiting for the watcher loop to call handle_request.
+        self.server_thread = threading.Thread(
+            target=self.httpd.serve_forever,
+            daemon=True,
+        )
+        self.server_thread.start()
+
+    def serve_pending_request(self):
+        # The server runs in a background thread; this method remains for
+        # compatibility with the watcher loop call site.
+        return
+
+    def stop(self):
+        if self.httpd is not None:
+            self.httpd.shutdown()
+            self.httpd.server_close()
+        if self.server_thread is not None:
+            self.server_thread.join(timeout=1.0)
 
 
 @register_command(
@@ -580,7 +747,7 @@ class GraphEventHandler(FileSystemEventHandler):
         "yaml": "Path to the flowchart YAML file",
         "wrap_width": "Line wrap width used when generating node labels",
         "d": "Render nodes by date without showing connections",
-        "t": ("Task name to focus on (show incomplete ancestor tasks only)"),
+        "t": "Task name to focus on (show incomplete ancestor tasks only)",
     },
 )
 def wgrph(yaml, wrap_width=55, d=False, t=None):
@@ -602,41 +769,76 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
 
     dot_file = yaml_file.with_suffix(".dot")
     svg_file = yaml_file.with_suffix(".svg")
-    html_file = yaml_file.with_suffix(".html")
 
-    # Use date ordering when requested so boxes appear in calendar order.
-    # Render the initial graph, optionally restricting to incomplete ancestors
-    # of a target task.
-    data = build_graph(yaml_file, dot_file, svg_file, wrap_width, d, None, t)
-    html_file.write_text(_watch_html(svg_file))
+    # The browser now drives filtering/date-mode by GET query parameters
+    # handled by the local preview server. Keep Python state in sync there.
+    initial_state = {"order_by_date": False, "target_task": None}
+
+    # Build the default dependency graph first. Optional -t / -d args are then
+    # applied by requesting server URLs with query parameters.
+    data = build_graph(
+        yaml_file,
+        dot_file,
+        svg_file,
+        wrap_width,
+        initial_state["order_by_date"],
+        None,
+        initial_state["target_task"],
+    )
+
     options = Options()
-    driver = start_chrome(webdriver, options, html_file)
     event_handler = GraphEventHandler(
         yaml_file,
         dot_file,
         svg_file,
-        html_file,
-        driver,
+        None,
+        None,
+        None,
         options,
         webdriver,
         wrap_width,
         data,
-        d,
-        t,
+        initial_state,
     )
+    preview_server = FlowchartPreviewServer(event_handler)
+    preview_server.start()
+    event_handler.preview_url = preview_server.base_url
+    event_handler.svg_url = preview_server.svg_url
+
+    driver = start_chrome(webdriver, options, preview_server.base_url)
+    event_handler.driver = driver
+
+    if t is not None and str(t).strip():
+        driver.get(
+            preview_server.base_url
+            + "?t="
+            + urllib.parse.quote(str(t).strip())
+        )
+    elif d:
+        driver.get(preview_server.base_url + "?d=1")
+
     observer = Observer()
     observer.schedule(event_handler, yaml_file.parent, recursive=False)
     observer.start()
+    dead_since = None
     try:
         while True:
-            # Exit the watcher when the browser window is closed so the CLI
-            # process does not stay alive in the background.
-            if not browser_window_is_alive(event_handler.driver):
-                break
-            time.sleep(1)
+            preview_server.serve_pending_request()
+            # Exit the watcher when the browser window is really closed, but
+            # tolerate short Selenium liveness errors during top-level
+            # navigation (for example when opening /?t=... from the links).
+            if browser_window_is_alive(event_handler.driver):
+                dead_since = None
+            else:
+                if dead_since is None:
+                    dead_since = time.time()
+                elif time.time() - dead_since >= 1.0:
+                    break
+            time.sleep(0.1)
     except KeyboardInterrupt:
         pass
     finally:
         observer.stop()
         observer.join()
         close_chrome(event_handler.driver)
+        preview_server.stop()

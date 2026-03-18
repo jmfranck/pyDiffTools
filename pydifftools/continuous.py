@@ -312,7 +312,8 @@ position
             );
         });
 
-        // When the page has loaded, restore hidden comments and scroll position
+        // When the page has loaded,
+        // restore hidden comments and scroll position
         window.addEventListener('load', function() {
             var hiddenCommentIndexes = sessionStorage.getItem(
                 'commentHiddenBubbleIndexes'
