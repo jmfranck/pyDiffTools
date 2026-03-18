@@ -814,18 +814,21 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
     observer = Observer()
     observer.schedule(event_handler, yaml_file.parent, recursive=False)
     observer.start()
+    dead_since = None
     try:
         while True:
             preview_server.serve_pending_request()
-            # Exit the watcher when the browser window is closed so the CLI
-            # process does not stay alive in the background.
-            # Navigation between / and /?t=... can briefly report liveness
-            # errors while Chrome swaps documents. Require two consecutive dead
-            # checks so click navigation is not mistaken for a closed window.
-            if not browser_window_is_alive(event_handler.driver):
-                time.sleep(0.2)
-                if not browser_window_is_alive(event_handler.driver):
+            # Exit the watcher when the browser window is really closed, but
+            # tolerate short Selenium liveness errors during top-level
+            # navigation (for example when opening /?t=... from the links).
+            if browser_window_is_alive(event_handler.driver):
+                dead_since = None
+            else:
+                if dead_since is None:
+                    dead_since = time.time()
+                elif time.time() - dead_since >= 1.0:
                     break
+            time.sleep(0.1)
     except KeyboardInterrupt:
         pass
     finally:
