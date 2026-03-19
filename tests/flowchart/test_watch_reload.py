@@ -3,7 +3,11 @@ import subprocess
 import pytest
 
 from pydifftools.flowchart.graph import write_dot_from_yaml
-from pydifftools.flowchart.watch_graph import _reload_svg, _watch_html
+from pydifftools.flowchart.watch_graph import (
+    _reload_svg,
+    _watch_html,
+    _watch_view_state_from_params,
+)
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -52,9 +56,25 @@ def test_watch_html_uses_block_embed(tmp_path):
     assert "<a href='/?d=1'>date-ordered</a>" in html
 
 
-def test_watch_html_shows_dependency_link_in_date_mode():
+def test_watch_html_shows_project_overview_link_in_date_mode():
     html = _watch_html("/graph.svg", True)
-    assert "<a href='/'>dependency-ordered</a>" in html
+    assert "<a href='/'>project overview</a>" in html
+
+
+def test_watch_html_shows_project_overview_link_in_task_mode():
+    html = _watch_html("/graph.svg", False, "task_a")
+    assert "<a href='/?d=1'>date-ordered</a>" in html
+    assert "<a href='/'>project overview</a>" in html
+
+
+def test_watch_view_state_defaults_to_project_overview():
+    assert _watch_view_state_from_params({}) == (False, None)
+
+
+def test_watch_view_state_prefers_task_mode_over_date_mode():
+    assert _watch_view_state_from_params(
+        {"d": ["1"], "t": ["task_a"]}
+    ) == (False, "task_a")
 
 
 class FakeObserver:

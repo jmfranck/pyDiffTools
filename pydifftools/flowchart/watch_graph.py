@@ -229,21 +229,48 @@ def _svg_add_canvas_padding(svg_root, padding=8.0):
     )
 
 
-def _watch_html(svg_url, order_by_date):
+def _watch_view_state_from_params(params):
+    # Treat each GET query as the full requested mode so navigation links can
+    # reliably switch back to the overview without depending on prior state.
+    order_by_date = False
+    target_task = None
+    if "d" in params:
+        d_value = params["d"][-1]
+        order_by_date = d_value in ("1", "true", "yes", "on", "")
+    if "t" in params:
+        t_value = params["t"][-1].strip()
+        if t_value:
+            target_task = t_value
+            order_by_date = False
+    return order_by_date, target_task
+
+
+def _watch_footer_links(order_by_date, target_task=None):
+    links = []
+    if order_by_date:
+        links.append(("/", "project overview"))
+    else:
+        links.append(("/?d=1", "date-ordered"))
+        if target_task is not None and str(target_task).strip():
+            links.append(("/", "project overview"))
+    return links
+
+
+def _watch_html(svg_url, order_by_date, target_task=None):
     # Keep the SVG as the page's main content so browser zoom behavior matches
     # the original watcher experience (the graph scales, not just footer text).
-    # The footer link toggles between dependency/date views depending on mode.
-    footer_label = "date-ordered"
-    footer_url = "/?d=1"
-    if order_by_date:
-        footer_label = "dependency-ordered"
-        footer_url = "/"
+    footer_html = " | ".join(
+        f"<a href='{footer_url}'>{footer_label}</a>"
+        for footer_url, footer_label in _watch_footer_links(
+            order_by_date, target_task
+        )
+    )
     return (
         "<html><body style='margin:0'>"
         "<embed id='svg-view' style='display:block;' type='image/svg+xml'"
         f" src='{svg_url}'/>"
         "<p style='margin:0.4em 0.8em;font-family:sans-serif;font-size:13px;'>"
-        f"<a href='{footer_url}'>{footer_label}</a>"
+        f"{footer_html}"
         "</p>"
         "</body></html>"
     )
@@ -665,24 +692,9 @@ class FlowchartPreviewServer:
                 params = urllib.parse.parse_qs(
                     parsed.query, keep_blank_values=True
                 )
-                order_by_date = event_handler.state["order_by_date"]
-                target_task = event_handler.state["target_task"]
-                if "d" in params:
-                    d_value = params["d"][-1]
-                    order_by_date = d_value in (
-                        "1",
-                        "true",
-                        "yes",
-                        "on",
-                        "",
-                    )
-                if "t" in params:
-                    t_value = params["t"][-1].strip()
-                    if t_value:
-                        target_task = t_value
-                        order_by_date = False
-                    else:
-                        target_task = None
+                order_by_date, target_task = _watch_view_state_from_params(
+                    params
+                )
 
                 if (
                     order_by_date != event_handler.state["order_by_date"]
@@ -701,7 +713,9 @@ class FlowchartPreviewServer:
                     )
 
                 body = _watch_html(
-                    "/graph.svg", event_handler.state["order_by_date"]
+                    "/graph.svg",
+                    event_handler.state["order_by_date"],
+                    event_handler.state["target_task"],
                 )
                 body_bytes = body.encode("utf-8")
                 self.send_response(200)
