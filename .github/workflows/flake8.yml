@@ -46,7 +46,7 @@ jobs:
           fi
           echo "$MYCMD"
           echo "$($MYCMD)"
-          CHANGED_FILES=$($MYCMD | grep '\.py$' | sed '/__init/d' | sed '/demos\//d' | tr '\n' ' ')
+          CHANGED_FILES=$($MYCMD | grep '\.py$' | sed '/__init/d' | sed '/command_line/d' | sed '/demos\//d' | tr '\n' ' ')
           echo "Here are the changed py files:"
           echo "$CHANGED_FILES"
           echo "CHANGED_FILES=$CHANGED_FILES" >> $GITHUB_ENV

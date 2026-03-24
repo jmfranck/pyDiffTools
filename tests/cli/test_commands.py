@@ -4,14 +4,14 @@ import sys
 import time
 from pathlib import Path
 from unittest.mock import patch
+from pydifftools import continuous
 from pydifftools.continuous import run_pandoc
+from pydifftools.command_line import mfs
 
 
 def _make_cli_env(tmp_path):
     repo_root = Path(__file__).resolve().parents[2]
     env = os.environ.copy()
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
     stub_dir = tmp_path / "stubs"
     stub_dir.mkdir()
     (stub_dir / "argcomplete.py").write_text(
@@ -25,19 +25,39 @@ def _make_cli_env(tmp_path):
     (stub_dir / "psutil.py").write_text("pass\n")
     bib_path = Path("~/testlib.bib").expanduser()
     bib_path.write_text("@book{dummy, title={Dummy}}\n")
-    crossref_script = bin_dir / "pandoc-crossref"
-    crossref_script.write_text(
-        "#!/usr/bin/env python3\nimport sys\n"
-        "sys.stdout.write(sys.stdin.read())\n"
-    )
-    crossref_script.chmod(0o755)
-    env["PATH"] = f"{bin_dir}:{env['PATH']}"
-    env["PYTHONPATH"] = f"{stub_dir}:{repo_root}"
+    # Ensure CLI subprocesses can see conda-installed tools and libraries.
+    env["PATH"] = f"/root/conda/bin:{env['PATH']}"
+    if "PYTHONPATH" in env:
+        env["PYTHONPATH"] = (
+            f"{stub_dir}:{repo_root}:/root/conda/lib/python3.12/site-packages:"
+            f"{env['PYTHONPATH']}"
+        )
+    else:
+        env["PYTHONPATH"] = (
+            f"{stub_dir}:{repo_root}:/root/conda/lib/python3.12/site-packages"
+        )
     env["PYDIFFTOOLS_FAKE_MATHJAX"] = "1"
     env["PYDIFFTOOLS_UPDATE_CHECK_LAST_RAN_UTC_DATE"] = time.strftime(
         "%Y-%m-%d", time.gmtime()
     )
     return env
+
+
+def write_minimal_bibliography_and_csl(target_dir):
+    # Create citation support files that run_pandoc requires.
+    (target_dir / "references.bib").write_text(
+        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
+    )
+    (target_dir / "style.csl").write_text(
+        '<?xml version="1.0" encoding="utf-8"?>\n<style'
+        ' xmlns="http://purl.org/net/xbiblio/csl" version="1.0"'
+        ' class="in-text">\n  <info>\n    <title>Minimal</title>\n   '
+        " <id>minimal</id>\n    <updated>2023-01-01T00:00:00Z</updated>\n "
+        " </info>\n  <citation>\n    <layout>\n      <text"
+        ' variable="title"/>\n    </layout>\n  </citation>\n  <bibliography>\n'
+        '    <layout>\n      <text variable="title"/>\n    </layout>\n '
+        " </bibliography>\n</style>"
+    )
 
 
 def test_wgrph_missing_file(tmp_path):
@@ -176,25 +196,7 @@ def test_cpb_hides_low_headers(tmp_path):
     markdown_file = tmp_path / "notes.md"
     markdown_file.write_text(markdown_content)
 
-    # 2. Provide minimal valid BibTeX content
-    (tmp_path / "references.bib").write_text(
-        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
-    )
-
-    # 3. Provide a VALID minimal CSL file.
-    # An empty <style> tag causes 'CiteprocParseError: No citation
-    # element present'.
-    csl_content = (
-        '<?xml version="1.0" encoding="utf-8"?>\n<style'
-        ' xmlns="http://purl.org/net/xbiblio/csl" version="1.0"'
-        ' class="in-text">\n  <info>\n    <title>Minimal</title>\n   '
-        " <id>minimal</id>\n    <updated>2023-01-01T00:00:00Z</updated>\n "
-        " </info>\n  <citation>\n    <layout>\n      <text"
-        ' variable="title"/>\n    </layout>\n  </citation>\n  <bibliography>\n'
-        '    <layout>\n      <text variable="title"/>\n    </layout>\n '
-        " </bibliography>\n</style>"
-    )
-    (tmp_path / "style.csl").write_text(csl_content)
+    write_minimal_bibliography_and_csl(tmp_path)
     html_file = tmp_path / "notes.html"
     cwd = os.getcwd()
     os.chdir(tmp_path)
@@ -206,3 +208,476 @@ def test_cpb_hides_low_headers(tmp_path):
     html_content = html_file.read_text()
     assert "h5, h6 { display: none; }" in html_content
     assert "h4" not in html_content.split("display:")[-1]
+
+
+def test_mfs_starts_cpb_when_socket_missing(tmp_path):
+    (tmp_path / "notes.md").write_text("alpha\nneedle\nomega\n")
+    (tmp_path / "other.md").write_text("does not match\n")
+
+    calls = {
+        "connect": 0,
+        "sendall": [],
+    }
+
+    class FakeSocket:
+        def __init__(self, *args, **kwargs):
+            return
+
+        def connect(self, _address):
+            calls["connect"] += 1
+            if calls["connect"] == 1:
+                raise OSError("socket not ready")
+
+        def sendall(self, payload):
+            calls["sendall"].append(payload)
+
+        def close(self):
+            return
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with patch("pydifftools.command_line.socket.socket", FakeSocket):
+            with patch("pydifftools.command_line.os.fork", return_value=123):
+                with patch("pydifftools.command_line.time.sleep"):
+                    mfs("needle")
+        assert calls["connect"] >= 2
+        assert calls["sendall"] == [b"needle"]
+    finally:
+        os.chdir(cwd)
+
+
+def test_mfs_waits_up_to_20_seconds_for_socket(tmp_path):
+    (tmp_path / "notes.md").write_text("alpha\nneedle\nomega\n")
+
+    calls = {
+        "connect": 0,
+        "sleep": 0,
+    }
+
+    class FakeSocket:
+        def __init__(self, *args, **kwargs):
+            return
+
+        def connect(self, _address):
+            calls["connect"] += 1
+            raise OSError("socket not ready")
+
+        def sendall(self, _payload):
+            return
+
+        def close(self):
+            return
+
+    def fake_sleep(_seconds):
+        calls["sleep"] += 1
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with patch("pydifftools.command_line.socket.socket", FakeSocket):
+            with patch("pydifftools.command_line.os.fork", return_value=123):
+                with patch("pydifftools.command_line.time.sleep", fake_sleep):
+                    try:
+                        mfs("needle")
+                        assert False, "Expected mfs to raise RuntimeError"
+                    except RuntimeError as exc:
+                        assert "within 20 seconds" in str(exc)
+        # one initial connect plus 80 retries gives a full 20-second wait
+        # window
+        assert calls["connect"] == 81
+        assert calls["sleep"] == 80
+    finally:
+        os.chdir(cwd)
+
+
+def test_run_pandoc_adds_css_lua_and_js_files_from_markdown_directory(
+    tmp_path, monkeypatch
+):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    markdown_file = project_dir / "notes.md"
+    markdown_file.write_text("# Title\n")
+    (project_dir / "references.bib").write_text(
+        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
+    )
+    (project_dir / "style.csl").write_text(
+        '<?xml version="1.0" encoding="utf-8"?><style '
+        'xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
+    )
+    (project_dir / "site.css").write_text("body { color: red; }\n")
+    (project_dir / "print.css").write_text(
+        "@media print { body { color: black; } }\n"
+    )
+    (project_dir / "cleanup.lua").write_text("return {}\n")
+    (project_dir / "numbers.lua").write_text("return {}\n")
+    (project_dir / "extras.js").write_text('console.log("extras");\n')
+    (project_dir / "widgets.js").write_text('console.log("widgets");\n')
+    html_file = tmp_path / "notes.html"
+    captured_command = {}
+
+    # Skip external tool checks and capture the exact pandoc command.
+    monkeypatch.setattr(
+        "pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool"
+    )
+
+    def fake_run(command):
+        captured_command["value"] = command
+        with open(html_file, "w", encoding="utf-8") as fp:
+            fp.write(
+                '<html><head><script id="MathJax-script" '
+                'src="MathJax-3.1.2/es5/tex-mml-chtml.js"></script></head>'
+                "<body>ok</body></html>"
+            )
+
+    monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
+
+    run_pandoc(str(markdown_file), str(html_file))
+
+    css_pairs = []
+    lua_pairs = []
+    command = captured_command["value"]
+    for index, token in enumerate(command[:-1]):
+        if token == "--css":
+            css_pairs.append(command[index + 1])
+        if token == "--lua-filter":
+            lua_pairs.append(command[index + 1])
+    assert css_pairs == [
+        str(project_dir / "print.css"),
+        str(project_dir / "site.css"),
+    ]
+    assert lua_pairs == [
+        str(project_dir / "cleanup.lua"),
+        str(project_dir / "numbers.lua"),
+    ]
+    html_content = html_file.read_text()
+    assert "MathJax-script" in html_content
+    assert (
+        '<script src="' + str(project_dir / "extras.js") + '"></script>'
+    ) in html_content
+    assert (
+        '<script src="' + str(project_dir / "widgets.js") + '"></script>'
+    ) in html_content
+
+
+def test_run_pandoc_copies_comment_assets_when_comment_tags_present(
+    tmp_path, monkeypatch
+):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    markdown_file = project_dir / "notes.md"
+    markdown_file.write_text("# Title\n\n<comment>hello</comment>\n")
+    (project_dir / "references.bib").write_text(
+        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
+    )
+    (project_dir / "style.csl").write_text(
+        '<?xml version="1.0" encoding="utf-8"?><style '
+        'xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
+    )
+    html_file = tmp_path / "notes.html"
+
+    monkeypatch.setattr(
+        "pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool"
+    )
+
+    def fake_run(_command):
+        with open(html_file, "w", encoding="utf-8") as fp:
+            fp.write("<html><head></head><body>ok</body></html>")
+
+    monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
+
+    run_pandoc(str(markdown_file), str(html_file))
+
+    assert (project_dir / "comments.css").exists()
+    assert (project_dir / "comment_tags.lua").exists()
+    assert (project_dir / "comment_toggle.js").exists()
+
+
+def test_run_pandoc_does_not_overwrite_existing_comment_assets(
+    tmp_path, monkeypatch
+):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    markdown_file = project_dir / "notes.md"
+    markdown_file.write_text("# Title\n\n<comment>hello</comment>\n")
+    (project_dir / "references.bib").write_text(
+        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
+    )
+    (project_dir / "style.csl").write_text(
+        '<?xml version="1.0" encoding="utf-8"?><style '
+        'xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
+    )
+    for asset_name in ["comments.css", "comment_tags.lua", "comment_toggle.js"]:
+        (project_dir / asset_name).write_text(f"local override {asset_name}\n")
+    html_file = tmp_path / "notes.html"
+
+    monkeypatch.setattr(
+        "pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool"
+    )
+
+    def fake_run(_command):
+        with open(html_file, "w", encoding="utf-8") as fp:
+            fp.write("<html><head></head><body>ok</body></html>")
+
+    monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
+
+    run_pandoc(str(markdown_file), str(html_file))
+
+    for asset_name in ["comments.css", "comment_tags.lua", "comment_toggle.js"]:
+        assert (project_dir / asset_name).read_text() == (
+            f"local override {asset_name}\n"
+        )
+
+
+def test_append_autorefresh_persists_comment_hidden_state(tmp_path):
+    html_file = tmp_path / "notes.html"
+    html_file.write_text("<html><head></head><body>ok</body></html>")
+
+    fake_handler = type("FakeHandler", (), {"html_file": str(html_file)})()
+    continuous.Handler.append_autorefresh(fake_handler)
+
+    html_content = html_file.read_text()
+    assert "commentHiddenBubbleIndexes" in html_content
+    assert "commentBubbleSelector" in html_content
+    assert "classList.contains('comment-hidden')" in html_content
+    assert "classList.add('comment-hidden')" in html_content
+
+
+def test_comment_filter_mode_switches_to_margin_and_back(tmp_path):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    active_filter = project_dir / "comment_tags.lua"
+    inactive_filter = project_dir / "comment_tags.lua.inactive"
+    active_filter.write_text("normal filter\n")
+
+    continuous._set_comment_filter_mode(str(project_dir), True)
+    active_margin = active_filter.read_text()
+    assert continuous.MARGIN_COMMENTS_FILTER_MARKER in active_margin
+    assert inactive_filter.read_text() == "normal filter\n"
+
+    continuous._set_comment_filter_mode(str(project_dir), False)
+    assert active_filter.read_text() == "normal filter\n"
+    assert continuous.MARGIN_COMMENTS_FILTER_MARKER in inactive_filter.read_text()
+
+
+def test_comment_filter_mode_restores_repo_default_when_inactive_missing(tmp_path):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    active_filter = project_dir / "comment_tags.lua"
+    inactive_filter = project_dir / "comment_tags.lua.inactive"
+
+    margin_repo_filter = (
+        Path(continuous.__file__).resolve().parent / "comment_tags_margin.lua"
+    )
+    active_filter.write_text(margin_repo_filter.read_text())
+
+    continuous._set_comment_filter_mode(str(project_dir), False)
+
+    assert active_filter.exists()
+    assert inactive_filter.exists()
+    assert continuous.MARGIN_COMMENTS_FILTER_MARKER not in active_filter.read_text()
+    assert continuous.MARGIN_COMMENTS_FILTER_MARKER in inactive_filter.read_text()
+
+
+def test_margin_comment_filter_uses_overlay_style_for_inline_comments():
+    margin_filter = (
+        Path(continuous.__file__).resolve().parent / "comment_tags_margin.lua"
+    ).read_text()
+    assert "comment-inline-margin" in margin_filter
+    assert "comment-margin-left" in margin_filter
+    assert "comment-inline-break-before" in margin_filter
+    assert "comment-inline-break-after" in margin_filter
+    assert "comment-pin comment-pin-block" in margin_filter
+    assert 'pandoc.RawInline(' in margin_filter
+
+
+def test_run_pandoc_comment_tag_regression_end_to_end(tmp_path):
+    # This markdown reproduces the current failing mode where list content
+    # inside <comment> leaks into the main body text.
+    markdown_content = """Because these contributions have a smaller
+linewidth and because the amplitude of the
+derivative signal is inversely proportional
+to the square of the linewidth,
+the spectrum responds correspondingly dramatically
+to contributions from the RMs with low local
+concentration.
+<comment>
+☐ TODO:
+    Include a comparison of actual lines in the
+    plot.
+</comment>
+<comment>
+☐ TODO:
+    Make sure the git repo has the updated
+    version of the plot that you crafted and
+    presented on slack!!
+</comment>
+Correspondingly,
+<comment>
+☐ TODO:
+Here, you want to guide people more
+explicitly through exactly what you are
+talking about:
+
+* For people unaccustomed to ESR spectra, you
+    want to specifically talk in terms of the
+    "initial positive maximum" and the "final
+    minimum".
+* You need to be sure that you're
+    explaining that in this concentration
+    range, you transition from three resolved
+    hyperfine lines to a single, broad line.
+</comment>
+ESR measurements at lower water loading include [@dummy_ref].
+
+<comment>
+☐ TODO:
+    I think a lot of the following caption is
+    description.
+</comment>
+
+::: {.comment-right}
+☐ TODO:
+It's still unclear what causes the low-$E_a$ region.
+:::
+"""
+    markdown_file = tmp_path / "notes.md"
+    html_file = tmp_path / "notes.html"
+    markdown_file.write_text(markdown_content)
+    write_minimal_bibliography_and_csl(tmp_path)
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        run_pandoc(str(markdown_file), str(html_file))
+    finally:
+        os.chdir(cwd)
+
+    html_content = html_file.read_text()
+
+    # Ensure comments generated from <comment> tags and .comment-right blocks
+    # are rendered as bubbles in the output html.
+    assert html_content.count('class="comment-pin"') >= 3
+    assert 'class="comment-right"' in html_content
+
+    # Regression assertion: this phrase should be present inside a comment
+    # overlay and not leaked into a main-body list.
+    phrase = "For people unaccustomed to ESR spectra"
+    assert phrase in html_content
+    assert '<div class="comment-overlay comment-right"' in html_content
+    assert "<ul>" in html_content
+
+    # Confirm the bullet list is inside a comment overlay block.
+    overlay_with_list = False
+    sections = html_content.split('<div class="comment-overlay comment-right"')
+    for section in sections[1:]:
+        if phrase in section and "<ul>" in section:
+            overlay_with_list = True
+            break
+    assert overlay_with_list
+
+
+def test_comment_css_arrow_geometry_constants(tmp_path):
+    # Keep explicit geometry values in test constants so future style edits can
+    # update one place and immediately see behavior changes in this test.
+    arrow_height_px = 8
+    arrow_width_px = 8
+    left_arrow_width_px = 16
+    bubble_separation_rem = 0.5
+    overlap_shift_rem = 1
+    overlay_right_shift_rem = 0.45
+    overlay_rise_rem = 0.65
+    inline_rise_rem = 0.35
+
+    markdown_file = tmp_path / "notes.md"
+    html_file = tmp_path / "notes.html"
+    markdown_file.write_text(
+        "Body [@dummy_ref].\n\n<comment>Inline bubble</comment>\n"
+    )
+    write_minimal_bibliography_and_csl(tmp_path)
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        run_pandoc(str(markdown_file), str(html_file))
+    finally:
+        os.chdir(cwd)
+
+    css_content = (tmp_path / "comments.css").read_text()
+    js_content = (tmp_path / "comment_toggle.js").read_text()
+
+    # Left/right pointer triangles should use the configured arrow size.
+    assert "span.comment-pin > span.comment-right::before" in css_content
+    assert "span.comment-pin > span.comment-left::before" in css_content
+    assert ".comment-overlay.comment-right::before" in css_content
+    assert ".comment-overlay.comment-left::before" in css_content
+    assert ".comment-overlay.comment-margin-left" in css_content
+    assert ".comment-inline-break-marker" in css_content
+    assert "var(--comment-left-arrow-width)" in css_content
+    assert "var(--comment-arrow-width)" in css_content
+    assert "var(--comment-arrow-height)" in css_content
+
+    # The configured css variables control arrow height/width and overlap
+    # shift.
+    assert f"--comment-arrow-height: {arrow_height_px}px;" in css_content
+    assert f"--comment-arrow-width: {arrow_width_px}px;" in css_content
+    assert (
+        f"--comment-left-arrow-width: {left_arrow_width_px}px;" in css_content
+    )
+    assert f"--comment-overlap-shift: {overlap_shift_rem}rem;" in css_content
+    assert (
+        f"--comment-overlay-right-shift: {overlay_right_shift_rem}rem;"
+        in css_content
+    )
+    assert f"--comment-overlay-rise: {overlay_rise_rem}rem;" in css_content
+    assert f"--comment-inline-rise: {inline_rise_rem}rem;" in css_content
+
+    # Bubble separation (gap) must match the configured value for both sides.
+    assert f"left: {bubble_separation_rem}rem;" in css_content
+    assert f"right: {bubble_separation_rem}rem;" in css_content
+    assert f"--comment-gap: {bubble_separation_rem}rem;" in css_content
+
+    # JS should convert css length variables to pixels before geometry math,
+    # otherwise rem-based values do not affect rendered spacing correctly.
+    assert "--comment-overlap-shift" in js_content
+    assert "--comment-overlay-right-shift" in js_content
+    assert "--comment-overlay-rise" in js_content
+    assert "--comment-inline-rise" in js_content
+    assert "--comment-gap" in js_content
+    assert "function cssLengthToPx" in js_content
+    assert "function cssVariableLengthPx" in js_content
+    assert "SELECTOR_INLINE" in js_content
+    assert "useMobileFlow" in js_content
+    assert 'comment-margin-left' in js_content
+    assert "bubble.style.transform" in js_content
+    assert "left = ax + gap + overlayRightShift" in js_content
+    assert "const top = ay - overlayRise" in js_content
+
+
+def test_mfs_errors_when_no_matching_markdown(tmp_path):
+    (tmp_path / "notes.md").write_text("alpha\nbeta\n")
+
+    class FakeSocket:
+        def __init__(self, *args, **kwargs):
+            return
+
+        def connect(self, _address):
+            raise OSError("socket not ready")
+
+        def sendall(self, _payload):
+            return
+
+        def close(self):
+            return
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with patch("pydifftools.command_line.socket.socket", FakeSocket):
+            try:
+                mfs("needle")
+                assert False, "Expected mfs to raise RuntimeError"
+            except RuntimeError as exc:
+                assert "could not find the requested text" in str(exc)
+    finally:
+        os.chdir(cwd)

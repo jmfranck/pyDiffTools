@@ -23,6 +23,6 @@ def test_inline_code_wrapped_with_courier_font(tmp_path):
     assert m, "label not found"
     label = m.group(1)
 
-    assert "<font face=\"Courier\">inline code</font>" in label
-    assert "<font face=\"Courier\">second bit</font>" in label
+    assert '<font face="Courier">inline code</font>' in label
+    assert '<font face="Courier">second bit</font>' in label
     assert "`" not in label

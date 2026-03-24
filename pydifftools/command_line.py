@@ -10,6 +10,8 @@ import re
 import nbformat
 import difflib
 import shutil
+import socket
+import importlib.util
 from pathlib import Path
 from . import (
     match_spaces,
@@ -17,7 +19,7 @@ from . import (
     outline,
     update_check,
 )
-from .continuous import cpb
+from .continuous import cpb, FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT
 from .wrap_sentences import wr as wrap_sentences_wr  # registers wrap command
 from .separate_comments import tex_sepcomments
 from .unseparate_comments import tex_unsepcomments
@@ -26,10 +28,30 @@ from .copy_files import copy_image_files
 from .searchacro import replace_acros
 from .rearrange_tex import run as rearrange_tex_run
 from .flowchart.watch_graph import wgrph
+from .flowchart.graph import load_graph_yaml
 from .notebook.tex_to_qmd import tex2qmd
 from .notebook.fast_build import qmdb, qmdinit
 
 from .command_registry import _COMMAND_SPECS, register_command
+
+_ARGCOMPLETE_SPEC = importlib.util.find_spec("argcomplete")
+if (
+    _ARGCOMPLETE_SPEC is not None
+    and _ARGCOMPLETE_SPEC.submodule_search_locations is not None
+):
+    _ARGCOMPLETE_COMPLETERS_SPEC = importlib.util.find_spec(
+        "argcomplete.completers"
+    )
+else:
+    _ARGCOMPLETE_COMPLETERS_SPEC = None
+if _ARGCOMPLETE_SPEC is not None:
+    import argcomplete
+else:
+    argcomplete = None
+if _ARGCOMPLETE_COMPLETERS_SPEC is not None:
+    from argcomplete.completers import FilesCompleter
+else:
+    FilesCompleter = None
 
 
 def printed_exec(cmd):
@@ -55,6 +77,37 @@ _ROOT = os.path.abspath(os.path.dirname(__file__))
 def get_data(path):
     "return vbs and js scripts saved as package data"
     return os.path.join(_ROOT, path)
+
+
+def wgrph_task_completer(prefix, parsed_args, **kwargs):
+    # Provide case-insensitive task name completions for wgrph -t.
+    if parsed_args is None or not hasattr(parsed_args, "yaml"):
+        return []
+    yaml_path = Path(parsed_args.yaml)
+    if not yaml_path.exists():
+        return []
+    try:
+        data = load_graph_yaml(str(yaml_path))
+    except Exception:
+        return []
+    if "nodes" not in data:
+        return []
+    prefix_lower = prefix.lower()
+    matches = []
+    for name in data["nodes"]:
+        if (
+            "style" in data["nodes"][name]
+            and data["nodes"][name]["style"] == "completed"
+        ):
+            continue
+        if name.lower().startswith(prefix_lower):
+            # Preserve case-insensitive matches even when the typed prefix
+            # doesn't match case so argcomplete still accepts the suggestion.
+            if name.startswith(prefix):
+                matches.append(name)
+            else:
+                matches.append(prefix + name[len(prefix) :])
+    return matches
 
 
 def recursive_include_search(directory, basename, does_it_input):
@@ -119,8 +172,7 @@ def look_for_pdf(directory, origbasename):
 def nb2py(arguments):
     assert arguments[0].endswith(".ipynb"), (
         "this is supposed to be called with a .ipynb file argument! (arguments"
-        " are %s)"
-        % repr(arguments)
+        " are %s)" % repr(arguments)
     )
     nb = nbformat.read(arguments[0], nbformat.NO_CONVERT)
     last_was_markdown = False
@@ -177,8 +229,7 @@ def py2nb(arguments):
     assert len(arguments) == 1, "py2nb should only be called with one argument"
     assert arguments[0].endswith(".py"), (
         "this is supposed to be called with a .py file argument! (arguments"
-        " are %s)"
-        % repr(arguments)
+        " are %s)" % repr(arguments)
     )
     with open(arguments[0], encoding="utf-8") as fpin:
         text = fpin.read()
@@ -234,13 +285,15 @@ def py2nb(arguments):
     nbook = nbformat.v3.reads_py(text)
 
     nbook = nbformat.v4.upgrade(nbook)  # Upgrade nbformat.v3 to nbformat.v4
-    nbook.metadata.update({
-        "kernelspec": {
-            "name": "Python [Anaconda2]",
-            "display_name": "Python [Anaconda2]",
-            "language": "python",
+    nbook.metadata.update(
+        {
+            "kernelspec": {
+                "name": "Python [Anaconda2]",
+                "display_name": "Python [Anaconda2]",
+                "language": "python",
+            }
         }
-    })
+    )
 
     jsonform = nbformat.v4.writes(nbook) + "\n"
     with open(
@@ -459,6 +512,62 @@ def fs(arguments):
     if os.name == "posix":
         cmd = ["wmctrl", "-a", basename + ".pdf"]
         os.system(" ".join(cmd))
+
+
+@register_command(
+    "markdown forward search, use with cpb to jump to text in the browser"
+)
+def mfs(text):
+    # Send the requested search text to the cpb socket listener.
+    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        client.connect((FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT))
+    except OSError as exc:
+        client.close()
+        # If cpb isn't running yet, choose a markdown file in this directory
+        # that contains the requested search text and start cpb for it.
+        matching_files = []
+        for filename in sorted(os.listdir(".")):
+            if not filename.endswith(".md"):
+                continue
+            with open(filename, encoding="utf-8") as fp:
+                if text in fp.read():
+                    matching_files.append(filename)
+        if len(matching_files) == 0:
+            raise RuntimeError(
+                "Could not connect to cpb forward search socket and "
+                "could not find the requested text in any .md file in the "
+                "current directory."
+            ) from exc
+        if len(matching_files) > 1:
+            print(
+                "Found search text in multiple markdown files. "
+                "Starting cpb for",
+                matching_files[0],
+            )
+        pid = os.fork()
+        if pid == 0:
+            try:
+                cpb(matching_files[0])
+            finally:
+                os._exit(0)
+        # Wait up to 20 seconds so the child can bring up the listener,
+        # then resend the forward-search text.
+        for _ in range(80):
+            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                client.connect((FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT))
+                break
+            except OSError:
+                client.close()
+                time.sleep(0.25)
+        else:
+            raise RuntimeError(
+                "Started cpb automatically, but the forward search socket "
+                "did not come up within 20 seconds."
+            )
+    client.sendall(text.encode("utf-8"))
+    client.close()
 
 
 @register_command("Convert xml to xlsx")
@@ -687,8 +796,35 @@ def pmd(arguments):
     p1.wait()
 
 
+def _subcommand_help_hint(prog):
+    return (
+        f"*** Run '{prog} --help <subcommand>' to learn about "
+        "subcommand options. ***"
+    )
+
+
+class PyDiffArgumentParser(argparse.ArgumentParser):
+    """ArgumentParser with a clearer root-level missing-subcommand hint."""
+
+    def __init__(self, *args, is_root_parser=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._pydifft_is_root_parser = is_root_parser
+
+    def error(self, message):
+        if self._pydifft_is_root_parser:
+            self.print_usage(sys.stderr)
+            hint = _subcommand_help_hint(self.prog)
+            self.exit(2, f"{self.prog}: error: {message}\n{hint}\n")
+        super().error(message)
+
+
 def build_parser():
-    parser = argparse.ArgumentParser()
+    parser = PyDiffArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        is_root_parser=True,
+    )
+    parser.epilog = _subcommand_help_hint(parser.prog)
+    parser._pydifft_subparsers = {}
     subparsers = parser.add_subparsers(dest="command")
     subparsers.required = True
     for name, spec in _COMMAND_SPECS.items():
@@ -704,8 +840,28 @@ def build_parser():
         for argument in arguments:
             flags = argument["flags"]
             kwargs = dict(argument["kwargs"])
-            subparser.add_argument(*flags, **kwargs)
+            action = subparser.add_argument(*flags, **kwargs)
+            if (
+                FilesCompleter is not None
+                and name == "wgrph"
+                and action.dest == "yaml"
+            ):
+                # Provide YAML-only completions for the flowchart watcher.
+                action.completer = FilesCompleter(
+                    allowednames=["*.yaml", "*.yml"]
+                )
+            if (
+                FilesCompleter is not None
+                and name == "cpb"
+                and action.dest == "filename"
+            ):
+                # Provide Markdown-only completions for continuous pandoc build.
+                action.completer = FilesCompleter(allowednames=["*.md"])
+            if name == "wgrph" and action.dest == "t":
+                # Offer case-insensitive completions for incomplete task names.
+                action.completer = wgrph_task_completer
         subparser.set_defaults(_handler=spec["handler"])
+        parser._pydifft_subparsers[name] = subparser
     return parser
 
 
@@ -732,9 +888,17 @@ def main(argv=None):
                 file=sys.stderr,
             )
     parser = build_parser()
+    if argcomplete is not None:
+        # Enable argcomplete integration when the dependency is available.
+        argcomplete.autocomplete(parser)
     if not argv:
         parser.print_help()
         return
+    if argv[0] in ("-h", "--help") and len(argv) > 1:
+        subcommand = argv[1]
+        if subcommand in parser._pydifft_subparsers:
+            parser._pydifft_subparsers[subcommand].print_help()
+            return
     namespace = parser.parse_args(argv)
     handler = namespace._handler
     handler_kwargs = dict(vars(namespace))
