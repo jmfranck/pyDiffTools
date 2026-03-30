@@ -27,6 +27,7 @@ from .comment_functions import matchingbrackets
 from .copy_files import copy_image_files
 from .searchacro import replace_acros
 from .rearrange_tex import run as rearrange_tex_run
+from .git_gd import gd  # registers git difftool review command
 from .flowchart.watch_graph import wgrph
 from .flowchart.graph import load_graph_yaml
 from .notebook.tex_to_qmd import tex2qmd

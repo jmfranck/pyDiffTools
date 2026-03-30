@@ -4,9 +4,12 @@ import sys
 import time
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 from pydifftools import continuous
 from pydifftools.continuous import run_pandoc
 from pydifftools.command_line import mfs
+from pydifftools.git_gd import INSTALL_ALIAS_VALUE, build_entries
 
 
 def _make_cli_env(tmp_path):
@@ -181,6 +184,83 @@ def test_markdown_outline_reorder(tmp_path):
     content = target.read_text()
     assert content.index("## Second Topic") < content.index("## First Topic")
     assert "##### Hidden Notes" in content
+
+
+def test_gd_install_sets_git_alias(monkeypatch, capsys):
+    calls = []
+
+    def fake_run(cmd, check=False, capture_output=False, text=False):
+        calls.append(
+            {
+                "cmd": cmd,
+                "check": check,
+                "capture_output": capture_output,
+                "text": text,
+            }
+        )
+        if cmd[:5] == [
+            "git",
+            "config",
+            "--global",
+            "--get",
+            "difftool.mygvim.cmd",
+        ]:
+            return subprocess.CompletedProcess(
+                cmd, returncode=1, stdout="", stderr=""
+            )
+        return subprocess.CompletedProcess(
+            cmd, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr("pydifftools.git_gd.subprocess.run", fake_run)
+
+    from pydifftools import command_line
+
+    command_line.main(["gd", "--install"])
+    assert calls[0]["cmd"] == [
+        "git",
+        "config",
+        "--global",
+        "alias.gd",
+        INSTALL_ALIAS_VALUE,
+    ]
+    assert calls[0]["check"] is True
+    out = capsys.readouterr().out
+    assert "alias.gd" in out
+    assert "difftool.mygvim.cmd" in out
+
+
+def test_gd_install_rejects_diff_args():
+    from pydifftools import command_line
+
+    with pytest.raises(SystemExit) as excinfo:
+        command_line.main(["gd", "--install", "HEAD~1"])
+    assert "does not take diff args" in str(excinfo.value)
+
+
+def test_gd_build_entries_sorts_by_change_count(monkeypatch):
+    monkeypatch.setattr(
+        "pydifftools.git_gd.changed_paths",
+        lambda diff_args, pathspec: ["alpha.txt", "binary.bin", "beta.txt"],
+    )
+
+    def fake_numstat(diff_args, path):
+        values = {
+            "alpha.txt": (3, 4),
+            "binary.bin": (None, None),
+            "beta.txt": (10, 1),
+        }
+        return values[path]
+
+    monkeypatch.setattr("pydifftools.git_gd.numstat_for_path", fake_numstat)
+
+    diff_args, entries = build_entries(["HEAD~1", "--", "docs"])
+    assert diff_args == ["HEAD~1"]
+    assert [entry.path for entry in entries] == [
+        "beta.txt",
+        "alpha.txt",
+        "binary.bin",
+    ]
 
 
 def test_cpb_hides_low_headers(tmp_path):
