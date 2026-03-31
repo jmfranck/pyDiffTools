@@ -276,6 +276,24 @@ def _watch_html(svg_url, order_by_date, target_task=None):
     )
 
 
+def _send_preview_response(handler, body_bytes, content_type):
+    try:
+        handler.send_response(200)
+        handler.send_header("Content-Type", content_type)
+        handler.send_header("Content-Length", str(len(body_bytes)))
+        handler.send_header("Cache-Control", "no-store")
+        handler.end_headers()
+        handler.wfile.write(body_bytes)
+    except (
+        BrokenPipeError,
+        ConnectionAbortedError,
+        ConnectionResetError,
+        TimeoutError,
+    ):
+        return False
+    return True
+
+
 def _svg_expanded_outline(
     shape, namespace, expand, stroke_color, stroke_width
 ):
@@ -675,13 +693,11 @@ class FlowchartPreviewServer:
                 parsed = urllib.parse.urlparse(self.path)
                 if parsed.path == "/graph.svg":
                     svg_bytes = event_handler.svg_file.read_bytes()
-                    self.send_response(200)
-                    self.send_header(
-                        "Content-Type", "image/svg+xml; charset=utf-8"
+                    _send_preview_response(
+                        self,
+                        svg_bytes,
+                        "image/svg+xml; charset=utf-8",
                     )
-                    self.send_header("Cache-Control", "no-store")
-                    self.end_headers()
-                    self.wfile.write(svg_bytes)
                     return
 
                 if parsed.path != "/" and parsed.path != "/index.html":
@@ -718,12 +734,11 @@ class FlowchartPreviewServer:
                     event_handler.state["target_task"],
                 )
                 body_bytes = body.encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body_bytes)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(body_bytes)
+                _send_preview_response(
+                    self,
+                    body_bytes,
+                    "text/html; charset=utf-8",
+                )
 
             def log_message(self, format, *args):
                 return

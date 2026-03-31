@@ -5,6 +5,7 @@ import pytest
 from pydifftools.flowchart.graph import write_dot_from_yaml
 from pydifftools.flowchart.watch_graph import (
     _reload_svg,
+    _send_preview_response,
     _watch_html,
     _watch_view_state_from_params,
 )
@@ -75,6 +76,42 @@ def test_watch_view_state_prefers_task_mode_over_date_mode():
     assert _watch_view_state_from_params(
         {"d": ["1"], "t": ["task_a"]}
     ) == (False, "task_a")
+
+def test_send_preview_response_ignores_disconnected_client():
+    class BrokenWriter:
+        def write(self, _data):
+            raise BrokenPipeError
+
+    class FakeHandler:
+        def __init__(self):
+            self.wfile = BrokenWriter()
+            self.status_codes = []
+            self.headers = []
+            self.ended = False
+
+        def send_response(self, status_code):
+            self.status_codes.append(status_code)
+
+        def send_header(self, key, value):
+            self.headers.append((key, value))
+
+        def end_headers(self):
+            self.ended = True
+
+    handler = FakeHandler()
+
+    assert (
+        _send_preview_response(
+            handler,
+            b"<html>preview</html>",
+            "text/html; charset=utf-8",
+        )
+        is False
+    )
+    assert handler.status_codes == [200]
+    assert ("Cache-Control", "no-store") in handler.headers
+    assert ("Content-Length", "20") in handler.headers
+    assert handler.ended is True
 
 
 class FakeObserver:

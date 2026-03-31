@@ -259,6 +259,33 @@ def test_notebook_progress_message_includes_notebook_index(
     assert "of notebook 1/2 from split_notebook.qmd" in logs
 
 
+def test_execute_code_blocks_uses_project_root_cache_dir(
+    fb, tmp_path, monkeypatch
+):
+    other_cwd = tmp_path / "other_cwd"
+    other_cwd.mkdir()
+    monkeypatch.chdir(other_cwd)
+    captured = {}
+
+    def fake_preprocess(self, nb, resources=None, km=None):
+        captured["path"] = resources["metadata"]["path"]
+        return nb, resources
+
+    monkeypatch.setattr(
+        fb.LoggingExecutePreprocessor,
+        "preprocess",
+        fake_preprocess,
+    )
+
+    fb.execute_code_blocks({"cache_path.qmd": [("print('cache')", "md5")]})
+
+    project_cache = fb.PROJECT_ROOT / "_nbcache"
+    assert captured["path"] == str(fb.PROJECT_ROOT)
+    assert project_cache.exists()
+    assert list(project_cache.glob("*.ipynb"))
+    assert not (other_cwd / "_nbcache").exists()
+
+
 def test_async_notebook_outputs_replace_placeholder(fb):
     # Slow notebook execution in a controlled way so the test can reliably
     # observe the red placeholder first and then the final output.

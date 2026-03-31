@@ -509,7 +509,10 @@ NOTEBOOK_CACHE_DIR = Path("_nbcache")
 
 def execute_code_blocks(blocks):
     """Run code blocks as Jupyter notebooks with caching."""
-    NOTEBOOK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_dir = NOTEBOOK_CACHE_DIR
+    if not cache_dir.is_absolute():
+        cache_dir = PROJECT_ROOT / cache_dir
+    cache_dir.mkdir(parents=True, exist_ok=True)
     outputs = {}
     code_map = {}
     jobs = []
@@ -550,7 +553,7 @@ def execute_code_blocks(blocks):
         group_indices, group_codes, group_md5s = group_data
         hash_input = (src + ":" + "".join(group_md5s)).encode()
         nb_hash = hashlib.md5(hash_input).hexdigest()
-        nb_path = NOTEBOOK_CACHE_DIR / f"{nb_hash}.ipynb"
+        nb_path = cache_dir / f"{nb_hash}.ipynb"
         if nb_path.exists():
             print(f"Reading cached output for {src} from {nb_path}!")
             nb = nbformat.read(nb_path, as_version=4)
@@ -570,7 +573,7 @@ def execute_code_blocks(blocks):
                     nb,
                     {
                         "metadata": {
-                            "path": str(Path(src).parent),
+                            "path": str((PROJECT_ROOT / src).parent),
                             "source": src,
                             "notebook_index": group_idx,
                             "notebook_total": total_groups,
