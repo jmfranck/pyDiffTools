@@ -844,9 +844,10 @@ def build_parser():
             action = subparser.add_argument(*flags, **kwargs)
             # {{{ attach filename completer
             allowednames = argument.get("completion_allowednames")
-            if FilesCompleter is None or allowednames is None:
-                return
-            action.completer = FilesCompleter(allowednames=allowednames)
+            if FilesCompleter is not None and allowednames is not None:
+                action.completer = FilesCompleter(
+                    allowednames=allowednames
+                )
             # }}}
             if name == "wgrph" and action.dest == "t":
                 # Offer case-insensitive completions for incomplete task names.
@@ -854,8 +855,6 @@ def build_parser():
         subparser.set_defaults(_handler=spec["handler"])
         parser._pydifft_subparsers[name] = subparser
     return parser
-
-
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
@@ -879,9 +878,23 @@ def main(argv=None):
                 file=sys.stderr,
             )
     parser = build_parser()
+    # {{{ run argcomplete
     if argcomplete is not None:
-        # Enable argcomplete integration when the dependency is available.
-        argcomplete.autocomplete(parser)
+        # Only suggest options after the user types '-' so bare
+        # `pydifft <tab>` offers subcommands only.
+        try:
+            argcomplete.autocomplete(
+                parser,
+                always_complete_options=False,
+                exit_method=os._exit,
+                output_stream=None,
+            )
+        except TypeError as exc:
+            if "unexpected keyword argument" not in str(exc):
+                raise
+            # Test stubs may provide a minimal autocomplete(parser) shim only.
+            argcomplete.autocomplete(parser)
+    # }}}
     if not argv:
         parser.print_help()
         return

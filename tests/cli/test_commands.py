@@ -1,3 +1,4 @@
+import io
 import os
 import subprocess
 import sys
@@ -9,6 +10,7 @@ import pytest
 from pydifftools import continuous
 from pydifftools.continuous import run_pandoc
 from pydifftools.command_line import mfs
+from pydifftools.command_registry import _COMMAND_SPECS
 from pydifftools.git_gd import INSTALL_ALIAS_VALUE, build_entries
 
 
@@ -100,6 +102,77 @@ def test_file_completers_are_extension_specific(monkeypatch):
 
     assert wgrph_action.completer.allowednames == ["*.yaml", "*.yml"]
     assert cpb_action.completer.allowednames == ["*.md"]
+
+
+def _collect_argcomplete_suggestions(monkeypatch, comp_line):
+    argcomplete = pytest.importorskip("argcomplete")
+    from argcomplete import io as argcomplete_io
+    from pydifftools import command_line
+
+    parser = command_line.build_parser()
+    output = io.StringIO()
+    monkeypatch.setattr(
+        argcomplete.CompletionFinder, "_init_debug_stream", lambda self: None
+    )
+    monkeypatch.setattr(argcomplete_io, "debug_stream", io.StringIO())
+    monkeypatch.setenv("_ARGCOMPLETE", "1")
+    monkeypatch.setenv("_ARGCOMPLETE_IFS", "\013")
+    monkeypatch.setenv("COMP_LINE", comp_line)
+    monkeypatch.setenv("COMP_POINT", str(len(comp_line)))
+
+    class CompletionExit(Exception):
+        def __init__(self, code):
+            self.code = code
+
+    def exit_method(code=0):
+        raise CompletionExit(code)
+
+    with pytest.raises(CompletionExit) as excinfo:
+        try:
+            argcomplete.autocomplete(
+                parser,
+                always_complete_options=False,
+                exit_method=exit_method,
+                output_stream=output,
+            )
+        except TypeError as exc:
+            if "unexpected keyword argument" not in str(exc):
+                raise
+            argcomplete.autocomplete(parser)
+    assert excinfo.value.code == 0
+    suggestions = [j.rstrip() for j in output.getvalue().split("\013") if j]
+    assert argcomplete is not None
+    return suggestions
+
+
+def test_argcomplete_root_only_lists_subcommands(monkeypatch):
+    suggestions = _collect_argcomplete_suggestions(monkeypatch, "pydifft ")
+
+    assert sorted(suggestions) == sorted(_COMMAND_SPECS)
+    assert all(not j.startswith("-") for j in suggestions)
+
+
+def test_argcomplete_completes_subcommand_prefix(monkeypatch):
+    suggestions = _collect_argcomplete_suggestions(monkeypatch, "pydifft wg")
+
+    assert suggestions == ["wgrph"]
+
+
+def test_argcomplete_wgrph_filters_to_yaml_files(monkeypatch, tmp_path):
+    plans_dir = tmp_path / "plans"
+    plans_dir.mkdir()
+    (plans_dir / "phase1.txt").write_text("nope\n")
+    (plans_dir / "phase2.yaml").write_text("nodes: {}\n")
+    (plans_dir / "phase3.yml").write_text("nodes: {}\n")
+    (plans_dir / "phone.md").write_text("# nope\n")
+    monkeypatch.chdir(tmp_path)
+
+    suggestions = _collect_argcomplete_suggestions(
+        monkeypatch, "pydifft wgrph -d plans/ph"
+    )
+
+    assert suggestions == ["plans/phase2.yaml", "plans/phase3.yml"]
+
 
 def test_tex2qmd_cli(tmp_path):
     env = _make_cli_env(tmp_path)

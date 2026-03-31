@@ -5,6 +5,7 @@ import inspect
 class CommandRegistrationError(Exception):
     """Exception raised when attempting to register a duplicate subcommand."""
 
+
 # Registry that stores all subcommands made available to the CLI dispatcher.
 _COMMAND_SPECS = {}
 
@@ -33,26 +34,37 @@ def register_command(
                 inspect.Parameter.VAR_KEYWORD,
             ]
         ]
-        # {{{ normalize the extensions
+        # {{{ normalize filename extensions
         if filename_extensions is None:
-            return {}
-        completion_allowednames = {}
-        for argument_name, extensions in filename_extensions.items():
-            if isinstance(extensions, str):
-                extensions = [extensions]
-            completion_allowednames[argument_name] = []
-            for extension in extensions:
-                if not isinstance(extension, str) or len(extension.strip()) == 0:
-                    raise CommandRegistrationError(
-                        "filename_extensions must contain non-empty strings"
-                    )
-                extension = extension.strip()
-                if extension.startswith("*."):
-                    completion_allowednames[argument_name].append(extension)
-                elif extension.startswith("."):
-                    completion_allowednames[argument_name].append("*" + extension)
-                else:
-                    completion_allowednames[argument_name].append("*." + extension)
+            completion_allowednames = {}
+        else:
+            completion_allowednames = {}
+            for argument_name, extensions in filename_extensions.items():
+                if isinstance(extensions, str):
+                    extensions = [extensions]
+                completion_allowednames[argument_name] = []
+                for extension in extensions:
+                    if (
+                        not isinstance(extension, str)
+                        or len(extension.strip()) == 0
+                    ):
+                        raise CommandRegistrationError(
+                            "filename_extensions must contain non-empty"
+                            " strings"
+                        )
+                    extension = extension.strip()
+                    if extension.startswith("*."):
+                        completion_allowednames[argument_name].append(
+                            extension
+                        )
+                    elif extension.startswith("."):
+                        completion_allowednames[argument_name].append(
+                            "*" + extension
+                        )
+                    else:
+                        completion_allowednames[argument_name].append(
+                            "*." + extension
+                        )
         # }}}
         unknown_arguments = sorted(
             set(completion_allowednames)
