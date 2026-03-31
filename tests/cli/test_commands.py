@@ -77,6 +77,30 @@ def test_wgrph_missing_file(tmp_path):
     assert "YAML file not found" in proc.stderr
 
 
+def test_file_completers_are_extension_specific(monkeypatch):
+    from pydifftools import command_line
+
+    class FakeFilesCompleter:
+        def __init__(self, allowednames):
+            self.allowednames = allowednames
+
+    monkeypatch.setattr(command_line, "FilesCompleter", FakeFilesCompleter)
+
+    parser = command_line.build_parser()
+    wgrph_action = next(
+        action
+        for action in parser._pydifft_subparsers["wgrph"]._actions
+        if action.dest == "yaml"
+    )
+    cpb_action = next(
+        action
+        for action in parser._pydifft_subparsers["cpb"]._actions
+        if action.dest == "filename"
+    )
+
+    assert wgrph_action.completer.allowednames == ["*.yaml", "*.yml"]
+    assert cpb_action.completer.allowednames == ["*.md"]
+
 def test_tex2qmd_cli(tmp_path):
     env = _make_cli_env(tmp_path)
     sample = (

@@ -399,6 +399,7 @@ position
             "comments filter for printing."
         ),
     },
+    filename_extensions={"filename": ".md"},
 )
 def cpb(filename, comments_to_margin=False):
     observer = Observer()

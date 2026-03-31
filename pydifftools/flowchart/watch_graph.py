@@ -763,6 +763,7 @@ class FlowchartPreviewServer:
         "d": "Render nodes by date without showing connections",
         "t": "Task name to focus on (show incomplete ancestor tasks only)",
     },
+    filename_extensions={"yaml": (".yaml", ".yml")},
 )
 def wgrph(yaml, wrap_width=55, d=False, t=None):
     # Selenium is only required when actually launching the watcher, so it is

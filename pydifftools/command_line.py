@@ -842,22 +842,12 @@ def build_parser():
             flags = argument["flags"]
             kwargs = dict(argument["kwargs"])
             action = subparser.add_argument(*flags, **kwargs)
-            if (
-                FilesCompleter is not None
-                and name == "wgrph"
-                and action.dest == "yaml"
-            ):
-                # Provide YAML-only completions for the flowchart watcher.
-                action.completer = FilesCompleter(
-                    allowednames=["*.yaml", "*.yml"]
-                )
-            if (
-                FilesCompleter is not None
-                and name == "cpb"
-                and action.dest == "filename"
-            ):
-                # Provide Markdown-only completions for continuous pandoc build.
-                action.completer = FilesCompleter(allowednames=["*.md"])
+            # {{{ attach filename completer
+            allowednames = argument.get("completion_allowednames")
+            if FilesCompleter is None or allowednames is None:
+                return
+            action.completer = FilesCompleter(allowednames=allowednames)
+            # }}}
             if name == "wgrph" and action.dest == "t":
                 # Offer case-insensitive completions for incomplete task names.
                 action.completer = wgrph_task_completer
