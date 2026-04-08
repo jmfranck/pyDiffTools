@@ -157,7 +157,7 @@ class FakePreviewServer:
 
 
 def test_wgrph_stops_preview_server_when_browser_window_closed(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, capsys
 ):
     # Build a minimal yaml graph for the command to read.
     yaml_file = tmp_path / "graph.yaml"
@@ -200,3 +200,5 @@ def test_wgrph_stops_preview_server_when_browser_window_closed(
     assert FakePreviewServer.latest.started is True
     assert FakePreviewServer.latest.stopped is True
     assert len(close_calls) == 1
+    logs = capsys.readouterr().out
+    assert "Stopping flowchart preview" in logs

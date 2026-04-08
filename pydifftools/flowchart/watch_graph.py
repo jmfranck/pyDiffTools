@@ -6,6 +6,7 @@ import threading
 import urllib.parse
 import http.server
 import xml.etree.ElementTree as ET
+import traceback
 from pathlib import Path
 
 try:
@@ -644,9 +645,17 @@ class GraphEventHandler(FileSystemEventHandler):
                     self.data,
                     self.state["target_task"],
                 )
-            except Exception:
+            except Exception as exc:
                 # If the graph fails to build (e.g. invalid date), close the
                 # preview window until a clean rebuild occurs.
+                print(
+                    "Closing preview window after graph build failure: "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                print("---------------------------")
+                print("here is the traceback:")
+                print(traceback.format_exc(), flush=True)
                 close_chrome(self.driver)
                 self.driver = None
                 self._last_mtime = self.yaml_file.stat().st_mtime
@@ -851,6 +860,7 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
     observer.schedule(event_handler, yaml_file.parent, recursive=False)
     observer.start()
     dead_since = None
+    dead_reason = None
     try:
         while True:
             preview_server.serve_pending_request()
@@ -859,13 +869,27 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
             # navigation (for example when opening /?t=... from the links).
             if browser_window_is_alive(event_handler.driver):
                 dead_since = None
+                dead_reason = None
             else:
                 if dead_since is None:
                     dead_since = time.time()
+                    dead_reason = (
+                        "browser_window_is_alive returned False; likely user "
+                        "closed the window or the browser crashed."
+                    )
                 elif time.time() - dead_since >= 1.0:
+                    print(
+                        "Stopping flowchart preview because the browser "
+                        f"window appears closed. Reason: {dead_reason}",
+                        flush=True,
+                    )
                     break
             time.sleep(0.1)
     except KeyboardInterrupt:
+        print(
+            "Stopping flowchart preview due to KeyboardInterrupt.",
+            flush=True,
+        )
         pass
     finally:
         observer.stop()
