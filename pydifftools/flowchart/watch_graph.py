@@ -25,7 +25,7 @@ from pydifftools.browser_lifecycle import (
     browser_window_is_alive,
     close_browser_window,
 )
-from .graph import write_dot_from_yaml
+from .graph import EmptyGraphYamlError, write_dot_from_yaml
 
 
 def _reload_svg(driver, svg_src) -> None:
@@ -239,9 +239,9 @@ def _watch_view_state_from_params(params):
         d_value = params["d"][-1]
         order_by_date = d_value in ("1", "true", "yes", "on", "")
     if "t" in params:
-        t_value = params["t"][-1].strip()
-        if t_value:
-            target_task = t_value
+        t_value = params["t"][-1]
+        if t_value is not None and str(t_value) != "":
+            target_task = str(t_value)
             order_by_date = False
     return order_by_date, target_task
 
@@ -646,18 +646,25 @@ class GraphEventHandler(FileSystemEventHandler):
                     self.state["target_task"],
                 )
             except Exception as exc:
-                # If the graph fails to build (e.g. invalid date), close the
-                # preview window until a clean rebuild occurs.
+                if isinstance(exc, EmptyGraphYamlError):
+                    print(
+                        "Graph YAML is empty; closing preview window.",
+                        flush=True,
+                    )
+                    close_chrome(self.driver)
+                    self.driver = None
+                    self._last_mtime = self.yaml_file.stat().st_mtime
+                    return
+                # Keep the preview open and log the failure so users can
+                # see why the graph didn't refresh.
                 print(
-                    "Closing preview window after graph build failure: "
+                    "Graph build failed; keeping preview window open: "
                     f"{type(exc).__name__}: {exc}",
                     flush=True,
                 )
                 print("---------------------------")
                 print("here is the traceback:")
                 print(traceback.format_exc(), flush=True)
-                close_chrome(self.driver)
-                self.driver = None
                 self._last_mtime = self.yaml_file.stat().st_mtime
                 return
             if self.driver is None:
