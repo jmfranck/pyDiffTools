@@ -11,7 +11,12 @@ from pydifftools import continuous
 from pydifftools.continuous import run_pandoc
 from pydifftools.command_line import mfs
 from pydifftools.command_registry import _COMMAND_SPECS
-from pydifftools.git_gd import INSTALL_ALIAS_VALUE, build_entries
+from pydifftools.git_gd import (
+    DiffEntry,
+    INSTALL_ALIAS_VALUE,
+    build_difftool_command,
+    build_entries,
+)
 
 
 def _make_cli_env(tmp_path):
@@ -337,19 +342,23 @@ def test_gd_install_rejects_diff_args():
 
 def test_gd_build_entries_sorts_by_change_count(monkeypatch):
     monkeypatch.setattr(
-        "pydifftools.git_gd.changed_paths",
-        lambda diff_args, pathspec: ["alpha.txt", "binary.bin", "beta.txt"],
+        "pydifftools.git_gd.changed_entries",
+        lambda diff_args, pathspec: [
+            DiffEntry(path="alpha.txt", added=0, deleted=0),
+            DiffEntry(path="binary.bin", added=0, deleted=0),
+            DiffEntry(path="beta.txt", added=0, deleted=0),
+        ],
     )
 
-    def fake_numstat(diff_args, path):
+    def fake_numstat(diff_args, paths):
         values = {
             "alpha.txt": (3, 4),
             "binary.bin": (None, None),
             "beta.txt": (10, 1),
         }
-        return values[path]
+        return values[paths[0]]
 
-    monkeypatch.setattr("pydifftools.git_gd.numstat_for_path", fake_numstat)
+    monkeypatch.setattr("pydifftools.git_gd.numstat_for_paths", fake_numstat)
 
     diff_args, entries = build_entries(["HEAD~1", "--", "docs"])
     assert diff_args == ["HEAD~1"]
@@ -357,6 +366,126 @@ def test_gd_build_entries_sorts_by_change_count(monkeypatch):
         "beta.txt",
         "alpha.txt",
         "binary.bin",
+    ]
+
+
+def test_gd_build_entries_tracks_renamed_file(tmp_path):
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        subprocess.run(["git", "init", "-q"], check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"], check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"], check=True
+        )
+        Path("old.txt").write_text("one\ntwo\nthree\n")
+        subprocess.run(["git", "add", "old.txt"], check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "initial"], check=True)
+        subprocess.run(["git", "mv", "old.txt", "new.txt"], check=True)
+        Path("new.txt").write_text("one\nTWO\nthree\n")
+
+        diff_args, entries = build_entries(["HEAD"])
+    finally:
+        os.chdir(cwd)
+
+    assert diff_args == ["HEAD"]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.status.startswith("R")
+    assert entry.old_path == "old.txt"
+    assert entry.new_path == "new.txt"
+    assert entry.path == "new.txt"
+    assert entry.added == 1
+    assert entry.deleted == 1
+    assert entry.diff_paths == ["old.txt", "new.txt"]
+    assert entry.display_path == "old.txt\n  → new.txt"
+
+
+def test_gd_pathspec_keeps_renamed_file_status(tmp_path):
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        subprocess.run(["git", "init", "-q"], check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"], check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"], check=True
+        )
+        Path("old.txt").write_text("one\ntwo\nthree\n")
+        subprocess.run(["git", "add", "old.txt"], check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "initial"], check=True)
+        subprocess.run(["git", "mv", "old.txt", "new.txt"], check=True)
+        Path("new.txt").write_text("one\nTWO\nthree\n")
+
+        _diff_args, entries_from_new_path = build_entries(
+            ["HEAD", "--", "new.txt"]
+        )
+        _diff_args, entries_from_old_path = build_entries(
+            ["HEAD", "--", "old.txt"]
+        )
+    finally:
+        os.chdir(cwd)
+
+    for entries in (entries_from_new_path, entries_from_old_path):
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry.status.startswith("R")
+        assert entry.old_path == "old.txt"
+        assert entry.new_path == "new.txt"
+        assert entry.diff_paths == ["old.txt", "new.txt"]
+
+
+def test_gd_diff_entry_marks_exact_renames():
+    entry = DiffEntry(
+        path="new.txt",
+        added=0,
+        deleted=0,
+        status="R100",
+        old_path="old.txt",
+        new_path="new.txt",
+    )
+
+    assert entry.is_exact_rename
+    assert entry.diff_paths == ["old.txt", "new.txt"]
+    assert entry.display_path == "old.txt → new.txt"
+
+
+def test_gd_difftool_command_wraps_renames_for_merged_side():
+    entry = DiffEntry(
+        path="new.txt",
+        added=1,
+        deleted=1,
+        status="R071",
+        old_path="old.txt",
+        new_path="new.txt",
+    )
+
+    cmd = build_difftool_command(
+        ["HEAD"],
+        entry,
+        tool_cmd='~/gvim.sh -f -d -- "$LOCAL" "$MERGED"',
+    )
+
+    assert cmd[:3] == [
+        "git",
+        "-c",
+        (
+            'difftool.pydifft-gd-rename.cmd=MERGED="$REMOTE"; '
+            '~/gvim.sh -f -d -- "$LOCAL" "$MERGED"'
+        ),
+    ]
+    assert cmd[3:] == [
+        "difftool",
+        "--tool=pydifft-gd-rename",
+        "--no-prompt",
+        "--find-renames",
+        "HEAD",
+        "--",
+        "old.txt",
+        "new.txt",
     ]
 
 

@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
 if TYPE_CHECKING:
     from .git_gd import DiffEntry
 
+from .git_gd import build_difftool_command
+
 
 class DiffModel(QAbstractTableModel):
     headers = ["Seen", "Δlines", "File"]
@@ -55,19 +57,26 @@ class DiffModel(QAbstractTableModel):
 
         if role == Qt.ItemDataRole.DisplayRole:
             if col == 0:
+                if entry.is_exact_rename:
+                    return "R100%"
                 return "✓" if entry.seen else "☐"
             if col == 1:
                 if entry.added is None or entry.deleted is None:
                     return "binary"
                 return f"-{entry.deleted} / +{entry.added}"
             if col == 2:
-                return entry.path
+                return entry.display_path
 
         if role == Qt.ItemDataRole.TextAlignmentRole:
             if col == 0:
+                vertical_alignment = (
+                    Qt.AlignmentFlag.AlignTop
+                    if entry.has_multiline_display_path
+                    else Qt.AlignmentFlag.AlignVCenter
+                )
                 return int(
                     Qt.AlignmentFlag.AlignHCenter
-                    | Qt.AlignmentFlag.AlignVCenter
+                    | vertical_alignment
                 )
             return int(
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
@@ -203,7 +212,7 @@ class DiffTable(QTableView):
         self.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         self.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
-        self.setWordWrap(False)
+        self.setWordWrap(True)
         self.setShowGrid(False)
         self.setAlternatingRowColors(False)
         self.setSortingEnabled(False)
@@ -302,15 +311,7 @@ class DiffWindow(QWidget):
         self.model.mark_seen(row)
         self._update_title()
 
-        cmd = [
-            "git",
-            "difftool",
-            "--tool=mygvim",
-            "--no-prompt",
-            *self.diff_args,
-            "--",
-            entry.path,
-        ]
+        cmd = build_difftool_command(self.diff_args, entry)
 
         try:
             subprocess.Popen(cmd)
