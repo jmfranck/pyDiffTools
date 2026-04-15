@@ -6,6 +6,7 @@ import threading
 import urllib.parse
 import http.server
 import xml.etree.ElementTree as ET
+import traceback
 from pathlib import Path
 
 try:
@@ -24,7 +25,7 @@ from pydifftools.browser_lifecycle import (
     browser_window_is_alive,
     close_browser_window,
 )
-from .graph import write_dot_from_yaml
+from .graph import EmptyGraphYamlError, write_dot_from_yaml
 
 
 def _reload_svg(driver, svg_src) -> None:
@@ -238,9 +239,9 @@ def _watch_view_state_from_params(params):
         d_value = params["d"][-1]
         order_by_date = d_value in ("1", "true", "yes", "on", "")
     if "t" in params:
-        t_value = params["t"][-1].strip()
-        if t_value:
-            target_task = t_value
+        t_value = params["t"][-1]
+        if t_value is not None and str(t_value) != "":
+            target_task = str(t_value)
             order_by_date = False
     return order_by_date, target_task
 
@@ -274,6 +275,24 @@ def _watch_html(svg_url, order_by_date, target_task=None):
         "</p>"
         "</body></html>"
     )
+
+
+def _send_preview_response(handler, body_bytes, content_type):
+    try:
+        handler.send_response(200)
+        handler.send_header("Content-Type", content_type)
+        handler.send_header("Content-Length", str(len(body_bytes)))
+        handler.send_header("Cache-Control", "no-store")
+        handler.end_headers()
+        handler.wfile.write(body_bytes)
+    except (
+        BrokenPipeError,
+        ConnectionAbortedError,
+        ConnectionResetError,
+        TimeoutError,
+    ):
+        return False
+    return True
 
 
 def _svg_expanded_outline(
@@ -626,11 +645,26 @@ class GraphEventHandler(FileSystemEventHandler):
                     self.data,
                     self.state["target_task"],
                 )
-            except Exception:
-                # If the graph fails to build (e.g. invalid date), close the
-                # preview window until a clean rebuild occurs.
-                close_chrome(self.driver)
-                self.driver = None
+            except Exception as exc:
+                if isinstance(exc, EmptyGraphYamlError):
+                    print(
+                        "Graph YAML is empty; closing preview window.",
+                        flush=True,
+                    )
+                    close_chrome(self.driver)
+                    self.driver = None
+                    self._last_mtime = self.yaml_file.stat().st_mtime
+                    return
+                # Keep the preview open and log the failure so users can
+                # see why the graph didn't refresh.
+                print(
+                    "Graph build failed; keeping preview window open: "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                print("---------------------------")
+                print("here is the traceback:")
+                print(traceback.format_exc(), flush=True)
                 self._last_mtime = self.yaml_file.stat().st_mtime
                 return
             if self.driver is None:
@@ -675,13 +709,11 @@ class FlowchartPreviewServer:
                 parsed = urllib.parse.urlparse(self.path)
                 if parsed.path == "/graph.svg":
                     svg_bytes = event_handler.svg_file.read_bytes()
-                    self.send_response(200)
-                    self.send_header(
-                        "Content-Type", "image/svg+xml; charset=utf-8"
+                    _send_preview_response(
+                        self,
+                        svg_bytes,
+                        "image/svg+xml; charset=utf-8",
                     )
-                    self.send_header("Cache-Control", "no-store")
-                    self.end_headers()
-                    self.wfile.write(svg_bytes)
                     return
 
                 if parsed.path != "/" and parsed.path != "/index.html":
@@ -718,12 +750,11 @@ class FlowchartPreviewServer:
                     event_handler.state["target_task"],
                 )
                 body_bytes = body.encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body_bytes)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(body_bytes)
+                _send_preview_response(
+                    self,
+                    body_bytes,
+                    "text/html; charset=utf-8",
+                )
 
             def log_message(self, format, *args):
                 return
@@ -763,6 +794,7 @@ class FlowchartPreviewServer:
         "d": "Render nodes by date without showing connections",
         "t": "Task name to focus on (show incomplete ancestor tasks only)",
     },
+    filename_extensions={"yaml": (".yaml", ".yml")},
 )
 def wgrph(yaml, wrap_width=55, d=False, t=None):
     # Selenium is only required when actually launching the watcher, so it is
@@ -835,6 +867,7 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
     observer.schedule(event_handler, yaml_file.parent, recursive=False)
     observer.start()
     dead_since = None
+    dead_reason = None
     try:
         while True:
             preview_server.serve_pending_request()
@@ -843,13 +876,27 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
             # navigation (for example when opening /?t=... from the links).
             if browser_window_is_alive(event_handler.driver):
                 dead_since = None
+                dead_reason = None
             else:
                 if dead_since is None:
                     dead_since = time.time()
+                    dead_reason = (
+                        "browser_window_is_alive returned False; likely user "
+                        "closed the window or the browser crashed."
+                    )
                 elif time.time() - dead_since >= 1.0:
+                    print(
+                        "Stopping flowchart preview because the browser "
+                        f"window appears closed. Reason: {dead_reason}",
+                        flush=True,
+                    )
                     break
             time.sleep(0.1)
     except KeyboardInterrupt:
+        print(
+            "Stopping flowchart preview due to KeyboardInterrupt.",
+            flush=True,
+        )
         pass
     finally:
         observer.stop()

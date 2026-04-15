@@ -509,7 +509,10 @@ NOTEBOOK_CACHE_DIR = Path("_nbcache")
 
 def execute_code_blocks(blocks):
     """Run code blocks as Jupyter notebooks with caching."""
-    NOTEBOOK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_dir = NOTEBOOK_CACHE_DIR
+    if not cache_dir.is_absolute():
+        cache_dir = PROJECT_ROOT / cache_dir
+    cache_dir.mkdir(parents=True, exist_ok=True)
     outputs = {}
     code_map = {}
     jobs = []
@@ -550,7 +553,7 @@ def execute_code_blocks(blocks):
         group_indices, group_codes, group_md5s = group_data
         hash_input = (src + ":" + "".join(group_md5s)).encode()
         nb_hash = hashlib.md5(hash_input).hexdigest()
-        nb_path = NOTEBOOK_CACHE_DIR / f"{nb_hash}.ipynb"
+        nb_path = cache_dir / f"{nb_hash}.ipynb"
         if nb_path.exists():
             print(f"Reading cached output for {src} from {nb_path}!")
             nb = nbformat.read(nb_path, as_version=4)
@@ -570,7 +573,7 @@ def execute_code_blocks(blocks):
                     nb,
                     {
                         "metadata": {
-                            "path": str(Path(src).parent),
+                            "path": str((PROJECT_ROOT / src).parent),
                             "source": src,
                             "notebook_index": group_idx,
                             "notebook_total": total_groups,
@@ -751,6 +754,25 @@ PANDOC_TEMPLATE = Path("_template/pandoc_template.html").resolve()
 NAV_TEMPLATE = Path("_template/nav_template.html").resolve()
 MATHJAX_DIR = Path("_template/mathjax").resolve()
 PROJECT_ROOT = Path(".").resolve()
+
+
+class NoCacheHTTPRequestHandler(SimpleHTTPRequestHandler):
+    """Serve development files fresh even when rewrites share an mtime."""
+
+    def send_head(self):
+        for header in ("If-Modified-Since", "If-None-Match"):
+            if header in self.headers:
+                del self.headers[header]
+        return super().send_head()
+
+    def end_headers(self):
+        self.send_header(
+            "Cache-Control",
+            "no-store, no-cache, must-revalidate, max-age=0",
+        )
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
 
 
 def example_notebook_root():
@@ -1780,7 +1802,7 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
     print("Watching project root:")
     print(" ", PROJECT_ROOT)
 
-    class Handler(SimpleHTTPRequestHandler):
+    class Handler(NoCacheHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(DISPLAY_DIR), **kwargs)
 

@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import date, datetime
+import time
 
 import textwrap
 import re
@@ -52,6 +53,9 @@ def _register_block_str_presenter() -> None:
 _register_block_str_presenter()
 
 
+class EmptyGraphYamlError(ValueError):
+    pass
+
 def load_graph_yaml(
     path: str, old_data: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
@@ -61,8 +65,26 @@ def load_graph_yaml(
     are propagated to the corresponding nodes so that editing only one side of
     a link keeps the structure symmetric.
     """
-    with open(path) as f:
-        data = yaml.safe_load(f)
+    data = None
+    size = None
+    for attempt in range(3):
+        try:
+            size = Path(path).stat().st_size
+        except OSError:
+            size = None
+        with open(path) as f:
+            data = yaml.safe_load(f)
+        if data is not None:
+            break
+        if size == 0 and attempt < 2:
+            time.sleep(0.05)
+            continue
+        break
+    if data is None:
+        raise EmptyGraphYamlError(
+            "Graph YAML is empty after retries; "
+            f"file_size={size if size is not None else 'unknown'}"
+        )
     nodes = data.setdefault("nodes", {})
     nodes.pop("node", None)
 
@@ -384,7 +406,7 @@ def _append_node(
         _node_text_with_due(data["nodes"][node_name]), wrap_width
     )
     task_link_line = (
-        f'<font point-size="7">__WGRPH_TASK_LINK__:{node_name}</font>'
+        f'<font point-size="9">__WGRPH_TASK_LINK__:{node_name}</font>'
     )
     if label:
         label = "<" + task_link_line + '<br align="left"/>' + label[1:]
@@ -621,7 +643,6 @@ def write_dot_from_yaml(
     if filter_task is not None:
         # Limit the rendered graph to incomplete ancestors of the target task.
         if "nodes" not in data or filter_task not in data["nodes"]:
-            # Allow case-insensitive task lookup to align with CLI completion.
             matches = [
                 name
                 for name in data["nodes"]
@@ -635,6 +656,14 @@ def write_dot_from_yaml(
                     f"'{filter_task}' matches {matches}."
                 )
             else:
+                keys = sorted(str(name) for name in data.get("nodes", {}).keys())
+                preview = ", ".join(keys)
+                print(
+                    "Task filter requested a missing node. "
+                    f"available_nodes={len(keys)} "
+                    f"sample=[{preview}]",
+                    flush=True,
+                )
                 raise ValueError(
                     f"Task '{filter_task}' not found in flowchart YAML."
                 )

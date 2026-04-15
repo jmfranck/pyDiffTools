@@ -12,16 +12,16 @@ digraph G {
     node [shape=box,width=0.5];
     subgraph group1 {
         node [color=blue, fontcolor=blue];
-        Start [label=<<font point-size="7">__WGRPH_TASK_LINK__:Start</font><br align="left"/>Begin process
+        Start [label=<<font point-size="9">__WGRPH_TASK_LINK__:Start</font><br align="left"/>Begin process
 <br align="left"/>
 • item1
 <br align="left"/>
 • item2
 <br align="left"/>>];
     };
-    Middle [label=<<font point-size="7">__WGRPH_TASK_LINK__:Middle</font><br align="left"/>Continue
+    Middle [label=<<font point-size="9">__WGRPH_TASK_LINK__:Middle</font><br align="left"/>Continue
 <br align="left"/>>];
-    End [label=<<font point-size="7">__WGRPH_TASK_LINK__:End</font><br align="left"/>Finish
+    End [label=<<font point-size="9">__WGRPH_TASK_LINK__:End</font><br align="left"/>Finish
 <br align="left"/>
 <font color="orange">10/2/25</font>
 <br align="left"/>>];

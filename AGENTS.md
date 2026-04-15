@@ -11,3 +11,8 @@
 	3. Note that *all required packages are already installed in the base
 		 environment* and you are NOT allowed to mess with the base environment.
 		 Nor should you need to!
+- When refactoring, check for functions that are only used once. Prefer to
+  move that logic back in place rather than keeping a single-use helper.
+	Use vim fold markers, as described next.
+- When inlining substantial one-off logic, surround it with vim fold markers
+	like `# {{{ description of code purpose` and `# }}}`.
