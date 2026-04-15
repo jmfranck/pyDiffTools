@@ -756,6 +756,25 @@ MATHJAX_DIR = Path("_template/mathjax").resolve()
 PROJECT_ROOT = Path(".").resolve()
 
 
+class NoCacheHTTPRequestHandler(SimpleHTTPRequestHandler):
+    """Serve development files fresh even when rewrites share an mtime."""
+
+    def send_head(self):
+        for header in ("If-Modified-Since", "If-None-Match"):
+            if header in self.headers:
+                del self.headers[header]
+        return super().send_head()
+
+    def end_headers(self):
+        self.send_header(
+            "Cache-Control",
+            "no-store, no-cache, must-revalidate, max-age=0",
+        )
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
+
+
 def example_notebook_root():
     """Return the path to the bundled example notebook directory."""
 
@@ -1783,7 +1802,7 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
     print("Watching project root:")
     print(" ", PROJECT_ROOT)
 
-    class Handler(SimpleHTTPRequestHandler):
+    class Handler(NoCacheHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(DISPLAY_DIR), **kwargs)
 

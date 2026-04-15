@@ -1,6 +1,7 @@
 import shutil
 import threading
 import time
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -136,6 +137,41 @@ def test_postprocess_adds_shared_pygments_stylesheet_link(fb, tmp_path):
     assert 'href="assets/pygments.css"' in html
     css = (display_dir / "assets" / "pygments.css").read_text()
     assert ".highlight" in css
+
+
+def test_dev_server_handler_disables_conditional_cache(fb, monkeypatch):
+    handler = fb.NoCacheHTTPRequestHandler.__new__(
+        fb.NoCacheHTTPRequestHandler
+    )
+    handler.headers = Message()
+    handler.headers["If-Modified-Since"] = "Tue, 14 Nov 2023 22:13:20 GMT"
+    handler.headers["If-None-Match"] = '"stale"'
+
+    def fake_send_head(self):
+        assert "If-Modified-Since" not in self.headers
+        assert "If-None-Match" not in self.headers
+        return "fresh body"
+
+    monkeypatch.setattr(
+        fb.SimpleHTTPRequestHandler, "send_head", fake_send_head
+    )
+    assert handler.send_head() == "fresh body"
+
+    sent_headers = []
+    handler.send_header = lambda name, value: sent_headers.append(
+        (name, value)
+    )
+    monkeypatch.setattr(
+        fb.SimpleHTTPRequestHandler, "end_headers", lambda self: None
+    )
+    handler.end_headers()
+
+    assert (
+        "Cache-Control",
+        "no-store, no-cache, must-revalidate, max-age=0",
+    ) in sent_headers
+    assert ("Pragma", "no-cache") in sent_headers
+    assert ("Expires", "0") in sent_headers
 
 
 def test_navigation_persists_after_notebook_updates(fb):
