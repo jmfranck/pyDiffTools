@@ -16,13 +16,14 @@ import threading
 import shutil
 import yaml
 from pydifftools.command_registry import register_command
+from pydifftools.browser_lifecycle import (
+    browser_window_is_alive,
+    close_browser_window,
+)
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers.polling import PollingObserver as Observer
 from selenium import webdriver
-from selenium.common.exceptions import (
-    WebDriverException,
-    NoSuchWindowException,
-)
+from selenium.common.exceptions import WebDriverException
 from jinja2 import Environment, FileSystemLoader
 import nbformat
 from nbconvert.preprocessors import ExecutePreprocessor
@@ -33,6 +34,7 @@ from pygments.formatters import HtmlFormatter
 from ansi2html import Ansi2HTMLConverter
 
 _ansi_conv = Ansi2HTMLConverter(inline=True)
+PYGMENTS_CSS = Path("assets") / "pygments.css"
 
 
 def _ansi_to_html(text: str, *, default_style: str | None = None) -> str:
@@ -507,7 +509,10 @@ NOTEBOOK_CACHE_DIR = Path("_nbcache")
 
 def execute_code_blocks(blocks):
     """Run code blocks as Jupyter notebooks with caching."""
-    NOTEBOOK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_dir = NOTEBOOK_CACHE_DIR
+    if not cache_dir.is_absolute():
+        cache_dir = PROJECT_ROOT / cache_dir
+    cache_dir.mkdir(parents=True, exist_ok=True)
     outputs = {}
     code_map = {}
     jobs = []
@@ -560,7 +565,7 @@ def execute_code_blocks(blocks):
         group_indices, group_codes, group_md5s = group_data
         hash_input = (src + ":" + "".join(group_md5s)).encode()
         nb_hash = hashlib.md5(hash_input).hexdigest()
-        nb_path = NOTEBOOK_CACHE_DIR / f"{nb_hash}.ipynb"
+        nb_path = cache_dir / f"{nb_hash}.ipynb"
         if nb_path.exists():
             print(f"Reading cached output for {src} from {nb_path}!")
             nb = nbformat.read(nb_path, as_version=4)
@@ -580,7 +585,7 @@ def execute_code_blocks(blocks):
                     nb,
                     {
                         "metadata": {
-                            "path": str(Path(src).parent),
+                            "path": str((PROJECT_ROOT / src).parent),
                             "source": src,
                             "notebook_index": group_idx,
                             "notebook_total": total_groups,
@@ -764,6 +769,25 @@ MATHJAX_DIR = Path("_template/mathjax").resolve()
 PROJECT_ROOT = Path(".").resolve()
 
 
+class NoCacheHTTPRequestHandler(SimpleHTTPRequestHandler):
+    """Serve development files fresh even when rewrites share an mtime."""
+
+    def send_head(self):
+        for header in ("If-Modified-Since", "If-None-Match"):
+            if header in self.headers:
+                del self.headers[header]
+        return super().send_head()
+
+    def end_headers(self):
+        self.send_header(
+            "Cache-Control",
+            "no-store, no-cache, must-revalidate, max-age=0",
+        )
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
+
+
 def example_notebook_root():
     """Return the path to the bundled example notebook directory."""
 
@@ -793,6 +817,24 @@ def download_mathjax(target_dir):
 def ensure_mathjax():
     """Ensure the default MathJax cache exists for builds."""
     download_mathjax(MATHJAX_DIR)
+
+
+def ensure_pygments_css(resource_root):
+    """Write syntax-highlighting CSS into the display asset tree.
+
+    We keep this as a standalone file so assembled display pages can link one
+    shared stylesheet instead of relying on per-fragment inline style blocks.
+    """
+
+    css_path = resource_root / PYGMENTS_CSS
+    css_path.parent.mkdir(parents=True, exist_ok=True)
+    formatter = HtmlFormatter()
+    style = formatter.get_style_defs(".highlight")
+    if css_path.exists():
+        current = css_path.read_text()
+        if current == style:
+            return
+    css_path.write_text(style)
 
 
 def _copy_resource_tree(resource, dest, overwrite=False):
@@ -1363,6 +1405,33 @@ def postprocess_html(html_path: Path, include_root: Path, resource_root: Path):
                     create_parent=False,
                 )
                 head[0].append(script)
+
+    # Always attach the shared Pygments stylesheet to the final display page.
+    # Included child pages can contain highlighted blocks, but include
+    # expansion only pulls body content, so we add one document-level link.
+    ensure_pygments_css(resource_root)
+    head = root.xpath("//head")
+    if not head:
+        html_nodes = root.xpath("//html")
+        if html_nodes:
+            new_head = lxml_html.Element("head")
+            html_nodes[0].insert(0, new_head)
+            head = [new_head]
+    if head:
+        existing_links = root.xpath(
+            '//link[@rel="stylesheet" and contains(@href, "pygments.css")]'
+        )
+        if not existing_links:
+            css_href = os.path.relpath(
+                resource_root / PYGMENTS_CSS,
+                html_path.parent,
+            )
+            link = lxml_html.fragment_fromstring(
+                '<link rel="stylesheet" '
+                f'href="{css_href}" id="pygments-style-link">',
+                create_parent=False,
+            )
+            head[0].append(link)
     html_path.write_text(lxml_html.tostring(root, encoding="unicode"))
 
 
@@ -1434,6 +1503,7 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     ensure_template_assets(PROJECT_ROOT)
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     DISPLAY_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_pygments_css(DISPLAY_DIR)
     if not webtex:
         ensure_mathjax()
         # copy MathJax into the display tree so browsers load assets from the
@@ -1695,24 +1765,12 @@ class BrowserReloader:
         try:
             self.browser.refresh()
         except WebDriverException:
-            try:
-                self.browser.quit()
-            except Exception:
-                pass
+            close_browser_window(self.browser)
             self.browser = None
 
     def is_alive(self) -> bool:
         """Return True if the browser window is still open."""
-        if not self.browser:
-            return False
-        try:
-            handles = self.browser.window_handles
-            if not handles:
-                return False
-            self.browser.execute_script("return 1")
-            return True
-        except (NoSuchWindowException, WebDriverException):
-            return False
+        return browser_window_is_alive(self.browser)
 
 
 class ChangeHandler(FileSystemEventHandler):
@@ -1764,7 +1822,7 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
     print("Watching project root:")
     print(" ", PROJECT_ROOT)
 
-    class Handler(SimpleHTTPRequestHandler):
+    class Handler(NoCacheHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(DISPLAY_DIR), **kwargs)
 
@@ -1819,10 +1877,7 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
         httpd.shutdown()
         httpd.server_close()
         if not no_browser and getattr(refresher, "browser", None):
-            try:
-                refresher.browser.quit()
-            except Exception:
-                pass
+            close_browser_window(refresher.browser)
 
 
 if __name__ == "__main__":

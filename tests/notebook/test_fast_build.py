@@ -1,6 +1,7 @@
 import shutil
 import threading
 import time
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -113,6 +114,64 @@ def test_postprocess_nested_includes(fb, tmp_path, monkeypatch):
     html = target.read_text()
     assert "LEAF" in html
     assert "data-include" not in html
+
+
+def test_postprocess_adds_shared_pygments_stylesheet_link(fb, tmp_path):
+    build_dir = tmp_path / "build"
+    display_dir = tmp_path / "display"
+    build_dir.mkdir()
+    display_dir.mkdir()
+
+    page = display_dir / "index.html"
+    page.write_text(
+        "<html><head></head><body>"
+        '<div class="highlight"><pre>'
+        '<span class="k">print</span>'
+        "</pre></div>"
+        "</body></html>"
+    )
+
+    fb.postprocess_html(page, build_dir, display_dir)
+
+    html = page.read_text()
+    assert 'href="assets/pygments.css"' in html
+    css = (display_dir / "assets" / "pygments.css").read_text()
+    assert ".highlight" in css
+
+
+def test_dev_server_handler_disables_conditional_cache(fb, monkeypatch):
+    handler = fb.NoCacheHTTPRequestHandler.__new__(
+        fb.NoCacheHTTPRequestHandler
+    )
+    handler.headers = Message()
+    handler.headers["If-Modified-Since"] = "Tue, 14 Nov 2023 22:13:20 GMT"
+    handler.headers["If-None-Match"] = '"stale"'
+
+    def fake_send_head(self):
+        assert "If-Modified-Since" not in self.headers
+        assert "If-None-Match" not in self.headers
+        return "fresh body"
+
+    monkeypatch.setattr(
+        fb.SimpleHTTPRequestHandler, "send_head", fake_send_head
+    )
+    assert handler.send_head() == "fresh body"
+
+    sent_headers = []
+    handler.send_header = lambda name, value: sent_headers.append(
+        (name, value)
+    )
+    monkeypatch.setattr(
+        fb.SimpleHTTPRequestHandler, "end_headers", lambda self: None
+    )
+    handler.end_headers()
+
+    assert (
+        "Cache-Control",
+        "no-store, no-cache, must-revalidate, max-age=0",
+    ) in sent_headers
+    assert ("Pragma", "no-cache") in sent_headers
+    assert ("Expires", "0") in sent_headers
 
 
 def test_navigation_persists_after_notebook_updates(fb):
@@ -264,6 +323,33 @@ def test_notebook_progress_message_includes_notebook_index(
 
     logs = capsys.readouterr().out
     assert "of notebook 1/2 from split_notebook.qmd" in logs
+
+
+def test_execute_code_blocks_uses_project_root_cache_dir(
+    fb, tmp_path, monkeypatch
+):
+    other_cwd = tmp_path / "other_cwd"
+    other_cwd.mkdir()
+    monkeypatch.chdir(other_cwd)
+    captured = {}
+
+    def fake_preprocess(self, nb, resources=None, km=None):
+        captured["path"] = resources["metadata"]["path"]
+        return nb, resources
+
+    monkeypatch.setattr(
+        fb.LoggingExecutePreprocessor,
+        "preprocess",
+        fake_preprocess,
+    )
+
+    fb.execute_code_blocks({"cache_path.qmd": [("print('cache')", "md5")]})
+
+    project_cache = fb.PROJECT_ROOT / "_nbcache"
+    assert captured["path"] == str(fb.PROJECT_ROOT)
+    assert project_cache.exists()
+    assert list(project_cache.glob("*.ipynb"))
+    assert not (other_cwd / "_nbcache").exists()
 
 
 def test_async_notebook_outputs_replace_placeholder(fb):
