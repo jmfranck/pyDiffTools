@@ -243,14 +243,14 @@ class Handler(FileSystemEventHandler):
         self.filename = filename
         self.comments_to_margin = comments_to_margin
         self.html_file = filename.rsplit(".", 1)[0] + ".html"
-        self.init_firefox()
+        self.init_chrome()
 
-    def init_firefox(self):
+    def init_chrome(self):
         # apparently, selenium breaks stdin/out for tests, so it must be
         # imported here
         from selenium import webdriver
 
-        self.firefox = webdriver.Chrome()
+        self.chrome = webdriver.Chrome()
         run_pandoc(
             self.filename,
             self.html_file,
@@ -259,7 +259,7 @@ class Handler(FileSystemEventHandler):
         if not os.path.exists(self.html_file):
             print("html doesn't exist")
         self.append_autorefresh()
-        self.firefox.get("file://" + os.path.abspath(self.html_file))
+        self.chrome.get("file://" + os.path.abspath(self.html_file))
 
     def on_modified(self, event):
         from selenium.common.exceptions import WebDriverException
@@ -274,14 +274,14 @@ class Handler(FileSystemEventHandler):
             )
             self.append_autorefresh()
             try:
-                self.firefox.refresh()
+                self.chrome.refresh()
             except WebDriverException:
                 print(
                     "I'm quitting!! You probably suspended the computer, which"
                     " seems to freak selenium out.  Just restart"
                 )
-                self.firefox.quit()
-                self.init_firefox()
+                self.chrome.quit()
+                self.init_chrome()
 
     def append_autorefresh(self):
         with open(self.html_file, "r", encoding="utf-8") as fp:
@@ -357,7 +357,6 @@ position
             return
         forward_search_in_browser(self.firefox, search_text)
 
-
 @register_command(
     "continuous pandoc build.  Like latexmk, but for markdown!",
     help={
@@ -367,6 +366,7 @@ position
             "comments filter for printing."
         ),
     },
+    filename_extensions={"filename": ".md"},
 )
 def cpb(filename, comments_to_margin=False):
     observer = Observer()
@@ -388,7 +388,7 @@ def cpb(filename, comments_to_margin=False):
         while True:
             # Exit when the browser window is closed so cpb does not leave a
             # background process running after the user closes Chrome.
-            if not browser_window_is_alive(event_handler.firefox):
+            if not browser_window_is_alive(event_handler.chrome):
                 break
             time.sleep(1)
             while not search_queue.empty():
@@ -402,7 +402,7 @@ def cpb(filename, comments_to_margin=False):
         observer.stop()
         observer.join()
         socket_thread.join()
-        close_browser_window(event_handler.firefox)
+        close_browser_window(event_handler.chrome)
 
 
 if __name__ == "__main__":

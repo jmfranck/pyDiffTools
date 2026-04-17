@@ -39,7 +39,7 @@ class FakeHandler:
         self.filename = filename
         self.observer = observer
         self.comments_to_margin = comments_to_margin
-        self.firefox = object()
+        self.chrome = object()
 
     def forward_search(self, _search_text):
         return

@@ -1,6 +1,7 @@
 import shutil
 import threading
 import time
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -56,6 +57,36 @@ def test_root_file_same_dir_include(fb):
         root_file.unlink()
         inc_file.unlink()
         nested.rmdir()
+
+
+def test_include_falls_back_to_quarto_project_root(fb):
+    nested = Path("nested/deep")
+    nested.mkdir(parents=True, exist_ok=True)
+    root_file = nested / "root.qmd"
+    root_file.write_text("{{< include shared.qmd >}}")
+    Path("shared.qmd").write_text("project root include")
+
+    tree, roots, included_by = fb.analyze_includes([root_file.as_posix()])
+
+    assert tree[root_file.as_posix()] == ["shared.qmd"]
+    assert included_by["shared.qmd"] == [root_file.as_posix()]
+    assert roots[root_file.as_posix()] == fb.PROJECT_ROOT
+    assert roots["shared.qmd"] == fb.PROJECT_ROOT
+
+
+def test_include_prefers_including_file_directory(fb):
+    nested = Path("nested/current")
+    nested.mkdir(parents=True, exist_ok=True)
+    root_file = nested / "root.qmd"
+    local_include = nested / "shared.qmd"
+    root_file.write_text("{{< include shared.qmd >}}")
+    local_include.write_text("local include")
+    Path("shared.qmd").write_text("project root include")
+
+    tree, _, included_by = fb.analyze_includes([root_file.as_posix()])
+
+    assert tree[root_file.as_posix()] == [local_include.as_posix()]
+    assert included_by[local_include.as_posix()] == [root_file.as_posix()]
 
 
 def test_missing_include_error(fb, tmp_path):
@@ -138,6 +169,41 @@ def test_postprocess_adds_shared_pygments_stylesheet_link(fb, tmp_path):
     assert ".highlight" in css
 
 
+def test_dev_server_handler_disables_conditional_cache(fb, monkeypatch):
+    handler = fb.NoCacheHTTPRequestHandler.__new__(
+        fb.NoCacheHTTPRequestHandler
+    )
+    handler.headers = Message()
+    handler.headers["If-Modified-Since"] = "Tue, 14 Nov 2023 22:13:20 GMT"
+    handler.headers["If-None-Match"] = '"stale"'
+
+    def fake_send_head(self):
+        assert "If-Modified-Since" not in self.headers
+        assert "If-None-Match" not in self.headers
+        return "fresh body"
+
+    monkeypatch.setattr(
+        fb.SimpleHTTPRequestHandler, "send_head", fake_send_head
+    )
+    assert handler.send_head() == "fresh body"
+
+    sent_headers = []
+    handler.send_header = lambda name, value: sent_headers.append(
+        (name, value)
+    )
+    monkeypatch.setattr(
+        fb.SimpleHTTPRequestHandler, "end_headers", lambda self: None
+    )
+    handler.end_headers()
+
+    assert (
+        "Cache-Control",
+        "no-store, no-cache, must-revalidate, max-age=0",
+    ) in sent_headers
+    assert ("Pragma", "no-cache") in sent_headers
+    assert ("Expires", "0") in sent_headers
+
+
 def test_navigation_persists_after_notebook_updates(fb):
     fb.build_all()
     render_files = fb.load_rendered_files()
@@ -190,6 +256,98 @@ def test_all_render_targets_receive_navigation_template(fb):
     for page in ["first_page", "second_page"]:
         html = Path(f"_display/{page}.html").read_text()
         assert "on-this-page" in html
+
+
+def test_quarto_config_change_rebuilds_every_graph_file(fb, monkeypatch):
+    rendered = []
+
+    def fake_render_file(
+        src,
+        dest,
+        fragment,
+        bibliography=None,
+        csl=None,
+        webtex=False,
+    ):
+        rendered.append(src.as_posix())
+        output = dest.with_suffix(".html")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            "<html><head></head><body>"
+            f"<p>{src.as_posix()}</p>"
+            "</body></html>"
+        )
+
+    monkeypatch.setattr(fb, "ensure_pandoc_available", lambda: None)
+    monkeypatch.setattr(fb, "ensure_pandoc_crossref", lambda: None)
+    monkeypatch.setattr(fb, "render_file", fake_render_file)
+
+    Path("root.qmd").write_text(
+        "# Root\n\n" "{{< include child.qmd >}}\n\n" "@sec:child\n"
+    )
+    Path("child.qmd").write_text("## Child {#sec:child}\n")
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    if "project" not in config:
+        config["project"] = {}
+    config["project"]["render"] = ["root.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    fb.build_all()
+    rendered.clear()
+
+    config["project"]["render"] = ["root.qmd", "child.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+    fb.build_all(changed_paths=["_quarto.yml"])
+
+    assert set(rendered) == {"root.qmd", "child.qmd"}
+
+
+def test_render_tree_lists_missing_trunk_from_quarto_config(fb):
+    Path("present.qmd").write_text("# Present\n")
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    if "project" not in config:
+        config["project"] = {}
+    config["project"]["render"] = ["missing.qmd", "present.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    render_files = fb.load_rendered_files()
+    tree, _, include_map = fb.analyze_includes(render_files)
+    graph = fb.RenderNotebook(render_files, tree, include_map)
+
+    tree_text = str(graph)
+    assert "missing.qmd" in tree_text
+    assert "present.qmd" in tree_text
+
+
+def test_code_block_counter_accepts_plain_python_fences(fb):
+    text = """```python
+print('hello')
+```
+"""
+    assert fb.RenderNotebook.count_code_blocks(text) == 1
+
+
+# TODO ☐: I really disapprove of calling things "monkeypatch" without further explanation
+def test_noexec_magic_marks_block_without_execution(fb, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    src = Path("doc.qmd")
+    src.write_text(
+        "# noexec test\n\n"
+        "```python\n"
+        "%noexec\n"
+        "print('skip')\n"
+        "```\n"
+    )
+    fb.PROJECT_ROOT = tmp_path
+    fb.BUILD_DIR = tmp_path / "_build"
+    fb.BUILD_DIR.mkdir(parents=True, exist_ok=True)
+
+    code_blocks = fb.mirror_and_modify(["doc.qmd"], {}, {"doc.qmd": tmp_path})
+
+    assert code_blocks["doc.qmd"][0][2]
+    outputs, code_map = fb.execute_code_blocks(code_blocks)
+    assert "code skipped (%noexec)" in outputs[("doc.qmd", 1)]
+    assert "%noexec" in code_map[("doc.qmd", 1)]
 
 
 def test_notebook_progress_message_includes_notebook_index(
@@ -257,6 +415,33 @@ def test_notebook_progress_message_includes_notebook_index(
 
     logs = capsys.readouterr().out
     assert "of notebook 1/2 from split_notebook.qmd" in logs
+
+
+def test_execute_code_blocks_uses_project_root_cache_dir(
+    fb, tmp_path, monkeypatch
+):
+    other_cwd = tmp_path / "other_cwd"
+    other_cwd.mkdir()
+    monkeypatch.chdir(other_cwd)
+    captured = {}
+
+    def fake_preprocess(self, nb, resources=None, km=None):
+        captured["path"] = resources["metadata"]["path"]
+        return nb, resources
+
+    monkeypatch.setattr(
+        fb.LoggingExecutePreprocessor,
+        "preprocess",
+        fake_preprocess,
+    )
+
+    fb.execute_code_blocks({"cache_path.qmd": [("print('cache')", "md5")]})
+
+    project_cache = fb.PROJECT_ROOT / "_nbcache"
+    assert captured["path"] == str(fb.PROJECT_ROOT)
+    assert project_cache.exists()
+    assert list(project_cache.glob("*.ipynb"))
+    assert not (other_cwd / "_nbcache").exists()
 
 
 def test_async_notebook_outputs_replace_placeholder(fb):

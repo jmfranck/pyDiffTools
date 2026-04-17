@@ -1,12 +1,22 @@
+import io
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 from pydifftools import continuous
 from pydifftools.continuous import run_pandoc
 from pydifftools.command_line import mfs
+from pydifftools.command_registry import _COMMAND_SPECS
+from pydifftools.git_gd import (
+    DiffEntry,
+    INSTALL_ALIAS_VALUE,
+    build_difftool_command,
+    build_entries,
+)
 
 
 def _make_cli_env(tmp_path):
@@ -14,6 +24,9 @@ def _make_cli_env(tmp_path):
     env = os.environ.copy()
     stub_dir = tmp_path / "stubs"
     stub_dir.mkdir()
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    env["HOME"] = str(home_dir)
     (stub_dir / "argcomplete.py").write_text(
         "def autocomplete(parser):\n    return None\n"
     )
@@ -23,7 +36,7 @@ def _make_cli_env(tmp_path):
         "def argmin(*args, **kwargs):\n    return 0\n"
     )
     (stub_dir / "psutil.py").write_text("pass\n")
-    bib_path = Path("~/testlib.bib").expanduser()
+    bib_path = home_dir / "testlib.bib"
     bib_path.write_text("@book{dummy, title={Dummy}}\n")
     # Ensure CLI subprocesses can see conda-installed tools and libraries.
     env["PATH"] = f"/root/conda/bin:{env['PATH']}"
@@ -72,6 +85,101 @@ def test_wgrph_missing_file(tmp_path):
     proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
     assert proc.returncode != 0
     assert "YAML file not found" in proc.stderr
+
+
+def test_file_completers_are_extension_specific(monkeypatch):
+    from pydifftools import command_line
+
+    class FakeFilesCompleter:
+        def __init__(self, allowednames):
+            self.allowednames = allowednames
+
+    monkeypatch.setattr(command_line, "FilesCompleter", FakeFilesCompleter)
+
+    parser = command_line.build_parser()
+    wgrph_action = next(
+        action
+        for action in parser._pydifft_subparsers["wgrph"]._actions
+        if action.dest == "yaml"
+    )
+    cpb_action = next(
+        action
+        for action in parser._pydifft_subparsers["cpb"]._actions
+        if action.dest == "filename"
+    )
+
+    assert wgrph_action.completer.allowednames == ["*.yaml", "*.yml"]
+    assert cpb_action.completer.allowednames == ["*.md"]
+
+
+def _collect_argcomplete_suggestions(monkeypatch, comp_line):
+    argcomplete = pytest.importorskip("argcomplete")
+    from argcomplete import io as argcomplete_io
+    from pydifftools import command_line
+
+    parser = command_line.build_parser()
+    output = io.StringIO()
+    monkeypatch.setattr(
+        argcomplete.CompletionFinder, "_init_debug_stream", lambda self: None
+    )
+    monkeypatch.setattr(argcomplete_io, "debug_stream", io.StringIO())
+    monkeypatch.setenv("_ARGCOMPLETE", "1")
+    monkeypatch.setenv("_ARGCOMPLETE_IFS", "\013")
+    monkeypatch.setenv("COMP_LINE", comp_line)
+    monkeypatch.setenv("COMP_POINT", str(len(comp_line)))
+
+    class CompletionExit(Exception):
+        def __init__(self, code):
+            self.code = code
+
+    def exit_method(code=0):
+        raise CompletionExit(code)
+
+    with pytest.raises(CompletionExit) as excinfo:
+        try:
+            argcomplete.autocomplete(
+                parser,
+                always_complete_options=False,
+                exit_method=exit_method,
+                output_stream=output,
+            )
+        except TypeError as exc:
+            if "unexpected keyword argument" not in str(exc):
+                raise
+            argcomplete.autocomplete(parser)
+    assert excinfo.value.code == 0
+    suggestions = [j.rstrip() for j in output.getvalue().split("\013") if j]
+    assert argcomplete is not None
+    return suggestions
+
+
+def test_argcomplete_root_only_lists_subcommands(monkeypatch):
+    suggestions = _collect_argcomplete_suggestions(monkeypatch, "pydifft ")
+
+    assert sorted(suggestions) == sorted(_COMMAND_SPECS)
+    assert all(not j.startswith("-") for j in suggestions)
+
+
+def test_argcomplete_completes_subcommand_prefix(monkeypatch):
+    suggestions = _collect_argcomplete_suggestions(monkeypatch, "pydifft wg")
+
+    assert suggestions == ["wgrph"]
+
+
+def test_argcomplete_wgrph_filters_to_yaml_files(monkeypatch, tmp_path):
+    plans_dir = tmp_path / "plans"
+    plans_dir.mkdir()
+    (plans_dir / "phase1.txt").write_text("nope\n")
+    (plans_dir / "phase2.yaml").write_text("nodes: {}\n")
+    (plans_dir / "phase3.yml").write_text("nodes: {}\n")
+    (plans_dir / "phone.md").write_text("# nope\n")
+    monkeypatch.chdir(tmp_path)
+
+    suggestions = _collect_argcomplete_suggestions(
+        monkeypatch, "pydifft wgrph -d plans/ph"
+    )
+
+    assert suggestions == ["plans/phase2.yaml", "plans/phase3.yml"]
 
 
 def test_tex2qmd_cli(tmp_path):
@@ -181,6 +289,207 @@ def test_markdown_outline_reorder(tmp_path):
     content = target.read_text()
     assert content.index("## Second Topic") < content.index("## First Topic")
     assert "##### Hidden Notes" in content
+
+
+def test_gd_install_sets_git_alias(monkeypatch, capsys):
+    calls = []
+
+    def fake_run(cmd, check=False, capture_output=False, text=False):
+        calls.append(
+            {
+                "cmd": cmd,
+                "check": check,
+                "capture_output": capture_output,
+                "text": text,
+            }
+        )
+        if cmd[:5] == [
+            "git",
+            "config",
+            "--global",
+            "--get",
+            "difftool.mygvim.cmd",
+        ]:
+            return subprocess.CompletedProcess(
+                cmd, returncode=1, stdout="", stderr=""
+            )
+        return subprocess.CompletedProcess(
+            cmd, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr("pydifftools.git_gd.subprocess.run", fake_run)
+
+    from pydifftools import command_line
+
+    command_line.main(["gd", "--install"])
+    assert calls[0]["cmd"] == [
+        "git",
+        "config",
+        "--global",
+        "alias.gd",
+        INSTALL_ALIAS_VALUE,
+    ]
+    assert calls[0]["check"] is True
+    out = capsys.readouterr().out
+    assert "alias.gd" in out
+    assert "difftool.mygvim.cmd" in out
+
+
+def test_gd_install_rejects_diff_args():
+    from pydifftools import command_line
+
+    with pytest.raises(SystemExit) as excinfo:
+        command_line.main(["gd", "--install", "HEAD~1"])
+    assert "does not take diff args" in str(excinfo.value)
+
+
+def test_gd_build_entries_sorts_by_change_count(monkeypatch):
+    monkeypatch.setattr(
+        "pydifftools.git_gd.changed_entries",
+        lambda diff_args, pathspec: [
+            DiffEntry(path="alpha.txt", added=0, deleted=0),
+            DiffEntry(path="binary.bin", added=0, deleted=0),
+            DiffEntry(path="beta.txt", added=0, deleted=0),
+        ],
+    )
+
+    def fake_numstat(diff_args, paths):
+        values = {
+            "alpha.txt": (3, 4),
+            "binary.bin": (None, None),
+            "beta.txt": (10, 1),
+        }
+        return values[paths[0]]
+
+    monkeypatch.setattr("pydifftools.git_gd.numstat_for_paths", fake_numstat)
+
+    diff_args, entries = build_entries(["HEAD~1", "--", "docs"])
+    assert diff_args == ["HEAD~1"]
+    assert [entry.path for entry in entries] == [
+        "beta.txt",
+        "alpha.txt",
+        "binary.bin",
+    ]
+
+
+def test_gd_build_entries_tracks_renamed_file(tmp_path):
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        subprocess.run(["git", "init", "-q"], check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"], check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"], check=True
+        )
+        Path("old.txt").write_text("one\ntwo\nthree\n")
+        subprocess.run(["git", "add", "old.txt"], check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "initial"], check=True)
+        subprocess.run(["git", "mv", "old.txt", "new.txt"], check=True)
+        Path("new.txt").write_text("one\nTWO\nthree\n")
+
+        diff_args, entries = build_entries(["HEAD"])
+    finally:
+        os.chdir(cwd)
+
+    assert diff_args == ["HEAD"]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.status.startswith("R")
+    assert entry.old_path == "old.txt"
+    assert entry.new_path == "new.txt"
+    assert entry.path == "new.txt"
+    assert entry.added == 1
+    assert entry.deleted == 1
+    assert entry.diff_paths == ["old.txt", "new.txt"]
+    assert entry.display_path == "old.txt\n  → new.txt"
+
+
+def test_gd_pathspec_keeps_renamed_file_status(tmp_path):
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        subprocess.run(["git", "init", "-q"], check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"], check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"], check=True
+        )
+        Path("old.txt").write_text("one\ntwo\nthree\n")
+        subprocess.run(["git", "add", "old.txt"], check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "initial"], check=True)
+        subprocess.run(["git", "mv", "old.txt", "new.txt"], check=True)
+        Path("new.txt").write_text("one\nTWO\nthree\n")
+
+        _diff_args, entries_from_new_path = build_entries(
+            ["HEAD", "--", "new.txt"]
+        )
+        _diff_args, entries_from_old_path = build_entries(
+            ["HEAD", "--", "old.txt"]
+        )
+    finally:
+        os.chdir(cwd)
+
+    for entries in (entries_from_new_path, entries_from_old_path):
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry.status.startswith("R")
+        assert entry.old_path == "old.txt"
+        assert entry.new_path == "new.txt"
+        assert entry.diff_paths == ["old.txt", "new.txt"]
+
+
+def test_gd_diff_entry_marks_exact_renames():
+    entry = DiffEntry(
+        path="new.txt",
+        added=0,
+        deleted=0,
+        status="R100",
+        old_path="old.txt",
+        new_path="new.txt",
+    )
+
+    assert entry.is_exact_rename
+    assert entry.diff_paths == ["old.txt", "new.txt"]
+    assert entry.display_path == "old.txt → new.txt"
+
+
+def test_gd_difftool_command_wraps_renames_for_merged_side():
+    entry = DiffEntry(
+        path="new.txt",
+        added=1,
+        deleted=1,
+        status="R071",
+        old_path="old.txt",
+        new_path="new.txt",
+    )
+
+    cmd = build_difftool_command(
+        ["HEAD"],
+        entry,
+        tool_cmd='~/gvim.sh -f -d -- "$LOCAL" "$MERGED"',
+    )
+
+    assert cmd[:3] == [
+        "git",
+        "-c",
+        (
+            'difftool.pydifft-gd-rename.cmd=MERGED="$REMOTE"; '
+            '~/gvim.sh -f -d -- "$LOCAL" "$MERGED"'
+        ),
+    ]
+    assert cmd[3:] == [
+        "difftool",
+        "--tool=pydifft-gd-rename",
+        "--no-prompt",
+        "--find-renames",
+        "HEAD",
+        "--",
+        "old.txt",
+        "new.txt",
+    ]
 
 
 def test_cpb_hides_low_headers(tmp_path):

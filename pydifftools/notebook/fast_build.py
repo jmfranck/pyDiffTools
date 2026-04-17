@@ -85,7 +85,7 @@ include_pattern = re.compile(
 )
 # Python code block pattern
 code_pattern = re.compile(
-    r"^\s*```\{python[^}]*\}\s*\r?\n(.*?)^\s*```",
+    r"^\s*```(?:\{python[^}]*\}|python[^\n]*)\s*\r?\n(.*?)^\s*```",
     re.DOTALL | re.MULTILINE | re.IGNORECASE,
 )
 # Markdown image pattern
@@ -116,7 +116,7 @@ class RenderNotebook:
         return len(code_pattern.findall(text))
 
     def _build_nodes(self):
-        for path in self.tree:
+        for path in [*self.render_files, *self.tree]:
             if path not in self.nodes:
                 if path in self.tree:
                     children = list(self.tree[path])
@@ -195,11 +195,22 @@ class RenderNotebook:
             if html_exists:
                 html_text = html_file.read_text()
 
-            # data-script markers are always present by design. We only label
-            # notebook work as unrun when the red waiting placeholder remains.
-            if (
-                self.nodes[path]["has_notebook"]
-                and "Running notebook " in html_text
+            # data-script markers remain after substitution, so only label
+            # notebook work as unrun when the marker is still empty or the red
+            # waiting placeholder remains.
+            # TODO ☐: in the following, why are we looking for red
+            #         marker in a manual way like this? Also, isn't it
+            #         possible that this string occurs naturally in the
+            #         notes?  Rather, the whole purpose of the tree is
+            #         to keep track of what has been built and what has
+            #         note been built.  It's also supposed to store md5
+            #         hash info (it for sure does this for the notebook,
+            #         but should for other things as well, if it needs
+            #         to) so that it can know this information between a
+            #         quit and restart.
+            if self.nodes[path]["has_notebook"] and (
+                "Running notebook " in html_text
+                or notebook_marker_is_pending(path, html_text)
             ):
                 tags.append("unrun ipynb")
 
@@ -326,11 +337,14 @@ class RenderNotebook:
         dest_html = (DISPLAY_DIR / target).with_suffix(".html")
         if not src_html.exists():
             dest_html.parent.mkdir(parents=True, exist_ok=True)
+            source_path = PROJECT_ROOT / target
+            if source_path.exists():
+                message = f"Waiting for pandoc on {target} to complete..."
+            else:
+                message = f"Missing source file {source_path}"
             dest_html.write_text(
                 "<html><body><div style='color:red;font-weight:bold'>"
-                f"Waiting for pandoc on {target} to complete..."
-                "</div>"
-                "</body></html>"
+                f"{message}</div></body></html>"
             )
             return
         dest_html.parent.mkdir(parents=True, exist_ok=True)
@@ -511,7 +525,10 @@ NOTEBOOK_CACHE_DIR = Path("_nbcache")
 
 def execute_code_blocks(blocks):
     """Run code blocks as Jupyter notebooks with caching."""
-    NOTEBOOK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_dir = NOTEBOOK_CACHE_DIR
+    if not cache_dir.is_absolute():
+        cache_dir = PROJECT_ROOT / cache_dir
+    cache_dir.mkdir(parents=True, exist_ok=True)
     outputs = {}
     code_map = {}
     jobs = []
@@ -520,13 +537,28 @@ def execute_code_blocks(blocks):
     for src, cells in blocks.items():
         if not cells:
             continue
-        codes = [c for c, _ in cells]
-        md5s = [m for _, m in cells]
+        cells = [
+            (*cell, False) if len(cell) == 2 else cell for cell in cells
+        ]
+        codes = [c for c, _, _ in cells]
+        md5s = [m for _, m, _ in cells]
+        skip_flags = [flag for _, _, flag in cells]
         groups = []
         current_codes = []
         current_md5s = []
         current_indices = []
         for idx, code in enumerate(codes, start=1):
+            if skip_flags[idx - 1]:
+                # Mark %noexec cells as completed immediately so they never
+                # reach notebook execution, but still render highlighted code
+                # with an explicit skipped notice in the final HTML.
+                outputs[(src, idx)] = (
+                    '<div style="color:#888;font-style:italic">'
+                    "code skipped (%noexec)"
+                    "</div>"
+                )
+                code_map[(src, idx)] = code
+                continue
             stripped = code.lstrip()
             # Split execution into separate notebooks whenever a cell
             # begins with ``%reset -f`` so that changing code after a
@@ -552,7 +584,7 @@ def execute_code_blocks(blocks):
         group_indices, group_codes, group_md5s = group_data
         hash_input = (src + ":" + "".join(group_md5s)).encode()
         nb_hash = hashlib.md5(hash_input).hexdigest()
-        nb_path = NOTEBOOK_CACHE_DIR / f"{nb_hash}.ipynb"
+        nb_path = cache_dir / f"{nb_hash}.ipynb"
         if nb_path.exists():
             print(f"Reading cached output for {src} from {nb_path}!")
             nb = nbformat.read(nb_path, as_version=4)
@@ -572,7 +604,7 @@ def execute_code_blocks(blocks):
                     nb,
                     {
                         "metadata": {
-                            "path": str(Path(src).parent),
+                            "path": str((PROJECT_ROOT / src).parent),
                             "source": src,
                             "notebook_index": group_idx,
                             "notebook_total": total_groups,
@@ -603,16 +635,17 @@ def execute_code_blocks(blocks):
         return src, group_indices, nb, codes
 
     # Execute notebook chunks concurrently so long-running groups do not block.
-    max_workers = max(1, min(len(jobs), 4))
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = [pool.submit(run_job, job) for job in jobs]
-        for future in as_completed(futures):
-            src, group_indices, nb, codes = future.result()
-            for offset, cell in enumerate(nb.cells):
-                html = outputs_to_html(cell.get("outputs", []))
-                idx = group_indices[offset]
-                outputs[(src, idx)] = html
-                code_map[(src, idx)] = codes[idx - 1]
+    if jobs:
+        max_workers = max(1, min(len(jobs), 4))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [pool.submit(run_job, job) for job in jobs]
+            for future in as_completed(futures):
+                src, group_indices, nb, codes = future.result()
+                for offset, cell in enumerate(nb.cells):
+                    html = outputs_to_html(cell.get("outputs", []))
+                    idx = group_indices[offset]
+                    outputs[(src, idx)] = html
+                    code_map[(src, idx)] = codes[idx - 1]
 
     return outputs, code_map
 
@@ -623,9 +656,9 @@ def analyze_includes(render_files):
     Returns a tuple ``(tree, roots, included_by)`` where:
 
     * ``tree`` maps each file to the files it directly includes.
-    * ``roots`` maps each file to the root directory of the main document
-      that ultimately includes it. This keeps include resolution consistent
-      with Quarto's behavior.
+    * ``roots`` maps each file to the project root directory where
+      ``_quarto.yml`` lives. Includes are resolved from the including
+      file's directory first, then from this project root.
     * ``included_by`` maps an included file to the files that include it.
     """
 
@@ -635,24 +668,27 @@ def analyze_includes(render_files):
 
     stack = [Path(f).resolve() for f in render_files]
     root = PROJECT_ROOT
-    root_dirs = {
-        Path(f).resolve(): Path(f).parent.resolve() for f in render_files
-    }
+    root_dirs = {Path(f).resolve(): PROJECT_ROOT for f in render_files}
 
     while stack:
         current = stack.pop()
-        if current in visited or not current.exists():
+        if current in visited:
             continue
         visited.add(current)
-        root_dir = root_dirs.get(current, current.parent)
+        try:
+            key = current.relative_to(root).as_posix()
+        except ValueError:
+            key = current.as_posix()
+        if not current.exists():
+            tree.setdefault(key, [])
+            continue
+        root_dir = root_dirs.get(current, PROJECT_ROOT)
         includes: list[str] = []
         text = current.read_text()
         for _kind, inc in include_pattern.findall(text):
             target = (current.parent / inc).resolve()
             if not target.exists():
-                target = (root_dir / inc).resolve()
-            if not target.exists():
-                target = (root_dir.parent / inc).resolve()
+                target = (PROJECT_ROOT / inc).resolve()
             if not target.exists():
                 raise FileNotFoundError(
                     f"Include file '{inc}' not found for '{current}'"
@@ -663,16 +699,12 @@ def analyze_includes(render_files):
                 rel = target.as_posix()
             includes.append(rel)
             stack.append(target)
-            root_dirs.setdefault(target, root_dir)
+            root_dirs.setdefault(target, PROJECT_ROOT)
             try:
                 cur_rel = current.relative_to(root).as_posix()
             except ValueError:
                 cur_rel = current.as_posix()
             included_by.setdefault(rel, []).append(cur_rel)
-        try:
-            key = current.relative_to(root).as_posix()
-        except ValueError:
-            key = current.as_posix()
         tree[key] = includes
 
     roots_str: dict[str, Path] = {}
@@ -700,8 +732,11 @@ def resolve_render_file(file, included_by, render_files):
 
 def collect_anchors(render_files, included_by):
     anchors = {}
-    for path in Path(".").rglob("*.qmd"):
-        if BUILD_DIR in path.parents:
+    build_dir = BUILD_DIR.resolve()
+    display_dir = DISPLAY_DIR.resolve()
+    for path in PROJECT_ROOT.rglob("*.qmd"):
+        path = path.resolve()
+        if build_dir in path.parents or display_dir in path.parents:
             continue
         lines = path.read_text().splitlines()
         for line in lines:
@@ -713,7 +748,9 @@ def collect_anchors(render_files, included_by):
                 if hm:
                     text = hm.group(2).strip()
                 render_file = resolve_render_file(
-                    path.as_posix(), included_by, render_files
+                    path.relative_to(PROJECT_ROOT).as_posix(),
+                    included_by,
+                    render_files,
                 )
                 anchors[key] = (render_file, text)
     return anchors
@@ -755,6 +792,25 @@ MATHJAX_DIR = Path("_template/mathjax").resolve()
 PROJECT_ROOT = Path(".").resolve()
 QMDB_FORWARD_SEARCH_HOST = "127.0.0.1"
 QMDB_FORWARD_SEARCH_PORT = 51236
+
+
+class NoCacheHTTPRequestHandler(SimpleHTTPRequestHandler):
+    """Serve development files fresh even when rewrites share an mtime."""
+
+    def send_head(self):
+        for header in ("If-Modified-Since", "If-None-Match"):
+            if header in self.headers:
+                del self.headers[header]
+        return super().send_head()
+
+    def end_headers(self):
+        self.send_header(
+            "Cache-Control",
+            "no-store, no-cache, must-revalidate, max-age=0",
+        )
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
 
 
 def example_notebook_root():
@@ -1029,7 +1085,7 @@ def collect_render_targets(targets, included_by, render_files):
 
 def mirror_and_modify(files, anchors, roots):
     project_root = PROJECT_ROOT
-    code_blocks: dict[str, list[tuple[str, str]]] = {}
+    code_blocks = {}
     scanned_files = 0
     total_blocks = 0
     scanned_list = []
@@ -1049,16 +1105,13 @@ def mirror_and_modify(files, anchors, roots):
                 flush=True,
             )
 
-        root_dir = roots.get(file, src.parent)
+        root_dir = roots.get(file, PROJECT_ROOT)
 
         def repl(match: re.Match) -> str:
             kind, inc = match.groups()
-            # include paths are now relative to the main document root
-            target_src = (root_dir / inc).resolve()
+            target_src = (src.parent / inc).resolve()
             if not target_src.exists():
-                target_src = (src.parent / inc).resolve()
-            if not target_src.exists():
-                target_src = (root_dir.parent / inc).resolve()
+                target_src = (root_dir / inc).resolve()
             target_rel = target_src.relative_to(project_root)
             html_path = (BUILD_DIR / target_rel).with_suffix(".html")
             inc_path = os.path.relpath(html_path, dest.parent)
@@ -1079,8 +1132,15 @@ def mirror_and_modify(files, anchors, roots):
             idx += 1
             code = match.group(1)
             md5 = hashlib.md5(code.encode()).hexdigest()
+            noexec = False
+            for line in code.splitlines():
+                if not line.strip():
+                    continue
+                if line.lstrip().startswith("%noexec"):
+                    noexec = True
+                break
             src_rel = str(src)
-            code_blocks.setdefault(src_rel, []).append((code, md5))
+            code_blocks.setdefault(src_rel, []).append((code, md5, noexec))
             return (
                 f'<div data-script="{src_rel}" data-index="{idx}"'
                 f' data-md5="{md5}"></div>'
@@ -1097,8 +1157,6 @@ def mirror_and_modify(files, anchors, roots):
             target_src = (src.parent / img_path).resolve()
             if not target_src.exists():
                 target_src = (root_dir / img_path).resolve()
-            if not target_src.exists():
-                target_src = (root_dir.parent / img_path).resolve()
             if target_src.exists():
                 try:
                     rel = target_src.relative_to(project_root)
@@ -1190,6 +1248,32 @@ try:
     from lxml import html as lxml_html
 except ImportError:
     lxml_html = None
+
+
+def notebook_marker_is_pending(src: str, html_text: str) -> bool:
+    """Return true when a rendered notebook marker has no substituted output."""
+    if not html_text or "data-script" not in html_text or src not in html_text:
+        return False
+    if lxml_html is not None:
+        try:
+            root = lxml_html.fromstring(html_text)
+        except Exception:
+            root = None
+        if root is not None:
+            for node in root.xpath("//div[@data-script][@data-index]"):
+                if node.get("data-script") != src:
+                    continue
+                if len(node) == 0 and not "".join(node.itertext()).strip():
+                    return True
+            return False
+    pattern = re.compile(
+        r"<div\b"
+        rf"(?=[^>]*\bdata-script=['\"]{re.escape(src)}['\"])"
+        r"(?=[^>]*\bdata-index=['\"]?\d+['\"]?)"
+        r"[^>]*>\s*</div>",
+        re.IGNORECASE,
+    )
+    return bool(pattern.search(html_text))
 
 
 def parse_headings(html_path: Path):
@@ -1500,17 +1584,25 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     if changed_paths:
         # Normalize changed paths, then compute staged and display targets.
         normalized = set()
+        config_changed = False
         for path in changed_paths:
             candidate = Path(path)
-            if not candidate.exists():
-                continue
             try:
                 rel = candidate.resolve().relative_to(PROJECT_ROOT)
             except ValueError:
                 continue
+            if rel.as_posix() == "_quarto.yml":
+                config_changed = True
+                continue
+            if not candidate.exists():
+                continue
             if rel.suffix == ".qmd":
                 normalized.add(rel.as_posix())
 
+        if config_changed:
+            for rel in graph.all_paths():
+                if (PROJECT_ROOT / rel).exists():
+                    graph.nodes[rel]["needs_build"] = True
         build_set = set(graph.stage_targets(normalized))
         display_targets = collect_render_targets(
             build_set, include_map, render_files
@@ -1741,9 +1833,12 @@ class ChangeHandler(FileSystemEventHandler):
         self.refresher = refresher
 
     def handle(self, path, is_directory):
+        source_path = Path(path)
+        is_source_file = source_path.suffix == ".qmd"
+        is_project_config = source_path.name == "_quarto.yml"
         if (
             not is_directory
-            and path.endswith(".qmd")
+            and (is_source_file or is_project_config)
             and "/_build/" not in path
             and "/_display/" not in path
         ):
@@ -1784,7 +1879,7 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
     print("Watching project root:")
     print(" ", PROJECT_ROOT)
 
-    class Handler(SimpleHTTPRequestHandler):
+    class Handler(NoCacheHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(DISPLAY_DIR), **kwargs)
 

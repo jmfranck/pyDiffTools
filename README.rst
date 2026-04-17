@@ -56,6 +56,10 @@ included are (listed in order of fun/utility):
   ``_build``/``_display`` directories; with ``--watch`` it starts the HTTP
   server and automatically rebuilds the staged fragments whenever you edit
   a ``.qmd`` file.
+- `pydifft gd [git diff args...]` shows the same Qt review table as the old
+  ``git_gd_qt.py`` helper before launching ``git difftool`` for a selected
+  file.  Run ``pydifft gd --install`` to add the matching ``git gd`` alias
+  to your global git config.
 - `pydifft qmdinit [directory]` scaffolds a new Quarto-style project using
   the bundled templates and example ``project1`` hierarchy, then downloads
   MathJax into ``_template/mathjax`` so the builder can run immediately.
