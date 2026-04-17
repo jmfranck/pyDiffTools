@@ -40,7 +40,10 @@ def test_due_dates_render():
         in dot
     )
     # Nodes that only declare a due date still render the value in orange.
-    assert 'Alt [label=<<font color="orange">3/4/26</font>' in dot
+    assert (
+        '<font point-size="9">__WGRPH_TASK_LINK__:Alt</font>'
+        '<br align="left"/><font color="orange">3/4/26</font>'
+    ) in dot
 
 
 def test_completed_due_is_green():
@@ -83,6 +86,22 @@ def test_completed_overdue_shows_actual_date():
                 "children": [],
                 "parents": [],
                 "style": "completed",
+            },
+        }
+    }
+    dot = yaml_to_dot(data)
+    assert '<font color="green">5/8/24</font>' in dot
+    assert "OVERDUE" not in dot
+
+
+def test_completedendpoint_overdue_shows_actual_date():
+    data = {
+        "nodes": {
+            "Task": {
+                "due": "2024-05-08",
+                "children": [],
+                "parents": [],
+                "style": "completedendpoint",
             },
         }
     }

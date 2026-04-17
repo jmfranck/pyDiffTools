@@ -27,8 +27,8 @@ def test_bullet_overflow_indent(tmp_path):
     assert m, "label not found"
     label = m.group(1)
     segments = _extract_segments(label)
-    assert segments[0].startswith("• ")
-    assert segments[1].startswith("  ")
+    assert segments[1].startswith("• ")
+    assert segments[2].startswith("  ")
 
 
 def test_numbered_overflow_indent(tmp_path):
@@ -49,5 +49,5 @@ def test_numbered_overflow_indent(tmp_path):
     assert m, "label not found"
     label = m.group(1)
     segments = _extract_segments(label)
-    assert segments[0].startswith("1. ")
-    assert segments[1].startswith("  ")
+    assert segments[1].startswith("1. ")
+    assert segments[2].startswith("  ")

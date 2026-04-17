@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import date, datetime
+import time
 
 import textwrap
 import re
@@ -52,6 +53,9 @@ def _register_block_str_presenter() -> None:
 _register_block_str_presenter()
 
 
+class EmptyGraphYamlError(ValueError):
+    pass
+
 def load_graph_yaml(
     path: str, old_data: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
@@ -61,8 +65,26 @@ def load_graph_yaml(
     are propagated to the corresponding nodes so that editing only one side of
     a link keeps the structure symmetric.
     """
-    with open(path) as f:
-        data = yaml.safe_load(f)
+    data = None
+    size = None
+    for attempt in range(3):
+        try:
+            size = Path(path).stat().st_size
+        except OSError:
+            size = None
+        with open(path) as f:
+            data = yaml.safe_load(f)
+        if data is not None:
+            break
+        if size == 0 and attempt < 2:
+            time.sleep(0.05)
+            continue
+        break
+    if data is None:
+        raise EmptyGraphYamlError(
+            "Graph YAML is empty after retries; "
+            f"file_size={size if size is not None else 'unknown'}"
+        )
     nodes = data.setdefault("nodes", {})
     nodes.pop("node", None)
 
@@ -298,7 +320,8 @@ def _node_text_with_due(node):
 
     # Completed tasks should always show their calendar date so the original
     # deadline remains visible even if it was today or overdue when finished.
-    is_completed = "style" in node and node["style"] == "completed"
+    style_name = str(node.get("style", ""))
+    is_completed = "complete" in style_name
     # Replace the actual date with high-visibility notices when the deadline
     # is today or overdue.  These are rendered in a bold 12 pt font so they are
     # immediately noticeable in the diagram.  Completed tasks skip these
@@ -377,31 +400,36 @@ def _normalize_graph_dates(data):
 def _append_node(
     lines, indent, node_name, data, wrap_width, order_by_date, sort_order
 ):
-    # Add a node line with an optional sort hint so Graphviz keeps date order.
-    if node_name in data["nodes"]:
-        label = _node_label(
-            _node_text_with_due(data["nodes"][node_name]), wrap_width
+    # Every rendered DOT node corresponds to a real YAML node, so build the
+    # label directly from that node and prepend the task-link marker line.
+    label = _node_label(
+        _node_text_with_due(data["nodes"][node_name]), wrap_width
+    )
+    task_link_line = (
+        f'<font point-size="9">__WGRPH_TASK_LINK__:{node_name}</font>'
+    )
+    if label:
+        label = "<" + task_link_line + '<br align="left"/>' + label[1:]
+    else:
+        label = "<" + task_link_line + '<br align="left"/>' + ">"
+
+    if order_by_date:
+        lines.append(
+            f"{indent}{node_name} [label={label},"
+            f" sortv={sort_order[node_name]}];"
         )
     else:
-        label = ""
-    if label:
-        if order_by_date:
-            lines.append(
-                f"{indent}{node_name} [label={label},"
-                f" sortv={sort_order[node_name]}];"
-            )
-        else:
-            lines.append(f"{indent}{node_name} [label={label}];")
-    else:
-        if order_by_date:
-            lines.append(
-                f"{indent}{node_name} [sortv={sort_order[node_name]}];"
-            )
-        else:
-            lines.append(f"{indent}{node_name};")
+        lines.append(f"{indent}{node_name} [label={label}];")
 
 
 def yaml_to_dot(data, wrap_width=55, order_by_date=False):
+    def _attrs_to_dot_str(attrs):
+        if isinstance(attrs, list):
+            if not attrs:
+                return ""
+            attrs = attrs[0]
+        return ", ".join(f"{k}={v}" for k, v in attrs.items())
+
     lines = [
         "digraph G {",
         "    graph [",
@@ -423,6 +451,14 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
         data["nodes"] = {}
     if "styles" not in data:
         data["styles"] = {}
+    default_style = data["styles"].get("default", {})
+    default_attrs = default_style.get("attrs", {})
+    for scope in ("graph", "node", "edge"):
+        if scope not in default_attrs:
+            continue
+        attr_str = _attrs_to_dot_str(default_attrs[scope])
+        if attr_str:
+            lines.append(f"    {scope} [{attr_str}];")
     ordered_names = None
     sort_order = None
     ordered_set = None
@@ -461,6 +497,8 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
             )
 
     for style_name in data["styles"]:
+        if style_name == "default":
+            continue
         if style_name not in style_members:
             continue
         if not style_members[style_name]:
@@ -470,20 +508,9 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
             "attrs" in data["styles"][style_name]
             and "node" in data["styles"][style_name]["attrs"]
         ):
-            if isinstance(data["styles"][style_name]["attrs"]["node"], list):
-                attr_str = ", ".join(
-                    f"{k}={v}"
-                    for k, v in data["styles"][style_name]["attrs"]["node"][
-                        0
-                    ].items()
-                )
-            else:
-                attr_str = ", ".join(
-                    f"{k}={v}"
-                    for k, v in data["styles"][style_name]["attrs"][
-                        "node"
-                    ].items()
-                )
+            attr_str = _attrs_to_dot_str(
+                data["styles"][style_name]["attrs"]["node"]
+            )
             lines.append(f"        node [{attr_str}];")
         for node_name in style_members[style_name]:
             _append_node(
@@ -616,7 +643,6 @@ def write_dot_from_yaml(
     if filter_task is not None:
         # Limit the rendered graph to incomplete ancestors of the target task.
         if "nodes" not in data or filter_task not in data["nodes"]:
-            # Allow case-insensitive task lookup to align with CLI completion.
             matches = [
                 name
                 for name in data["nodes"]
@@ -630,6 +656,14 @@ def write_dot_from_yaml(
                     f"'{filter_task}' matches {matches}."
                 )
             else:
+                keys = sorted(str(name) for name in data.get("nodes", {}).keys())
+                preview = ", ".join(keys)
+                print(
+                    "Task filter requested a missing node. "
+                    f"available_nodes={len(keys)} "
+                    f"sample=[{preview}]",
+                    flush=True,
+                )
                 raise ValueError(
                     f"Task '{filter_task}' not found in flowchart YAML."
                 )
@@ -641,20 +675,14 @@ def write_dot_from_yaml(
             if parent in ancestors:
                 continue
             ancestors.add(parent)
-            if (
-                parent in data["nodes"]
-                and "parents" in data["nodes"][parent]
-            ):
+            if parent in data["nodes"] and "parents" in data["nodes"][parent]:
                 for grandparent in data["nodes"][parent]["parents"]:
                     parents_to_check.append(grandparent)
         incomplete_ancestors = set()
         for name in ancestors:
             if name not in data["nodes"]:
                 continue
-            if (
-                "style" in data["nodes"][name]
-                and data["nodes"][name]["style"] == "completed"
-            ):
+            if "complete" in str(data["nodes"][name].get("style", "")):
                 continue
             incomplete_ancestors.add(name)
         data_for_dot = {"nodes": {}, "styles": {}}
