@@ -25,7 +25,7 @@ jobs:
           source "${HOME}/conda/etc/profile.d/mamba.sh"
           conda activate base
           python -m pip install --upgrade pip
-          pip install pytest
+          pip install pytest argcomplete
           conda install -y -c conda-forge pandoc-crossref
       - name: Install project for testing
         run: |
