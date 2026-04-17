@@ -537,9 +537,7 @@ def execute_code_blocks(blocks):
     for src, cells in blocks.items():
         if not cells:
             continue
-        cells = [
-            (*cell, False) if len(cell) == 2 else cell for cell in cells
-        ]
+        cells = [(*cell, False) if len(cell) == 2 else cell for cell in cells]
         codes = [c for c, _, _ in cells]
         md5s = [m for _, m, _ in cells]
         skip_flags = [flag for _, _, flag in cells]
@@ -682,7 +680,6 @@ def analyze_includes(render_files):
         if not current.exists():
             tree.setdefault(key, [])
             continue
-        root_dir = root_dirs.get(current, PROJECT_ROOT)
         includes: list[str] = []
         text = current.read_text()
         for _kind, inc in include_pattern.findall(text):
@@ -1251,7 +1248,8 @@ except ImportError:
 
 
 def notebook_marker_is_pending(src: str, html_text: str) -> bool:
-    """Return true when a rendered notebook marker has no substituted output."""
+    """Return true when a rendered notebook marker has no substituted
+    output."""
     if not html_text or "data-script" not in html_text or src not in html_text:
         return False
     if lxml_html is not None:
@@ -1685,8 +1683,7 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     if code_blocks:
         graph.print_tree_status("after notebook job submission", checksums)
         print(
-            f"Executing notebook blocks for {len(code_blocks)}"
-            " source files.",
+            f"Executing notebook blocks for {len(code_blocks)} source files.",
             flush=True,
         )
         notebook_executor = ThreadPoolExecutor(max_workers=1)
@@ -1954,7 +1951,8 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
                                 break
                             payload += chunk
                     if payload:
-                        # Reuse cpb forward-search behavior for qmdb browser windows.
+                        # Reuse cpb forward-search behavior for qmdb browser
+                        # windows.
                         try:
                             forward_search_in_browser(
                                 refresher.browser, payload.decode("utf-8")
