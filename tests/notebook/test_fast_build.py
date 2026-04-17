@@ -59,6 +59,36 @@ def test_root_file_same_dir_include(fb):
         nested.rmdir()
 
 
+def test_include_falls_back_to_quarto_project_root(fb):
+    nested = Path("nested/deep")
+    nested.mkdir(parents=True, exist_ok=True)
+    root_file = nested / "root.qmd"
+    root_file.write_text("{{< include shared.qmd >}}")
+    Path("shared.qmd").write_text("project root include")
+
+    tree, roots, included_by = fb.analyze_includes([root_file.as_posix()])
+
+    assert tree[root_file.as_posix()] == ["shared.qmd"]
+    assert included_by["shared.qmd"] == [root_file.as_posix()]
+    assert roots[root_file.as_posix()] == fb.PROJECT_ROOT
+    assert roots["shared.qmd"] == fb.PROJECT_ROOT
+
+
+def test_include_prefers_including_file_directory(fb):
+    nested = Path("nested/current")
+    nested.mkdir(parents=True, exist_ok=True)
+    root_file = nested / "root.qmd"
+    local_include = nested / "shared.qmd"
+    root_file.write_text("{{< include shared.qmd >}}")
+    local_include.write_text("local include")
+    Path("shared.qmd").write_text("project root include")
+
+    tree, _, included_by = fb.analyze_includes([root_file.as_posix()])
+
+    assert tree[root_file.as_posix()] == [local_include.as_posix()]
+    assert included_by[local_include.as_posix()] == [root_file.as_posix()]
+
+
 def test_missing_include_error(fb, tmp_path):
     src = tmp_path / "root.qmd"
     src.write_text("{{< include missing.qmd >}}")
@@ -228,6 +258,67 @@ def test_all_render_targets_receive_navigation_template(fb):
         assert "on-this-page" in html
 
 
+def test_quarto_config_change_rebuilds_every_graph_file(fb, monkeypatch):
+    rendered = []
+
+    def fake_render_file(
+        src,
+        dest,
+        fragment,
+        bibliography=None,
+        csl=None,
+        webtex=False,
+    ):
+        rendered.append(src.as_posix())
+        output = dest.with_suffix(".html")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            "<html><head></head><body>"
+            f"<p>{src.as_posix()}</p>"
+            "</body></html>"
+        )
+
+    monkeypatch.setattr(fb, "ensure_pandoc_available", lambda: None)
+    monkeypatch.setattr(fb, "ensure_pandoc_crossref", lambda: None)
+    monkeypatch.setattr(fb, "render_file", fake_render_file)
+
+    Path("root.qmd").write_text(
+        "# Root\n\n" "{{< include child.qmd >}}\n\n" "@sec:child\n"
+    )
+    Path("child.qmd").write_text("## Child {#sec:child}\n")
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    if "project" not in config:
+        config["project"] = {}
+    config["project"]["render"] = ["root.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    fb.build_all()
+    rendered.clear()
+
+    config["project"]["render"] = ["root.qmd", "child.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+    fb.build_all(changed_paths=["_quarto.yml"])
+
+    assert set(rendered) == {"root.qmd", "child.qmd"}
+
+
+def test_render_tree_lists_missing_trunk_from_quarto_config(fb):
+    Path("present.qmd").write_text("# Present\n")
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    if "project" not in config:
+        config["project"] = {}
+    config["project"]["render"] = ["missing.qmd", "present.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    render_files = fb.load_rendered_files()
+    tree, _, include_map = fb.analyze_includes(render_files)
+    graph = fb.RenderNotebook(render_files, tree, include_map)
+
+    tree_text = str(graph)
+    assert "missing.qmd" in tree_text
+    assert "present.qmd" in tree_text
+
+
 def test_code_block_counter_accepts_plain_python_fences(fb):
     text = """```python
 print('hello')
@@ -236,6 +327,7 @@ print('hello')
     assert fb.RenderNotebook.count_code_blocks(text) == 1
 
 
+# TODO ☐: I really disapprove of calling things "monkeypatch" without further explanation
 def test_noexec_magic_marks_block_without_execution(fb, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     src = Path("doc.qmd")

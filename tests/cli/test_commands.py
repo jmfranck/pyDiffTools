@@ -24,6 +24,9 @@ def _make_cli_env(tmp_path):
     env = os.environ.copy()
     stub_dir = tmp_path / "stubs"
     stub_dir.mkdir()
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    env["HOME"] = str(home_dir)
     (stub_dir / "argcomplete.py").write_text(
         "def autocomplete(parser):\n    return None\n"
     )
@@ -33,7 +36,7 @@ def _make_cli_env(tmp_path):
         "def argmin(*args, **kwargs):\n    return 0\n"
     )
     (stub_dir / "psutil.py").write_text("pass\n")
-    bib_path = Path("~/testlib.bib").expanduser()
+    bib_path = home_dir / "testlib.bib"
     bib_path.write_text("@book{dummy, title={Dummy}}\n")
     # Ensure CLI subprocesses can see conda-installed tools and libraries.
     env["PATH"] = f"/root/conda/bin:{env['PATH']}"
