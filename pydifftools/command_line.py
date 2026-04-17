@@ -30,7 +30,12 @@ from .rearrange_tex import run as rearrange_tex_run
 from .flowchart.watch_graph import wgrph
 from .flowchart.graph import load_graph_yaml
 from .notebook.tex_to_qmd import tex2qmd
-from .notebook.fast_build import qmdb, qmdinit
+from .notebook.fast_build import (
+    qmdb,
+    qmdinit,
+    QMDB_FORWARD_SEARCH_HOST,
+    QMDB_FORWARD_SEARCH_PORT,
+)
 
 from .command_registry import _COMMAND_SPECS, register_command
 
@@ -518,27 +523,48 @@ def fs(arguments):
     "markdown forward search, use with cpb to jump to text in the browser"
 )
 def mfs(text):
-    # Send the requested search text to the cpb socket listener.
-    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        client.connect((FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT))
-    except OSError as exc:
-        client.close()
-        # If cpb isn't running yet, choose a markdown file in this directory
-        # that contains the requested search text and start cpb for it.
+    # Normalize markdown-specific markup so search phrases match rendered text.
+    search_text = text
+    marker_match = re.search(r"(?i)@[a-z]{2,4}:", search_text)
+    if marker_match:
+        search_text = search_text[: marker_match.start()]
+    search_text = re.sub(r"\[@[^\]]+\]", " ", search_text)
+    search_text = search_text.replace("**", " ").replace("*", " ")
+    search_text = re.sub(r"\s+", " ", search_text).strip()
+    if not search_text:
+        search_text = text.strip()
+
+    # Try existing cpb and qmdb listeners before launching a new cpb process.
+    socket_addresses = [
+        (FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT),
+        (QMDB_FORWARD_SEARCH_HOST, QMDB_FORWARD_SEARCH_PORT),
+    ]
+    client = None
+    for address in socket_addresses:
+        candidate = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            candidate.connect(address)
+            client = candidate
+            break
+        except OSError:
+            candidate.close()
+    if client is None:
+        # If no listener is running yet, choose a markdown file in this
+        # directory that contains the requested search text and start cpb for
+        # it.
         matching_files = []
         for filename in sorted(os.listdir(".")):
             if not filename.endswith(".md"):
                 continue
             with open(filename, encoding="utf-8") as fp:
-                if text in fp.read():
+                if search_text in fp.read():
                     matching_files.append(filename)
         if len(matching_files) == 0:
             raise RuntimeError(
-                "Could not connect to cpb forward search socket and "
+                "Could not connect to cpb or qmdb forward search sockets and "
                 "could not find the requested text in any .md file in the "
                 "current directory."
-            ) from exc
+            )
         if len(matching_files) > 1:
             print(
                 "Found search text in multiple markdown files. "
@@ -554,19 +580,23 @@ def mfs(text):
         # Wait up to 20 seconds so the child can bring up the listener,
         # then resend the forward-search text.
         for _ in range(80):
-            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            try:
-                client.connect((FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT))
+            for address in socket_addresses:
+                candidate = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                try:
+                    candidate.connect(address)
+                    client = candidate
+                    break
+                except OSError:
+                    candidate.close()
+            if client is not None:
                 break
-            except OSError:
-                client.close()
-                time.sleep(0.25)
+            time.sleep(0.25)
         else:
             raise RuntimeError(
                 "Started cpb automatically, but the forward search socket "
                 "did not come up within 20 seconds."
             )
-    client.sendall(text.encode("utf-8"))
+    client.sendall(search_text.encode("utf-8"))
     client.close()
 
 

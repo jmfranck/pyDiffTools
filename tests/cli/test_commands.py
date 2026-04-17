@@ -283,13 +283,109 @@ def test_mfs_waits_up_to_20_seconds_for_socket(tmp_path):
                         assert False, "Expected mfs to raise RuntimeError"
                     except RuntimeError as exc:
                         assert "within 20 seconds" in str(exc)
-        # one initial connect plus 80 retries gives a full 20-second wait
-        # window
-        assert calls["connect"] == 81
+        # We try cpb and qmdb sockets each time: one initial pass plus
+        # 80 retry passes gives 162 connection attempts total.
+        assert calls["connect"] == 162
         assert calls["sleep"] == 80
     finally:
         os.chdir(cwd)
 
+
+
+def test_mfs_uses_qmdb_socket_when_cpb_socket_missing(tmp_path):
+    calls = {
+        "connect": [],
+        "sendall": [],
+        "fork": 0,
+    }
+
+    class FakeSocket:
+        def __init__(self, *args, **kwargs):
+            return
+
+        def connect(self, address):
+            calls["connect"].append(address)
+            # First (cpb) socket fails, second (qmdb) socket succeeds.
+            if len(calls["connect"]) == 1:
+                raise OSError("cpb socket missing")
+
+        def sendall(self, payload):
+            calls["sendall"].append(payload)
+
+        def close(self):
+            return
+
+    def fake_fork():
+        calls["fork"] += 1
+        return 123
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with patch("pydifftools.command_line.socket.socket", FakeSocket):
+            with patch("pydifftools.command_line.os.fork", fake_fork):
+                mfs("needle")
+        assert calls["fork"] == 0
+        assert len(calls["connect"]) == 2
+        assert calls["sendall"] == [b"needle"]
+    finally:
+        os.chdir(cwd)
+
+
+def test_mfs_strips_markdown_markup_before_search(tmp_path):
+    calls = {
+        "sendall": [],
+    }
+
+    class FakeSocket:
+        def __init__(self, *args, **kwargs):
+            return
+
+        def connect(self, _address):
+            return
+
+        def sendall(self, payload):
+            calls["sendall"].append(payload)
+
+        def close(self):
+            return
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with patch("pydifftools.command_line.socket.socket", FakeSocket):
+            mfs("**Result** near @fig:overview [@smith2024]")
+        assert calls["sendall"] == [b"Result near"]
+    finally:
+        os.chdir(cwd)
+
+
+def test_mfs_marker_regex_is_case_insensitive(tmp_path):
+    calls = {
+        "sendall": [],
+    }
+
+    class FakeSocket:
+        def __init__(self, *args, **kwargs):
+            return
+
+        def connect(self, _address):
+            return
+
+        def sendall(self, payload):
+            calls["sendall"].append(payload)
+
+        def close(self):
+            return
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with patch("pydifftools.command_line.socket.socket", FakeSocket):
+            mfs("Result before @FIG:overview should truncate")
+        assert calls["sendall"] == [b"Result before"]
+    finally:
+        os.chdir(cwd)
 
 def test_run_pandoc_adds_css_lua_and_js_files_from_markdown_directory(
     tmp_path, monkeypatch

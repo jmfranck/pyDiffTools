@@ -12,7 +12,11 @@ import queue
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from .command_registry import register_command
-from .browser_lifecycle import browser_window_is_alive, close_browser_window
+from .browser_lifecycle import (
+    browser_window_is_alive,
+    close_browser_window,
+    forward_search_in_browser,
+)
 
 FORWARD_SEARCH_HOST = "127.0.0.1"
 FORWARD_SEARCH_PORT = 51235
@@ -348,46 +352,10 @@ position
             fp.write(all_data)
 
     def forward_search(self, search_text):
-        # Use the browser's built-in window.find to locate the text.
+        # Reuse shared browser search behavior so cpb and qmdb stay in sync.
         if not search_text:
             return
-        found = self.firefox.execute_script(
-            """
-            var searchText = arguments[0];
-            if (!window.find) {
-                return false;
-            }
-            var didFind = window.find(searchText);
-            if (didFind && window.getSelection) {
-                var selection = window.getSelection();
-                if (selection.rangeCount > 0) {
-                    var rect = selection.getRangeAt(0).getBoundingClientRect();
-                    window.scrollBy(0, rect.top - window.innerHeight / 3);
-                }
-            }
-            return didFind;
-            """,
-            search_text,
-        )
-        if not found:
-            print("forward search did not find text:", search_text)
-        # Bring the browser window to the foreground in Linux window managers.
-        if os.name == "posix" and shutil.which("wmctrl"):
-            window_title = self.firefox.execute_script(
-                "return document.title;"
-            )
-            if window_title:
-                # Try common Chromium title forms used by desktop environments.
-                for title_candidate in [
-                    window_title,
-                    window_title + " - Google Chrome",
-                    window_title + " - Chromium",
-                    window_title + " - Chrome",
-                ]:
-                    subprocess.run(
-                        ["wmctrl", "-a", title_candidate],
-                        check=False,
-                    )
+        forward_search_in_browser(self.firefox, search_text)
 
 
 @register_command(
