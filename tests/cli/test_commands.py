@@ -380,9 +380,7 @@ def test_gd_build_entries_tracks_renamed_file(tmp_path):
         subprocess.run(
             ["git", "config", "user.email", "test@example.com"], check=True
         )
-        subprocess.run(
-            ["git", "config", "user.name", "Test User"], check=True
-        )
+        subprocess.run(["git", "config", "user.name", "Test User"], check=True)
         Path("old.txt").write_text("one\ntwo\nthree\n")
         subprocess.run(["git", "add", "old.txt"], check=True)
         subprocess.run(["git", "commit", "-q", "-m", "initial"], check=True)
@@ -414,9 +412,7 @@ def test_gd_pathspec_keeps_renamed_file_status(tmp_path):
         subprocess.run(
             ["git", "config", "user.email", "test@example.com"], check=True
         )
-        subprocess.run(
-            ["git", "config", "user.name", "Test User"], check=True
-        )
+        subprocess.run(["git", "config", "user.name", "Test User"], check=True)
         Path("old.txt").write_text("one\ntwo\nthree\n")
         subprocess.run(["git", "add", "old.txt"], check=True)
         subprocess.run(["git", "commit", "-q", "-m", "initial"], check=True)
@@ -592,10 +588,106 @@ def test_mfs_waits_up_to_20_seconds_for_socket(tmp_path):
                         assert False, "Expected mfs to raise RuntimeError"
                     except RuntimeError as exc:
                         assert "within 20 seconds" in str(exc)
-        # one initial connect plus 80 retries gives a full 20-second wait
-        # window
-        assert calls["connect"] == 81
+        # We try cpb and qmdb sockets each time: one initial pass plus
+        # 80 retry passes gives 162 connection attempts total.
+        assert calls["connect"] == 162
         assert calls["sleep"] == 80
+    finally:
+        os.chdir(cwd)
+
+
+def test_mfs_uses_qmdb_socket_when_cpb_socket_missing(tmp_path):
+    calls = {
+        "connect": [],
+        "sendall": [],
+        "fork": 0,
+    }
+
+    class FakeSocket:
+        def __init__(self, *args, **kwargs):
+            return
+
+        def connect(self, address):
+            calls["connect"].append(address)
+            # First (cpb) socket fails, second (qmdb) socket succeeds.
+            if len(calls["connect"]) == 1:
+                raise OSError("cpb socket missing")
+
+        def sendall(self, payload):
+            calls["sendall"].append(payload)
+
+        def close(self):
+            return
+
+    def fake_fork():
+        calls["fork"] += 1
+        return 123
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with patch("pydifftools.command_line.socket.socket", FakeSocket):
+            with patch("pydifftools.command_line.os.fork", fake_fork):
+                mfs("needle")
+        assert calls["fork"] == 0
+        assert len(calls["connect"]) == 2
+        assert calls["sendall"] == [b"needle"]
+    finally:
+        os.chdir(cwd)
+
+
+def test_mfs_strips_markdown_markup_before_search(tmp_path):
+    calls = {
+        "sendall": [],
+    }
+
+    class FakeSocket:
+        def __init__(self, *args, **kwargs):
+            return
+
+        def connect(self, _address):
+            return
+
+        def sendall(self, payload):
+            calls["sendall"].append(payload)
+
+        def close(self):
+            return
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with patch("pydifftools.command_line.socket.socket", FakeSocket):
+            mfs("**Result** near @fig:overview [@smith2024]")
+        assert calls["sendall"] == [b"Result near"]
+    finally:
+        os.chdir(cwd)
+
+
+def test_mfs_marker_regex_is_case_insensitive(tmp_path):
+    calls = {
+        "sendall": [],
+    }
+
+    class FakeSocket:
+        def __init__(self, *args, **kwargs):
+            return
+
+        def connect(self, _address):
+            return
+
+        def sendall(self, payload):
+            calls["sendall"].append(payload)
+
+        def close(self):
+            return
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with patch("pydifftools.command_line.socket.socket", FakeSocket):
+            mfs("Result before @FIG:overview should truncate")
+        assert calls["sendall"] == [b"Result before"]
     finally:
         os.chdir(cwd)
 
@@ -716,7 +808,11 @@ def test_run_pandoc_does_not_overwrite_existing_comment_assets(
         '<?xml version="1.0" encoding="utf-8"?><style '
         'xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
     )
-    for asset_name in ["comments.css", "comment_tags.lua", "comment_toggle.js"]:
+    for asset_name in [
+        "comments.css",
+        "comment_tags.lua",
+        "comment_toggle.js",
+    ]:
         (project_dir / asset_name).write_text(f"local override {asset_name}\n")
     html_file = tmp_path / "notes.html"
 
@@ -732,7 +828,11 @@ def test_run_pandoc_does_not_overwrite_existing_comment_assets(
 
     run_pandoc(str(markdown_file), str(html_file))
 
-    for asset_name in ["comments.css", "comment_tags.lua", "comment_toggle.js"]:
+    for asset_name in [
+        "comments.css",
+        "comment_tags.lua",
+        "comment_toggle.js",
+    ]:
         assert (project_dir / asset_name).read_text() == (
             f"local override {asset_name}\n"
         )
@@ -766,10 +866,14 @@ def test_comment_filter_mode_switches_to_margin_and_back(tmp_path):
 
     continuous._set_comment_filter_mode(str(project_dir), False)
     assert active_filter.read_text() == "normal filter\n"
-    assert continuous.MARGIN_COMMENTS_FILTER_MARKER in inactive_filter.read_text()
+    assert (
+        continuous.MARGIN_COMMENTS_FILTER_MARKER in inactive_filter.read_text()
+    )
 
 
-def test_comment_filter_mode_restores_repo_default_when_inactive_missing(tmp_path):
+def test_comment_filter_mode_restores_repo_default_when_inactive_missing(
+    tmp_path,
+):
     project_dir = tmp_path / "project"
     project_dir.mkdir()
     active_filter = project_dir / "comment_tags.lua"
@@ -784,8 +888,13 @@ def test_comment_filter_mode_restores_repo_default_when_inactive_missing(tmp_pat
 
     assert active_filter.exists()
     assert inactive_filter.exists()
-    assert continuous.MARGIN_COMMENTS_FILTER_MARKER not in active_filter.read_text()
-    assert continuous.MARGIN_COMMENTS_FILTER_MARKER in inactive_filter.read_text()
+    assert (
+        continuous.MARGIN_COMMENTS_FILTER_MARKER
+        not in active_filter.read_text()
+    )
+    assert (
+        continuous.MARGIN_COMMENTS_FILTER_MARKER in inactive_filter.read_text()
+    )
 
 
 def test_margin_comment_filter_uses_overlay_style_for_inline_comments():
@@ -797,7 +906,7 @@ def test_margin_comment_filter_uses_overlay_style_for_inline_comments():
     assert "comment-inline-break-before" in margin_filter
     assert "comment-inline-break-after" in margin_filter
     assert "comment-pin comment-pin-block" in margin_filter
-    assert 'pandoc.RawInline(' in margin_filter
+    assert "pandoc.RawInline(" in margin_filter
 
 
 def test_run_pandoc_comment_tag_regression_end_to_end(tmp_path):
@@ -957,7 +1066,7 @@ def test_comment_css_arrow_geometry_constants(tmp_path):
     assert "function cssVariableLengthPx" in js_content
     assert "SELECTOR_INLINE" in js_content
     assert "useMobileFlow" in js_content
-    assert 'comment-margin-left' in js_content
+    assert "comment-margin-left" in js_content
     assert "bubble.style.transform" in js_content
     assert "left = ax + gap + overlayRightShift" in js_content
     assert "const top = ay - overlayRise" in js_content

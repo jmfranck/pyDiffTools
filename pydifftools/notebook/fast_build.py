@@ -14,11 +14,13 @@ from pathlib import Path
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 import threading
 import shutil
+import socket
 import yaml
 from pydifftools.command_registry import register_command
 from pydifftools.browser_lifecycle import (
     browser_window_is_alive,
     close_browser_window,
+    forward_search_in_browser,
 )
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers.polling import PollingObserver as Observer
@@ -535,9 +537,7 @@ def execute_code_blocks(blocks):
     for src, cells in blocks.items():
         if not cells:
             continue
-        cells = [
-            (*cell, False) if len(cell) == 2 else cell for cell in cells
-        ]
+        cells = [(*cell, False) if len(cell) == 2 else cell for cell in cells]
         codes = [c for c, _, _ in cells]
         md5s = [m for _, m, _ in cells]
         skip_flags = [flag for _, _, flag in cells]
@@ -680,7 +680,6 @@ def analyze_includes(render_files):
         if not current.exists():
             tree.setdefault(key, [])
             continue
-        root_dir = root_dirs.get(current, PROJECT_ROOT)
         includes: list[str] = []
         text = current.read_text()
         for _kind, inc in include_pattern.findall(text):
@@ -788,6 +787,8 @@ PANDOC_TEMPLATE = Path("_template/pandoc_template.html").resolve()
 NAV_TEMPLATE = Path("_template/nav_template.html").resolve()
 MATHJAX_DIR = Path("_template/mathjax").resolve()
 PROJECT_ROOT = Path(".").resolve()
+QMDB_FORWARD_SEARCH_HOST = "127.0.0.1"
+QMDB_FORWARD_SEARCH_PORT = 51236
 
 
 class NoCacheHTTPRequestHandler(SimpleHTTPRequestHandler):
@@ -1247,7 +1248,8 @@ except ImportError:
 
 
 def notebook_marker_is_pending(src: str, html_text: str) -> bool:
-    """Return true when a rendered notebook marker has no substituted output."""
+    """Return true when a rendered notebook marker has no substituted
+    output."""
     if not html_text or "data-script" not in html_text or src not in html_text:
         return False
     if lxml_html is not None:
@@ -1681,8 +1683,7 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     if code_blocks:
         graph.print_tree_status("after notebook job submission", checksums)
         print(
-            f"Executing notebook blocks for {len(code_blocks)}"
-            " source files.",
+            f"Executing notebook blocks for {len(code_blocks)} source files.",
             flush=True,
         )
         notebook_executor = ThreadPoolExecutor(max_workers=1)
@@ -1900,6 +1901,24 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
 
     observer = Observer()
 
+    # Listen on a dedicated qmdb socket so mfs can route searches to whichever
+    # browser session (cpb or qmdb) is already running.
+    forward_search_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    forward_search_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    forward_search_server.settimeout(0.25)
+    try:
+        forward_search_server.bind(
+            (QMDB_FORWARD_SEARCH_HOST, QMDB_FORWARD_SEARCH_PORT)
+        )
+        forward_search_server.listen(5)
+    except OSError as exc:
+        print(
+            "Could not start qmdb forward search socket "
+            f"on {QMDB_FORWARD_SEARCH_HOST}:{QMDB_FORWARD_SEARCH_PORT}: {exc}"
+        )
+        forward_search_server.close()
+        forward_search_server = None
+
     def rebuild(path):
         build_all(
             webtex=webtex,
@@ -1916,6 +1935,31 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
                 initial_future.result()
                 initial_executor.shutdown(wait=False)
                 initial_future = None
+            if forward_search_server is not None:
+                try:
+                    connection, _ = forward_search_server.accept()
+                except socket.timeout:
+                    connection = None
+                except OSError:
+                    connection = None
+                if connection is not None:
+                    with connection:
+                        payload = b""
+                        while True:
+                            chunk = connection.recv(4096)
+                            if not chunk:
+                                break
+                            payload += chunk
+                    if payload:
+                        # Reuse cpb forward-search behavior for qmdb browser
+                        # windows.
+                        try:
+                            forward_search_in_browser(
+                                refresher.browser, payload.decode("utf-8")
+                            )
+                        except WebDriverException:
+                            close_browser_window(refresher.browser)
+                            refresher.browser = None
             if not no_browser and not refresher.is_alive():
                 break
             time.sleep(1)
@@ -1927,6 +1971,8 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
             initial_executor.shutdown(wait=False)
         observer.stop()
         observer.join()
+        if forward_search_server is not None:
+            forward_search_server.close()
         httpd.shutdown()
         httpd.server_close()
         if not no_browser and getattr(refresher, "browser", None):
