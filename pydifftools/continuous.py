@@ -355,7 +355,7 @@ position
         # Reuse shared browser search behavior so cpb and qmdb stay in sync.
         if not search_text:
             return
-        forward_search_in_browser(self.firefox, search_text)
+        forward_search_in_browser(self.chrome, search_text)
 
 @register_command(
     "continuous pandoc build.  Like latexmk, but for markdown!",
