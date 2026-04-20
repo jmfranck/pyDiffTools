@@ -14,11 +14,13 @@ from pathlib import Path
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 import threading
 import shutil
+import socket
 import yaml
 from pydifftools.command_registry import register_command
 from pydifftools.browser_lifecycle import (
     browser_window_is_alive,
     close_browser_window,
+    forward_search_in_browser,
 )
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers.polling import PollingObserver as Observer
@@ -479,6 +481,12 @@ def load_bibliography_csl():
         bib = cfg["bibliography"]
     if "csl" in cfg:
         csl = cfg["csl"]
+    project = cfg.get("project", {})
+    if isinstance(project, dict):
+        if bib is None and "bibliography" in project:
+            bib = project["bibliography"]
+        if csl is None and "csl" in project:
+            csl = project["csl"]
     fmt = cfg.get("format", {})
     if isinstance(fmt, dict):
         for v in fmt.values():
@@ -535,9 +543,7 @@ def execute_code_blocks(blocks):
     for src, cells in blocks.items():
         if not cells:
             continue
-        cells = [
-            (*cell, False) if len(cell) == 2 else cell for cell in cells
-        ]
+        cells = [(*cell, False) if len(cell) == 2 else cell for cell in cells]
         codes = [c for c, _, _ in cells]
         md5s = [m for _, m, _ in cells]
         skip_flags = [flag for _, _, flag in cells]
@@ -680,7 +686,6 @@ def analyze_includes(render_files):
         if not current.exists():
             tree.setdefault(key, [])
             continue
-        root_dir = root_dirs.get(current, PROJECT_ROOT)
         includes: list[str] = []
         text = current.read_text()
         for _kind, inc in include_pattern.findall(text):
@@ -788,6 +793,8 @@ PANDOC_TEMPLATE = Path("_template/pandoc_template.html").resolve()
 NAV_TEMPLATE = Path("_template/nav_template.html").resolve()
 MATHJAX_DIR = Path("_template/mathjax").resolve()
 PROJECT_ROOT = Path(".").resolve()
+QMDB_FORWARD_SEARCH_HOST = "127.0.0.1"
+QMDB_FORWARD_SEARCH_PORT = 51236
 
 
 class NoCacheHTTPRequestHandler(SimpleHTTPRequestHandler):
@@ -1186,6 +1193,11 @@ def render_file(
 ):
     """Render ``src`` to ``dest`` using Pandoc with embedded resources."""
 
+    build_dir = Path(BUILD_DIR).resolve()
+    staged_src = Path(src)
+    if not staged_src.is_absolute():
+        staged_src = build_dir / staged_src
+    output_path = Path(dest).with_suffix(".html")
     template = BODY_TEMPLATE if fragment else PANDOC_TEMPLATE
     temp = os.path.relpath(
         DISPLAY_DIR / "mathjax" / "es5" / "tex-mml-chtml.js", dest.parent
@@ -1195,21 +1207,21 @@ def render_file(
     )
     args = [
         "pandoc",
-        src.name,
+        os.path.relpath(staged_src, build_dir),
         "--from",
         "markdown+raw_html",
         "--standalone",
         "--embed-resources",
         "--lua-filter",
-        os.path.relpath(BUILD_DIR / "obs.lua", dest.parent),
+        os.path.relpath(build_dir / "obs.lua", build_dir),
         "--filter",
         "pandoc-crossref",
         "--citeproc",
         math_arg,
         "--template",
-        os.path.relpath(template, dest.parent),
+        os.path.relpath(Path(template).resolve(), build_dir),
         "-o",
-        dest.with_suffix(".html").name,
+        os.path.relpath(output_path, build_dir),
     ]
     if bibliography:
         bib_path = Path(os.path.expanduser(bibliography))
@@ -1219,18 +1231,26 @@ def render_file(
             raise FileNotFoundError(
                 f"Bibliography file {bibliography} not found"
             )
-        args += ["--bibliography", os.path.relpath(bib_path, dest.parent)]
+        args += ["--bibliography", os.path.relpath(bib_path, build_dir)]
     if csl:
         csl_path = Path(os.path.expanduser(csl))
         if not csl_path.is_absolute():
             csl_path = PROJECT_ROOT / csl_path
         if not csl_path.exists():
             raise FileNotFoundError(f"CSL file {csl} not found")
-        args += ["--csl", os.path.relpath(csl_path, dest.parent)]
-    print(f"Running pandoc on {src}...", flush=True)
+        args += ["--csl", os.path.relpath(csl_path, build_dir)]
+    print("in directory",build_dir)
+    print(
+        f"Running pandoc on {src}..."
+        + "\n\t"
+        + " ".join(args)
+        + "\n\t"
+        + "." * 10,
+        flush=True,
+    )
     start = time.time()
     try:
-        subprocess.run(args, check=True, cwd=dest.parent, capture_output=True)
+        subprocess.run(args, check=True, cwd=build_dir, capture_output=True)
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"{e.stderr}\nwhen trying to run:{' '.join(args)}")
     duration = time.time() - start
@@ -1247,7 +1267,8 @@ except ImportError:
 
 
 def notebook_marker_is_pending(src: str, html_text: str) -> bool:
-    """Return true when a rendered notebook marker has no substituted output."""
+    """Return true when a rendered notebook marker has no substituted
+    output."""
     if not html_text or "data-script" not in html_text or src not in html_text:
         return False
     if lxml_html is not None:
@@ -1681,8 +1702,7 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     if code_blocks:
         graph.print_tree_status("after notebook job submission", checksums)
         print(
-            f"Executing notebook blocks for {len(code_blocks)}"
-            " source files.",
+            f"Executing notebook blocks for {len(code_blocks)} source files.",
             flush=True,
         )
         notebook_executor = ThreadPoolExecutor(max_workers=1)
@@ -1900,6 +1920,24 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
 
     observer = Observer()
 
+    # Listen on a dedicated qmdb socket so mfs can route searches to whichever
+    # browser session (cpb or qmdb) is already running.
+    forward_search_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    forward_search_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    forward_search_server.settimeout(0.25)
+    try:
+        forward_search_server.bind(
+            (QMDB_FORWARD_SEARCH_HOST, QMDB_FORWARD_SEARCH_PORT)
+        )
+        forward_search_server.listen(5)
+    except OSError as exc:
+        print(
+            "Could not start qmdb forward search socket "
+            f"on {QMDB_FORWARD_SEARCH_HOST}:{QMDB_FORWARD_SEARCH_PORT}: {exc}"
+        )
+        forward_search_server.close()
+        forward_search_server = None
+
     def rebuild(path):
         build_all(
             webtex=webtex,
@@ -1916,6 +1954,31 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
                 initial_future.result()
                 initial_executor.shutdown(wait=False)
                 initial_future = None
+            if forward_search_server is not None:
+                try:
+                    connection, _ = forward_search_server.accept()
+                except socket.timeout:
+                    connection = None
+                except OSError:
+                    connection = None
+                if connection is not None:
+                    with connection:
+                        payload = b""
+                        while True:
+                            chunk = connection.recv(4096)
+                            if not chunk:
+                                break
+                            payload += chunk
+                    if payload:
+                        # Reuse cpb forward-search behavior for qmdb browser
+                        # windows.
+                        try:
+                            forward_search_in_browser(
+                                refresher.browser, payload.decode("utf-8")
+                            )
+                        except WebDriverException:
+                            close_browser_window(refresher.browser)
+                            refresher.browser = None
             if not no_browser and not refresher.is_alive():
                 break
             time.sleep(1)
@@ -1927,6 +1990,8 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
             initial_executor.shutdown(wait=False)
         observer.stop()
         observer.join()
+        if forward_search_server is not None:
+            forward_search_server.close()
         httpd.shutdown()
         httpd.server_close()
         if not no_browser and getattr(refresher, "browser", None):
