@@ -15,14 +15,33 @@ def fb(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PYDIFFTOOLS_FAKE_MATHJAX", "1")
     fast_build.qmdinit(tmp_path, force=True)
+    original_load_bibliography_csl = fast_build.load_bibliography_csl
     fast_build.load_bibliography_csl = lambda: (None, None)
     original_build = fast_build.BUILD_DIR
     original_display = fast_build.DISPLAY_DIR
     try:
         yield fast_build
     finally:
+        fast_build.load_bibliography_csl = original_load_bibliography_csl
         fast_build.BUILD_DIR = original_build
         fast_build.DISPLAY_DIR = original_display
+
+
+def test_load_bibliography_csl_reads_project_block(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Path("_quarto.yml").write_text(
+        "project:\n"
+        "  type: website\n"
+        "  bibliography: references.bib\n"
+        '  csl: "emails/superscript_ref_short.csl"\n'
+        "  render:\n"
+        "    - notebook260417.qmd\n"
+    )
+
+    assert fast_build.load_bibliography_csl() == (
+        "references.bib",
+        "emails/superscript_ref_short.csl",
+    )
 
 
 def test_analyze_includes_map(fb):
@@ -118,6 +137,48 @@ def test_render_file_webtex(fb, tmp_path, monkeypatch):
     fb.render_file(src, dest, fragment=False, webtex=True)
     assert "--webtex" in called["args"]
     assert not any(a.startswith("--mathjax") for a in called["args"])
+
+
+def test_render_file_paths_are_rooted_at_build_dir(fb, monkeypatch):
+    (fb.PROJECT_ROOT / "references.bib").write_text(
+        "@misc{dummy, title={Dummy}}\n"
+    )
+    csl_dir = fb.PROJECT_ROOT / "emails"
+    csl_dir.mkdir()
+    (csl_dir / "superscript_ref_short.csl").write_text(
+        '<style xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
+    )
+    nested = fb.BUILD_DIR / "project1" / "subproject1"
+    nested.mkdir(parents=True, exist_ok=True)
+    (fb.BUILD_DIR / "obs.lua").write_text("")
+    (nested / "tasks.qmd").write_text("# Nested\n")
+    called = {}
+
+    def fake_run(cmd, check, cwd=None, capture_output=False):
+        called["args"] = cmd
+        called["cwd"] = cwd
+
+    monkeypatch.setattr(fb.subprocess, "run", fake_run)
+    fb.render_file(
+        Path("project1/subproject1/tasks.qmd"),
+        nested / "tasks.qmd",
+        fragment=True,
+        bibliography="references.bib",
+        csl="emails/superscript_ref_short.csl",
+        webtex=True,
+    )
+
+    args = called["args"]
+    assert called["cwd"] == fb.BUILD_DIR.resolve()
+    assert args[1] == "project1/subproject1/tasks.qmd"
+    assert args[args.index("--lua-filter") + 1] == "obs.lua"
+    assert args[args.index("--template") + 1] == "../_template/body-only.html"
+    assert args[args.index("--bibliography") + 1] == "../references.bib"
+    assert (
+        args[args.index("--csl") + 1]
+        == "../emails/superscript_ref_short.csl"
+    )
+    assert args[args.index("-o") + 1] == "project1/subproject1/tasks.html"
 
 
 def test_postprocess_nested_includes(fb, tmp_path, monkeypatch):

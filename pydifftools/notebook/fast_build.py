@@ -481,6 +481,12 @@ def load_bibliography_csl():
         bib = cfg["bibliography"]
     if "csl" in cfg:
         csl = cfg["csl"]
+    project = cfg.get("project", {})
+    if isinstance(project, dict):
+        if bib is None and "bibliography" in project:
+            bib = project["bibliography"]
+        if csl is None and "csl" in project:
+            csl = project["csl"]
     fmt = cfg.get("format", {})
     if isinstance(fmt, dict):
         for v in fmt.values():
@@ -1187,6 +1193,11 @@ def render_file(
 ):
     """Render ``src`` to ``dest`` using Pandoc with embedded resources."""
 
+    build_dir = Path(BUILD_DIR).resolve()
+    staged_src = Path(src)
+    if not staged_src.is_absolute():
+        staged_src = build_dir / staged_src
+    output_path = Path(dest).with_suffix(".html")
     template = BODY_TEMPLATE if fragment else PANDOC_TEMPLATE
     temp = os.path.relpath(
         DISPLAY_DIR / "mathjax" / "es5" / "tex-mml-chtml.js", dest.parent
@@ -1196,21 +1207,21 @@ def render_file(
     )
     args = [
         "pandoc",
-        src.name,
+        os.path.relpath(staged_src, build_dir),
         "--from",
         "markdown+raw_html",
         "--standalone",
         "--embed-resources",
         "--lua-filter",
-        os.path.relpath(BUILD_DIR / "obs.lua", dest.parent),
+        os.path.relpath(build_dir / "obs.lua", build_dir),
         "--filter",
         "pandoc-crossref",
         "--citeproc",
         math_arg,
         "--template",
-        os.path.relpath(template, dest.parent),
+        os.path.relpath(Path(template).resolve(), build_dir),
         "-o",
-        dest.with_suffix(".html").name,
+        os.path.relpath(output_path, build_dir),
     ]
     if bibliography:
         bib_path = Path(os.path.expanduser(bibliography))
@@ -1220,18 +1231,26 @@ def render_file(
             raise FileNotFoundError(
                 f"Bibliography file {bibliography} not found"
             )
-        args += ["--bibliography", os.path.relpath(bib_path, dest.parent)]
+        args += ["--bibliography", os.path.relpath(bib_path, build_dir)]
     if csl:
         csl_path = Path(os.path.expanduser(csl))
         if not csl_path.is_absolute():
             csl_path = PROJECT_ROOT / csl_path
         if not csl_path.exists():
             raise FileNotFoundError(f"CSL file {csl} not found")
-        args += ["--csl", os.path.relpath(csl_path, dest.parent)]
-    print(f"Running pandoc on {src}...", flush=True)
+        args += ["--csl", os.path.relpath(csl_path, build_dir)]
+    print("in directory",build_dir)
+    print(
+        f"Running pandoc on {src}..."
+        + "\n\t"
+        + " ".join(args)
+        + "\n\t"
+        + "." * 10,
+        flush=True,
+    )
     start = time.time()
     try:
-        subprocess.run(args, check=True, cwd=dest.parent, capture_output=True)
+        subprocess.run(args, check=True, cwd=build_dir, capture_output=True)
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"{e.stderr}\nwhen trying to run:{' '.join(args)}")
     duration = time.time() - start
