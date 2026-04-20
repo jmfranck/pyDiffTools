@@ -175,8 +175,7 @@ def test_render_file_paths_are_rooted_at_build_dir(fb, monkeypatch):
     assert args[args.index("--template") + 1] == "../_template/body-only.html"
     assert args[args.index("--bibliography") + 1] == "../references.bib"
     assert (
-        args[args.index("--csl") + 1]
-        == "../emails/superscript_ref_short.csl"
+        args[args.index("--csl") + 1] == "../emails/superscript_ref_short.csl"
     )
     assert args[args.index("-o") + 1] == "project1/subproject1/tasks.html"
 
@@ -388,16 +387,13 @@ print('hello')
     assert fb.RenderNotebook.count_code_blocks(text) == 1
 
 
-# TODO ☐: I really disapprove of calling things "monkeypatch" without further explanation
+# TODO ☐: I really disapprove of calling things "monkeypatch" without further
+#         explanation
 def test_noexec_magic_marks_block_without_execution(fb, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     src = Path("doc.qmd")
     src.write_text(
-        "# noexec test\n\n"
-        "```python\n"
-        "%noexec\n"
-        "print('skip')\n"
-        "```\n"
+        "# noexec test\n\n" "```python\n" "%noexec\n" "print('skip')\n" "```\n"
     )
     fb.PROJECT_ROOT = tmp_path
     fb.BUILD_DIR = tmp_path / "_build"

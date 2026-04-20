@@ -875,9 +875,7 @@ def build_parser():
             # {{{ attach filename completer
             allowednames = argument.get("completion_allowednames")
             if FilesCompleter is not None and allowednames is not None:
-                action.completer = FilesCompleter(
-                    allowednames=allowednames
-                )
+                action.completer = FilesCompleter(allowednames=allowednames)
             # }}}
             if name == "wgrph" and action.dest == "t":
                 # Offer case-insensitive completions for incomplete task names.
@@ -885,6 +883,8 @@ def build_parser():
         subparser.set_defaults(_handler=spec["handler"])
         parser._pydifft_subparsers[name] = subparser
     return parser
+
+
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
