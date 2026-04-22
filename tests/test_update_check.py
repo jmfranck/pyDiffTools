@@ -58,6 +58,54 @@ def test_check_update_handles_offline(monkeypatch):
     assert is_outdated is False
 
 
+def test_check_update_uses_newer_editable_source_version(tmp_path, monkeypatch):
+    # Editable installs can have stale dist metadata after a branch merge, so
+    # prefer a newer source-tree pyproject version when available.
+    monkeypatch.setattr(
+        update_check.importlib.metadata, "version", lambda name: "0.1.7"
+    )
+
+    repo = tmp_path / "repo"
+    package_dir = repo / "pydifftools"
+    package_dir.mkdir(parents=True)
+    (package_dir / "__init__.py").write_text("")
+    (repo / "pyproject.toml").write_text(
+        '[project]\nname = "pyDiffTools"\nversion = "0.1.26"\n'
+    )
+
+    class DummySpec:
+        origin = str(package_dir / "__init__.py")
+        submodule_search_locations = [str(package_dir)]
+
+    monkeypatch.setattr(
+        update_check.importlib.util,
+        "find_spec",
+        lambda name: DummySpec if name == "pydifftools" else None,
+    )
+
+    payload = json.dumps({"info": {"version": "0.1.25"}}).encode("utf-8")
+
+    class DummyResponse(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(url, timeout=1):
+        return DummyResponse(payload)
+
+    monkeypatch.setattr(update_check.urllib.request, "urlopen", fake_urlopen)
+
+    current_version, latest_version, is_outdated = update_check.check_update(
+        "pyDiffTools"
+    )
+
+    assert current_version == "0.1.26"
+    assert latest_version == "0.1.25"
+    assert is_outdated is False
+
+
 def test_cli_update_check_runs_once_per_day(monkeypatch):
     # The CLI should only call out to PyPI once per UTC day and should set
     # the env var so subsequent invocations can skip the check.

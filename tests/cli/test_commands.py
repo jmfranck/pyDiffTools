@@ -698,7 +698,14 @@ def test_run_pandoc_adds_css_lua_and_js_files_from_markdown_directory(
     project_dir = tmp_path / "project"
     project_dir.mkdir()
     markdown_file = project_dir / "notes.md"
-    markdown_file.write_text("# Title\n")
+    markdown_file.write_text(
+        "---\n"
+        "pydifft-lua-filters:\n"
+        "  - cleanup.lua\n"
+        "  - numbers.lua\n"
+        "---\n"
+        "# Title\n"
+    )
     (project_dir / "references.bib").write_text(
         "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
     )
@@ -759,6 +766,94 @@ def test_run_pandoc_adds_css_lua_and_js_files_from_markdown_directory(
     assert (
         '<script src="' + str(project_dir / "widgets.js") + '"></script>'
     ) in html_content
+
+
+def test_run_pandoc_skips_unlisted_lua_filters_by_default(
+    tmp_path, monkeypatch
+):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    markdown_file = project_dir / "notes.md"
+    markdown_file.write_text("# Title\n")
+    (project_dir / "references.bib").write_text(
+        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
+    )
+    (project_dir / "style.csl").write_text(
+        '<?xml version="1.0" encoding="utf-8"?><style '
+        'xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
+    )
+    (project_dir / "author-info-blocks.lua").write_text("return {}\n")
+    html_file = tmp_path / "notes.html"
+    captured_command = {}
+
+    monkeypatch.setattr(
+        "pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool"
+    )
+
+    def fake_run(command):
+        captured_command["value"] = command
+        with open(html_file, "w", encoding="utf-8") as fp:
+            fp.write("<html><head></head><body>ok</body></html>")
+
+    monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
+
+    run_pandoc(str(markdown_file), str(html_file))
+
+    assert "--lua-filter" not in captured_command["value"]
+
+
+def test_run_pandoc_raises_when_pandoc_does_not_create_html(
+    tmp_path, monkeypatch
+):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    markdown_file = project_dir / "notes.md"
+    markdown_file.write_text("# Title\n")
+    (project_dir / "references.bib").write_text(
+        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
+    )
+    (project_dir / "style.csl").write_text(
+        '<?xml version="1.0" encoding="utf-8"?><style '
+        'xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
+    )
+    html_file = tmp_path / "notes.html"
+
+    monkeypatch.setattr(
+        "pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool"
+    )
+    monkeypatch.setattr(
+        "pydifftools.continuous.subprocess.run",
+        lambda _command: subprocess.CompletedProcess(_command, 0),
+    )
+
+    with pytest.raises(RuntimeError, match="did not create"):
+        run_pandoc(str(markdown_file), str(html_file))
+
+
+def test_run_pandoc_raises_when_pandoc_fails(tmp_path, monkeypatch):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    markdown_file = project_dir / "notes.md"
+    markdown_file.write_text("# Title\n")
+    (project_dir / "references.bib").write_text(
+        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
+    )
+    (project_dir / "style.csl").write_text(
+        '<?xml version="1.0" encoding="utf-8"?><style '
+        'xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
+    )
+    html_file = tmp_path / "notes.html"
+
+    monkeypatch.setattr(
+        "pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool"
+    )
+    monkeypatch.setattr(
+        "pydifftools.continuous.subprocess.run",
+        lambda _command: subprocess.CompletedProcess(_command, 1),
+    )
+
+    with pytest.raises(RuntimeError, match="Pandoc failed"):
+        run_pandoc(str(markdown_file), str(html_file))
 
 
 def test_run_pandoc_copies_comment_assets_when_comment_tags_present(
