@@ -12,7 +12,11 @@ import queue
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from .command_registry import register_command
-from .browser_lifecycle import browser_window_is_alive, close_browser_window
+from .browser_lifecycle import (
+    browser_window_is_alive,
+    close_browser_window,
+    forward_search_in_browser,
+)
 
 FORWARD_SEARCH_HOST = "127.0.0.1"
 FORWARD_SEARCH_PORT = 51235
@@ -122,7 +126,11 @@ def run_pandoc(filename, html_file, comments_to_margin=False):
     # into the markdown directory before collecting css/lua/js companion files.
     with open(filename, encoding="utf-8") as fp:
         markdown_text = fp.read()
-    if "<comment>" in markdown_text:
+    if (
+        "<comment>" in markdown_text
+        or "comment-right" in markdown_text
+        or "comment-left" in markdown_text
+    ):
         package_dir = os.path.dirname(os.path.abspath(__file__))
         for asset_name in ["comments.css", "comment_toggle.js"]:
             target_path = os.path.join(source_dir, asset_name)
@@ -139,9 +147,11 @@ def run_pandoc(filename, html_file, comments_to_margin=False):
         ]
         if len(localfiles[k]) == 1:
             localfiles[k] = os.path.join(source_dir, localfiles[k][0])
+        elif len(localfiles[k]) == 0:
+            localfiles[k] = None
         else:
             raise ValueError(
-                f"You have more than one (or no) {k} file in this directory!"
+                f"You have more than one {k} file in this directory!"
                 " Get rid of all but one! of " + "and".join(localfiles[k])
             )
     # Include any css files next to the markdown source in the pandoc output.
@@ -150,8 +160,13 @@ def run_pandoc(filename, html_file, comments_to_margin=False):
     )
     # Include any lua filters next to the markdown source in the pandoc
     # output by passing repeated --lua-filter arguments.
+    lua_priority = {
+        "scholarly-metadata.lua": 0,
+        "author-info-blocks.lua": 1,
+    }
     localfiles["lua"] = sorted(
-        [f for f in os.listdir(source_dir) if f.endswith(".lua")]
+        [f for f in os.listdir(source_dir) if f.endswith(".lua")],
+        key=lambda name: (lua_priority.get(name, 2), name),
     )
     # Include any javascript files next to the markdown source by injecting
     # script tags after pandoc runs. This adds extra javascript and does not
@@ -161,9 +176,6 @@ def run_pandoc(filename, html_file, comments_to_margin=False):
     )
     command = [
         "pandoc",
-        "--bibliography",
-        localfiles["bib"],
-        f"--csl={localfiles['csl']}",
         "--filter",
         "pandoc-crossref",
         "--citeproc",
@@ -175,16 +187,31 @@ def run_pandoc(filename, html_file, comments_to_margin=False):
         html_file,
         filename,
     ]
+    if localfiles["bib"]:
+        command[1:1] = ["--bibliography", localfiles["bib"]]
+    if localfiles["csl"]:
+        command.insert(1, f"--csl={localfiles['csl']}")
     for css_file in localfiles["css"]:
         command.extend(["--css", os.path.join(source_dir, css_file)])
     for lua_file in localfiles["lua"]:
         command.extend(["--lua-filter", os.path.join(source_dir, lua_file)])
     # command = ['pandoc', '-s', '--mathjax', '-o', html_file, filename]
     print("running:", " ".join(command))
-    subprocess.run(
+    completed = subprocess.run(
         command,
     )
+    if getattr(completed, "returncode", 0) != 0:
+        raise RuntimeError(
+            f"Pandoc failed with exit code {completed.returncode} while "
+            f"building {html_file}.\n"
+            f"Command: {' '.join(command)}"
+        )
     print("running:\n", command)
+    if not os.path.exists(html_file):
+        raise RuntimeError(
+            "Pandoc completed but did not create the expected HTML file: "
+            f"{html_file}"
+        )
     if has_local_jax:
         # {{{ for slow internet connection, remove remote files
         with open(html_file, encoding="utf-8") as fp:
@@ -348,47 +375,10 @@ position
             fp.write(all_data)
 
     def forward_search(self, search_text):
-        # Use the browser's built-in window.find to locate the text.
+        # Reuse shared browser search behavior so cpb and qmdb stay in sync.
         if not search_text:
             return
-        found = self.chrome.execute_script(
-            """
-            var searchText = arguments[0];
-            if (!window.find) {
-                return false;
-            }
-            var didFind = window.find(searchText);
-            if (didFind && window.getSelection) {
-                var selection = window.getSelection();
-                if (selection.rangeCount > 0) {
-                    var rect = selection.getRangeAt(0).getBoundingClientRect();
-                    window.scrollBy(0, rect.top - window.innerHeight / 3);
-                }
-            }
-            return didFind;
-            """,
-            search_text,
-        )
-        if not found:
-            print("forward search did not find text:", search_text)
-        # Bring the browser window to the foreground in Linux window managers.
-        if os.name == "posix" and shutil.which("wmctrl"):
-            window_title = self.chrome.execute_script(
-                "return document.title;"
-            )
-            if window_title:
-                # Try common Chromium title forms used by desktop environments.
-                for title_candidate in [
-                    window_title,
-                    window_title + " - Google Chrome",
-                    window_title + " - Chromium",
-                    window_title + " - Chrome",
-                ]:
-                    subprocess.run(
-                        ["wmctrl", "-a", title_candidate],
-                        check=False,
-                    )
-
+        forward_search_in_browser(self.chrome, search_text)
 
 @register_command(
     "continuous pandoc build.  Like latexmk, but for markdown!",

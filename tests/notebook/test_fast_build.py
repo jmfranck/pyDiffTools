@@ -15,14 +15,33 @@ def fb(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PYDIFFTOOLS_FAKE_MATHJAX", "1")
     fast_build.qmdinit(tmp_path, force=True)
+    original_load_bibliography_csl = fast_build.load_bibliography_csl
     fast_build.load_bibliography_csl = lambda: (None, None)
     original_build = fast_build.BUILD_DIR
     original_display = fast_build.DISPLAY_DIR
     try:
         yield fast_build
     finally:
+        fast_build.load_bibliography_csl = original_load_bibliography_csl
         fast_build.BUILD_DIR = original_build
         fast_build.DISPLAY_DIR = original_display
+
+
+def test_load_bibliography_csl_reads_project_block(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Path("_quarto.yml").write_text(
+        "project:\n"
+        "  type: website\n"
+        "  bibliography: references.bib\n"
+        '  csl: "emails/superscript_ref_short.csl"\n'
+        "  render:\n"
+        "    - notebook260417.qmd\n"
+    )
+
+    assert fast_build.load_bibliography_csl() == (
+        "references.bib",
+        "emails/superscript_ref_short.csl",
+    )
 
 
 def test_analyze_includes_map(fb):
@@ -59,6 +78,36 @@ def test_root_file_same_dir_include(fb):
         nested.rmdir()
 
 
+def test_include_falls_back_to_quarto_project_root(fb):
+    nested = Path("nested/deep")
+    nested.mkdir(parents=True, exist_ok=True)
+    root_file = nested / "root.qmd"
+    root_file.write_text("{{< include shared.qmd >}}")
+    Path("shared.qmd").write_text("project root include")
+
+    tree, roots, included_by = fb.analyze_includes([root_file.as_posix()])
+
+    assert tree[root_file.as_posix()] == ["shared.qmd"]
+    assert included_by["shared.qmd"] == [root_file.as_posix()]
+    assert roots[root_file.as_posix()] == fb.PROJECT_ROOT
+    assert roots["shared.qmd"] == fb.PROJECT_ROOT
+
+
+def test_include_prefers_including_file_directory(fb):
+    nested = Path("nested/current")
+    nested.mkdir(parents=True, exist_ok=True)
+    root_file = nested / "root.qmd"
+    local_include = nested / "shared.qmd"
+    root_file.write_text("{{< include shared.qmd >}}")
+    local_include.write_text("local include")
+    Path("shared.qmd").write_text("project root include")
+
+    tree, _, included_by = fb.analyze_includes([root_file.as_posix()])
+
+    assert tree[root_file.as_posix()] == [local_include.as_posix()]
+    assert included_by[local_include.as_posix()] == [root_file.as_posix()]
+
+
 def test_missing_include_error(fb, tmp_path):
     src = tmp_path / "root.qmd"
     src.write_text("{{< include missing.qmd >}}")
@@ -88,6 +137,47 @@ def test_render_file_webtex(fb, tmp_path, monkeypatch):
     fb.render_file(src, dest, fragment=False, webtex=True)
     assert "--webtex" in called["args"]
     assert not any(a.startswith("--mathjax") for a in called["args"])
+
+
+def test_render_file_paths_are_rooted_at_build_dir(fb, monkeypatch):
+    (fb.PROJECT_ROOT / "references.bib").write_text(
+        "@misc{dummy, title={Dummy}}\n"
+    )
+    csl_dir = fb.PROJECT_ROOT / "emails"
+    csl_dir.mkdir()
+    (csl_dir / "superscript_ref_short.csl").write_text(
+        '<style xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
+    )
+    nested = fb.BUILD_DIR / "project1" / "subproject1"
+    nested.mkdir(parents=True, exist_ok=True)
+    (fb.BUILD_DIR / "obs.lua").write_text("")
+    (nested / "tasks.qmd").write_text("# Nested\n")
+    called = {}
+
+    def fake_run(cmd, check, cwd=None, capture_output=False):
+        called["args"] = cmd
+        called["cwd"] = cwd
+
+    monkeypatch.setattr(fb.subprocess, "run", fake_run)
+    fb.render_file(
+        Path("project1/subproject1/tasks.qmd"),
+        nested / "tasks.qmd",
+        fragment=True,
+        bibliography="references.bib",
+        csl="emails/superscript_ref_short.csl",
+        webtex=True,
+    )
+
+    args = called["args"]
+    assert called["cwd"] == fb.BUILD_DIR.resolve()
+    assert args[1] == "project1/subproject1/tasks.qmd"
+    assert args[args.index("--lua-filter") + 1] == "obs.lua"
+    assert args[args.index("--template") + 1] == "../_template/body-only.html"
+    assert args[args.index("--bibliography") + 1] == "../references.bib"
+    assert (
+        args[args.index("--csl") + 1] == "../emails/superscript_ref_short.csl"
+    )
+    assert args[args.index("-o") + 1] == "project1/subproject1/tasks.html"
 
 
 def test_postprocess_nested_includes(fb, tmp_path, monkeypatch):
@@ -226,6 +316,95 @@ def test_all_render_targets_receive_navigation_template(fb):
     for page in ["first_page", "second_page"]:
         html = Path(f"_display/{page}.html").read_text()
         assert "on-this-page" in html
+
+
+def test_quarto_config_change_rebuilds_every_graph_file(fb, monkeypatch):
+    rendered = []
+
+    def fake_render_file(
+        src,
+        dest,
+        fragment,
+        bibliography=None,
+        csl=None,
+        webtex=False,
+    ):
+        rendered.append(src.as_posix())
+        output = dest.with_suffix(".html")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            "<html><head></head><body>"
+            f"<p>{src.as_posix()}</p>"
+            "</body></html>"
+        )
+
+    monkeypatch.setattr(fb, "ensure_pandoc_available", lambda: None)
+    monkeypatch.setattr(fb, "ensure_pandoc_crossref", lambda: None)
+    monkeypatch.setattr(fb, "render_file", fake_render_file)
+
+    Path("root.qmd").write_text(
+        "# Root\n\n" "{{< include child.qmd >}}\n\n" "@sec:child\n"
+    )
+    Path("child.qmd").write_text("## Child {#sec:child}\n")
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    if "project" not in config:
+        config["project"] = {}
+    config["project"]["render"] = ["root.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    fb.build_all()
+    rendered.clear()
+
+    config["project"]["render"] = ["root.qmd", "child.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+    fb.build_all(changed_paths=["_quarto.yml"])
+
+    assert set(rendered) == {"root.qmd", "child.qmd"}
+
+
+def test_render_tree_lists_missing_trunk_from_quarto_config(fb):
+    Path("present.qmd").write_text("# Present\n")
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    if "project" not in config:
+        config["project"] = {}
+    config["project"]["render"] = ["missing.qmd", "present.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    render_files = fb.load_rendered_files()
+    tree, _, include_map = fb.analyze_includes(render_files)
+    graph = fb.RenderNotebook(render_files, tree, include_map)
+
+    tree_text = str(graph)
+    assert "missing.qmd" in tree_text
+    assert "present.qmd" in tree_text
+
+
+def test_code_block_counter_accepts_plain_python_fences(fb):
+    text = """```python
+print('hello')
+```
+"""
+    assert fb.RenderNotebook.count_code_blocks(text) == 1
+
+
+# TODO ☐: I really disapprove of calling things "monkeypatch" without further
+#         explanation
+def test_noexec_magic_marks_block_without_execution(fb, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    src = Path("doc.qmd")
+    src.write_text(
+        "# noexec test\n\n" "```python\n" "%noexec\n" "print('skip')\n" "```\n"
+    )
+    fb.PROJECT_ROOT = tmp_path
+    fb.BUILD_DIR = tmp_path / "_build"
+    fb.BUILD_DIR.mkdir(parents=True, exist_ok=True)
+
+    code_blocks = fb.mirror_and_modify(["doc.qmd"], {}, {"doc.qmd": tmp_path})
+
+    assert code_blocks["doc.qmd"][0][2]
+    outputs, code_map = fb.execute_code_blocks(code_blocks)
+    assert "code skipped (%noexec)" in outputs[("doc.qmd", 1)]
+    assert "%noexec" in code_map[("doc.qmd", 1)]
 
 
 def test_notebook_progress_message_includes_notebook_index(
