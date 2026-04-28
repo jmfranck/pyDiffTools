@@ -9,7 +9,6 @@ import shutil
 import socket
 import threading
 import queue
-import yaml
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from .command_registry import register_command
@@ -97,82 +96,6 @@ def _set_comment_filter_mode(source_dir, comments_to_margin):
             shutil.copy2(packaged_default, active_filter)
 
 
-def _yaml_front_matter(markdown_text):
-    if not markdown_text.startswith("---"):
-        return {}
-    end = markdown_text.find("\n---", 3)
-    if end == -1:
-        return {}
-    try:
-        metadata = yaml.safe_load(markdown_text[3:end])
-    except yaml.YAMLError:
-        return {}
-    if isinstance(metadata, dict):
-        return metadata
-    return {}
-
-
-def _flatten_filter_values(value):
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, list):
-        values = []
-        for item in value:
-            if isinstance(item, str):
-                values.append(item)
-            elif isinstance(item, dict):
-                for key in ("path", "file"):
-                    if key in item and isinstance(item[key], str):
-                        values.append(item[key])
-        return values
-    return []
-
-
-def _requested_lua_filters(markdown_text):
-    metadata = _yaml_front_matter(markdown_text)
-    requested = []
-    for key in (
-        "pydifft-lua-filters",
-        "pydifft_lua_filters",
-        "lua-filter",
-        "lua-filters",
-        "lua_filters",
-        "filters",
-    ):
-        requested.extend(_flatten_filter_values(metadata.get(key)))
-    return [item for item in requested if item.endswith(".lua")]
-
-
-def _select_lua_filters(source_dir, markdown_text):
-    available = sorted(f for f in os.listdir(source_dir) if f.endswith(".lua"))
-    if os.environ.get("PYDIFFTOOLS_CPB_AUTO_LUA"):
-        return [os.path.join(source_dir, f) for f in available]
-
-    selected = []
-    for requested in _requested_lua_filters(markdown_text):
-        filter_path = requested
-        if not os.path.isabs(filter_path):
-            filter_path = os.path.join(source_dir, filter_path)
-        if not os.path.exists(filter_path):
-            raise FileNotFoundError(
-                f"Lua filter '{requested}' listed in markdown metadata "
-                f"was not found."
-            )
-        selected.append(filter_path)
-
-    comment_filter = os.path.join(source_dir, "comment_tags.lua")
-    if "<comment>" in markdown_text and os.path.exists(comment_filter):
-        selected.append(comment_filter)
-
-    deduped = []
-    for filter_path in selected:
-        if filter_path not in deduped:
-            deduped.append(filter_path)
-    return deduped
-
-
 def run_pandoc(filename, html_file, comments_to_margin=False):
     # Pandoc and pandoc-crossref must be installed for HTML rendering.
     if shutil.which("pandoc") is None:
@@ -203,7 +126,11 @@ def run_pandoc(filename, html_file, comments_to_margin=False):
     # into the markdown directory before collecting css/lua/js companion files.
     with open(filename, encoding="utf-8") as fp:
         markdown_text = fp.read()
-    if "<comment>" in markdown_text:
+    if (
+        "<comment>" in markdown_text
+        or "comment-right" in markdown_text
+        or "comment-left" in markdown_text
+    ):
         package_dir = os.path.dirname(os.path.abspath(__file__))
         for asset_name in ["comments.css", "comment_toggle.js"]:
             target_path = os.path.join(source_dir, asset_name)
@@ -220,20 +147,27 @@ def run_pandoc(filename, html_file, comments_to_margin=False):
         ]
         if len(localfiles[k]) == 1:
             localfiles[k] = os.path.join(source_dir, localfiles[k][0])
+        elif len(localfiles[k]) == 0:
+            localfiles[k] = None
         else:
             raise ValueError(
-                f"You have more than one (or no) {k} file in this directory!"
+                f"You have more than one {k} file in this directory!"
                 " Get rid of all but one! of " + "and".join(localfiles[k])
             )
     # Include any css files next to the markdown source in the pandoc output.
     localfiles["css"] = sorted(
         [f for f in os.listdir(source_dir) if f.endswith(".css")]
     )
-    # Lua filters are opt-in because note directories often contain
-    # project-specific filters that expect metadata absent from quick cpb
-    # previews. Use front matter such as
-    # pydifft-lua-filters: [cleanup.lua] to enable a filter.
-    localfiles["lua"] = _select_lua_filters(source_dir, markdown_text)
+    # Include any lua filters next to the markdown source in the pandoc
+    # output by passing repeated --lua-filter arguments.
+    lua_priority = {
+        "scholarly-metadata.lua": 0,
+        "author-info-blocks.lua": 1,
+    }
+    localfiles["lua"] = sorted(
+        [f for f in os.listdir(source_dir) if f.endswith(".lua")],
+        key=lambda name: (lua_priority.get(name, 2), name),
+    )
     # Include any javascript files next to the markdown source by injecting
     # script tags after pandoc runs. This adds extra javascript and does not
     # replace pandoc's own MathJax script configuration.
@@ -242,9 +176,6 @@ def run_pandoc(filename, html_file, comments_to_margin=False):
     )
     command = [
         "pandoc",
-        "--bibliography",
-        localfiles["bib"],
-        f"--csl={localfiles['csl']}",
         "--filter",
         "pandoc-crossref",
         "--citeproc",
@@ -256,10 +187,14 @@ def run_pandoc(filename, html_file, comments_to_margin=False):
         html_file,
         filename,
     ]
+    if localfiles["bib"]:
+        command[1:1] = ["--bibliography", localfiles["bib"]]
+    if localfiles["csl"]:
+        command.insert(1, f"--csl={localfiles['csl']}")
     for css_file in localfiles["css"]:
         command.extend(["--css", os.path.join(source_dir, css_file)])
     for lua_file in localfiles["lua"]:
-        command.extend(["--lua-filter", lua_file])
+        command.extend(["--lua-filter", os.path.join(source_dir, lua_file)])
     # command = ['pandoc', '-s', '--mathjax', '-o', html_file, filename]
     print("running:", " ".join(command))
     completed = subprocess.run(

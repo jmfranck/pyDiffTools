@@ -698,14 +698,7 @@ def test_run_pandoc_adds_css_lua_and_js_files_from_markdown_directory(
     project_dir = tmp_path / "project"
     project_dir.mkdir()
     markdown_file = project_dir / "notes.md"
-    markdown_file.write_text(
-        "---\n"
-        "pydifft-lua-filters:\n"
-        "  - cleanup.lua\n"
-        "  - numbers.lua\n"
-        "---\n"
-        "# Title\n"
-    )
+    markdown_file.write_text("# Title\n")
     (project_dir / "references.bib").write_text(
         "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
     )
@@ -768,21 +761,13 @@ def test_run_pandoc_adds_css_lua_and_js_files_from_markdown_directory(
     ) in html_content
 
 
-def test_run_pandoc_skips_unlisted_lua_filters_by_default(
+def test_run_pandoc_allows_missing_bibliography_and_csl(
     tmp_path, monkeypatch
 ):
     project_dir = tmp_path / "project"
     project_dir.mkdir()
     markdown_file = project_dir / "notes.md"
     markdown_file.write_text("# Title\n")
-    (project_dir / "references.bib").write_text(
-        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
-    )
-    (project_dir / "style.csl").write_text(
-        '<?xml version="1.0" encoding="utf-8"?><style '
-        'xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
-    )
-    (project_dir / "author-info-blocks.lua").write_text("return {}\n")
     html_file = tmp_path / "notes.html"
     captured_command = {}
 
@@ -799,7 +784,52 @@ def test_run_pandoc_skips_unlisted_lua_filters_by_default(
 
     run_pandoc(str(markdown_file), str(html_file))
 
-    assert "--lua-filter" not in captured_command["value"]
+    command = captured_command["value"]
+    assert "--bibliography" not in command
+    assert not any(token.startswith("--csl=") for token in command)
+
+
+def test_run_pandoc_orders_scholarly_metadata_before_author_blocks(
+    tmp_path, monkeypatch
+):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    markdown_file = project_dir / "notes.md"
+    markdown_file.write_text("# Title\n")
+    (project_dir / "references.bib").write_text(
+        "@misc{dummy_ref, author={Author Name}, title={Title}, year={2023}}"
+    )
+    (project_dir / "style.csl").write_text(
+        '<?xml version="1.0" encoding="utf-8"?><style '
+        'xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
+    )
+    (project_dir / "author-info-blocks.lua").write_text("return {}\n")
+    (project_dir / "scholarly-metadata.lua").write_text("return {}\n")
+    html_file = tmp_path / "notes.html"
+    captured_command = {}
+
+    monkeypatch.setattr(
+        "pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool"
+    )
+
+    def fake_run(command):
+        captured_command["value"] = command
+        with open(html_file, "w", encoding="utf-8") as fp:
+            fp.write("<html><head></head><body>ok</body></html>")
+
+    monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
+
+    run_pandoc(str(markdown_file), str(html_file))
+
+    lua_pairs = []
+    command = captured_command["value"]
+    for index, token in enumerate(command[:-1]):
+        if token == "--lua-filter":
+            lua_pairs.append(command[index + 1])
+    assert lua_pairs == [
+        str(project_dir / "scholarly-metadata.lua"),
+        str(project_dir / "author-info-blocks.lua"),
+    ]
 
 
 def test_run_pandoc_raises_when_pandoc_does_not_create_html(
@@ -870,6 +900,32 @@ def test_run_pandoc_copies_comment_assets_when_comment_tags_present(
         '<?xml version="1.0" encoding="utf-8"?><style '
         'xmlns="http://purl.org/net/xbiblio/csl" version="1.0"></style>'
     )
+    html_file = tmp_path / "notes.html"
+
+    monkeypatch.setattr(
+        "pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool"
+    )
+
+    def fake_run(_command):
+        with open(html_file, "w", encoding="utf-8") as fp:
+            fp.write("<html><head></head><body>ok</body></html>")
+
+    monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
+
+    run_pandoc(str(markdown_file), str(html_file))
+
+    assert (project_dir / "comments.css").exists()
+    assert (project_dir / "comment_tags.lua").exists()
+    assert (project_dir / "comment_toggle.js").exists()
+
+
+def test_run_pandoc_copies_comment_assets_for_comment_div_blocks(
+    tmp_path, monkeypatch
+):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    markdown_file = project_dir / "notes.md"
+    markdown_file.write_text("::: {.comment-right}\nhello\n:::\n")
     html_file = tmp_path / "notes.html"
 
     monkeypatch.setattr(
