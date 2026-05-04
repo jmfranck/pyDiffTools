@@ -5,5 +5,7 @@ include pydifftools/diff-doc.js
 include pydifftools/xml2xlsx.vbs
 include pydifftools/comments.css
 include pydifftools/comment_tags.lua
+include pydifftools/comment_tags_margin.lua
+include pydifftools/comment_tags_no_comments.lua
 include pydifftools/comment_toggle.js
 recursive-include example_notebook *

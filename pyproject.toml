@@ -40,6 +40,8 @@ pydifftools = [
     "xml2xlsx.vbs",
     "comments.css",
     "comment_tags.lua",
+    "comment_tags_margin.lua",
+    "comment_tags_no_comments.lua",
     "comment_toggle.js",
 ]
 

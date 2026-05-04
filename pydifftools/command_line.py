@@ -934,6 +934,15 @@ def main(argv=None):
             parser._pydifft_subparsers[subcommand].print_help()
             return
     namespace = parser.parse_args(argv)
+    if (
+        namespace.command == "cpb"
+        and namespace.comments_to_margin
+        and namespace.no_comments
+    ):
+        parser._pydifft_subparsers["cpb"].error(
+            "argument --no-comments: not allowed with argument "
+            "--comments-to-margin"
+        )
     handler = namespace._handler
     handler_kwargs = dict(vars(namespace))
     handler_kwargs.pop("_handler", None)
