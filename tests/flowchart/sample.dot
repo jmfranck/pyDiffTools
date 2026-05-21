@@ -24,6 +24,7 @@ digraph G {
     End [label=<<font point-size="9">__WGRPH_TASK_LINK__:End</font><br align="left"/>Finish
 <br align="left"/>
 <font color="orange">10/2/25</font>
+<font color="red"><font point-size="12"><b>Warning! Depends on parents without due dates!</b></font></font>
 <br align="left"/>>];
     Start -> Middle;
     Middle -> End;

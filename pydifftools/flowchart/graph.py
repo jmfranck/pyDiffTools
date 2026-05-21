@@ -294,7 +294,7 @@ def _format_label(text: str, wrap_width: int = 55) -> str:
     return "<" + body + ">"
 
 
-def _node_text_with_due(node):
+def _node_text_with_due(node, depends_on_undated_parent=False):
     """Return node text with due date appended when present."""
     if "due" not in node or node["due"] is None:
         if "text" in node:
@@ -352,6 +352,11 @@ def _node_text_with_due(node):
     else:
         due_color = "orange"
     formatted = f'<font color="{due_color}">{formatted}</font>'
+    if depends_on_undated_parent:
+        formatted += (
+            '\n<font color="red"><font point-size="12"><b>Warning! '
+            "Depends on parents without due dates!</b></font></font>"
+        )
 
     if "text" in node and node["text"]:
         if node["text"].endswith("\n"):
@@ -402,8 +407,19 @@ def _append_node(
 ):
     # Every rendered DOT node corresponds to a real YAML node, so build the
     # label directly from that node and prepend the task-link marker line.
+    node = data["nodes"][node_name]
+    node_due = node.get("due")
+    node_has_due = node_due is not None and bool(str(node_due).strip())
+    depends_on_undated_parent = False
+    if node_has_due:
+        for parent in node.get("parents", []):
+            parent_node = data["nodes"].get(parent, {})
+            parent_due = parent_node.get("due")
+            if parent_due is None or not str(parent_due).strip():
+                depends_on_undated_parent = True
+                break
     label = _node_label(
-        _node_text_with_due(data["nodes"][node_name]), wrap_width
+        _node_text_with_due(node, depends_on_undated_parent), wrap_width
     )
     task_link_line = (
         f'<font point-size="9">__WGRPH_TASK_LINK__:{node_name}</font>'
@@ -593,12 +609,12 @@ def write_dot_from_yaml(
     old_data=None,
     validate_due_dates=False,
     filter_task=None,
+    resolve_due_date_conflict=None,
 ):
     data = load_graph_yaml(str(yaml_path), old_data=old_data)
     _normalize_graph_dates(data)
     if validate_due_dates:
-        # Enforce that no node's due date is earlier than any ancestor due date
-        # so dependency timelines remain coherent.
+        # {{{ Push child due dates after their dated parents
         due_dates = {}
         for name in data["nodes"]:
             if (
@@ -608,37 +624,108 @@ def write_dot_from_yaml(
                 due_text = str(data["nodes"][name]["due"]).strip()
                 if due_text:
                     due_dates[name] = parse_due_string(due_text).date()
-        for name in due_dates:
-            parents_to_check = [
-                (parent, [parent]) for parent in data["nodes"][name]["parents"]
-            ]
-            seen_parents = set()
-            while parents_to_check:
-                parent, path = parents_to_check.pop()
-                if parent in seen_parents:
+        visiting = []
+        visited = set()
+
+        def adjust_due_after_parents(name):
+            if name in visited:
+                return due_dates.get(name)
+            if name in visiting:
+                cycle = visiting[visiting.index(name) :] + [name]
+                raise ValueError(
+                    "Cannot adjust flowchart due dates because dated parent "
+                    "relationships contain a cycle: "
+                    + " -> ".join(str(item) for item in cycle)
+                )
+            visiting.append(name)
+            latest_parent = None
+            latest_parent_due = None
+            for parent in sorted(
+                data["nodes"][name].get("parents", []),
+                key=lambda item: str(item),
+            ):
+                if parent not in due_dates:
                     continue
-                seen_parents.add(parent)
-                if parent in due_dates and due_dates[name] < due_dates[parent]:
-                    path_str = " -> ".join(path)
-                    raise ValueError(
-                        "Refusing to render watch_graph because node "
-                        f"'{name}' has due date {due_dates[name].isoformat()},"
-                        " which is earlier than its ancestor "
-                        f"'{parent}' due date {due_dates[parent].isoformat()}."
-                        " Parent chain checked: "
-                        f"{name} -> {path_str}. "
-                        "Update the node's due date or adjust the parent "
-                        "relationship so child due dates are not earlier than "
-                        "any ancestor."
-                    )
+                parent_due = adjust_due_after_parents(parent)
+                if parent_due is None:
+                    continue
                 if (
-                    parent in data["nodes"]
-                    and data["nodes"][parent]["parents"]
+                    latest_parent_due is None
+                    or parent_due > latest_parent_due
                 ):
-                    for grandparent in data["nodes"][parent]["parents"]:
-                        parents_to_check.append(
-                            (grandparent, path + [grandparent])
-                        )
+                    latest_parent = parent
+                    latest_parent_due = parent_due
+            while (
+                latest_parent_due is not None
+                and due_dates[name] < latest_parent_due
+            ):
+                node = data["nodes"][name]
+                old_due_text = node["due"]
+                adjusted_due = latest_parent_due
+                new_due_text = adjusted_due.strftime("%m/%d/%y")
+                message = (
+                    f"**WARNING!** moving due date of {name} from "
+                    f"{old_due_text} to {new_due_text} because child of "
+                    f"{latest_parent}"
+                )
+                action = "move"
+                if resolve_due_date_conflict is not None:
+                    action = resolve_due_date_conflict(
+                        name,
+                        old_due_text,
+                        new_due_text,
+                        latest_parent,
+                        message,
+                    )
+                if action == "break":
+                    if latest_parent in node.get("parents", []):
+                        node["parents"].remove(latest_parent)
+                    parent_node = data["nodes"].get(latest_parent)
+                    if (
+                        parent_node is not None
+                        and name in parent_node.get("children", [])
+                    ):
+                        parent_node["children"].remove(name)
+                    print(
+                        "**WARNING!** breaking dependency between "
+                        f"{latest_parent} and {name}",
+                        flush=True,
+                    )
+                    latest_parent = None
+                    latest_parent_due = None
+                    for parent in sorted(
+                        data["nodes"][name].get("parents", []),
+                        key=lambda item: str(item),
+                    ):
+                        if parent not in due_dates:
+                            continue
+                        parent_due = due_dates[parent]
+                        if (
+                            latest_parent_due is None
+                            or parent_due > latest_parent_due
+                        ):
+                            latest_parent = parent
+                            latest_parent_due = parent_due
+                    continue
+                if action != "move":
+                    raise ValueError(
+                        "Unknown due date conflict action "
+                        f"{action!r} for {name}."
+                    )
+                orig_due = node.get("orig_due")
+                if orig_due is None or not str(orig_due).strip():
+                    node["orig_due"] = old_due_text
+                node["due"] = new_due_text
+                due_dates[name] = adjusted_due
+                print(message, flush=True)
+                break
+            visiting.pop()
+            visited.add(name)
+            return due_dates.get(name)
+
+        for name in sorted(due_dates, key=lambda item: str(item)):
+            adjust_due_after_parents(name)
+        # }}}
     data_for_dot = data
     if filter_task is not None:
         # Limit the rendered graph to incomplete ancestors of the target task.
