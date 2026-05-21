@@ -56,6 +56,7 @@ _register_block_str_presenter()
 class EmptyGraphYamlError(ValueError):
     pass
 
+
 def load_graph_yaml(
     path: str, old_data: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
@@ -649,10 +650,7 @@ def write_dot_from_yaml(
                 parent_due = adjust_due_after_parents(parent)
                 if parent_due is None:
                     continue
-                if (
-                    latest_parent_due is None
-                    or parent_due > latest_parent_due
-                ):
+                if latest_parent_due is None or parent_due > latest_parent_due:
                     latest_parent = parent
                     latest_parent_due = parent_due
             while (
@@ -681,9 +679,8 @@ def write_dot_from_yaml(
                     if latest_parent in node.get("parents", []):
                         node["parents"].remove(latest_parent)
                     parent_node = data["nodes"].get(latest_parent)
-                    if (
-                        parent_node is not None
-                        and name in parent_node.get("children", [])
+                    if parent_node is not None and name in parent_node.get(
+                        "children", []
                     ):
                         parent_node["children"].remove(name)
                     print(
@@ -743,7 +740,9 @@ def write_dot_from_yaml(
                     f"'{filter_task}' matches {matches}."
                 )
             else:
-                keys = sorted(str(name) for name in data.get("nodes", {}).keys())
+                keys = sorted(
+                    str(name) for name in data.get("nodes", {}).keys()
+                )
                 preview = ", ".join(keys)
                 print(
                     "Task filter requested a missing node. "
