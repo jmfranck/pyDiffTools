@@ -183,9 +183,105 @@ def test_due_within_week_is_orange():
     assert '<font color="red">5/17/24</font>' in dot
 
 
-def test_watch_graph_refuses_child_due_before_parent(tmp_path):
-    # Ensure watch_graph rendering refuses a child due date earlier than any
-    # parent.
+def test_watch_graph_moves_child_due_after_latest_parent(tmp_path, capsys):
+    # Ensure watch_graph rendering moves a child due date after its latest
+    # parent instead of refusing to render.
+    yaml_path = tmp_path / "graph.yaml"
+    dot_path = tmp_path / "graph.dot"
+    yaml_path.write_text(
+        "\n".join(
+            [
+                "nodes:",
+                "  EarlierParent:",
+                "    due: 2025-10-10",
+                "    children: [Child]",
+                "  LatestParent:",
+                "    due: 2025-10-12",
+                "    children: [Child]",
+                "  Child:",
+                "    due: 2025-10-10",
+            ]
+        )
+        + "\n"
+    )
+
+    data = graph.write_dot_from_yaml(
+        str(yaml_path),
+        str(dot_path),
+        validate_due_dates=True,
+    )
+
+    assert data["nodes"]["Child"]["due"] == "10/12/25"
+    assert data["nodes"]["Child"]["orig_due"] == "10/10/25"
+    assert (
+        "**WARNING!** moving due date of Child from 10/10/25 "
+        "to 10/12/25 because child of LatestParent"
+    ) in capsys.readouterr().out
+
+
+def test_watch_graph_allows_child_due_on_same_date_as_parent(
+    tmp_path, capsys
+):
+    yaml_path = tmp_path / "graph.yaml"
+    dot_path = tmp_path / "graph.dot"
+    yaml_path.write_text(
+        "\n".join(
+            [
+                "nodes:",
+                "  Parent:",
+                "    due: 2025-10-10",
+                "    children: [Child]",
+                "  Child:",
+                "    due: 2025-10-10",
+            ]
+        )
+        + "\n"
+    )
+
+    data = graph.write_dot_from_yaml(
+        str(yaml_path),
+        str(dot_path),
+        validate_due_dates=True,
+    )
+
+    assert data["nodes"]["Child"]["due"] == "10/10/25"
+    assert "orig_due" not in data["nodes"]["Child"]
+    assert "**WARNING!** moving due date" not in capsys.readouterr().out
+
+
+def test_due_move_preserves_existing_original_due(tmp_path, capsys):
+    yaml_path = tmp_path / "graph.yaml"
+    dot_path = tmp_path / "graph.dot"
+    yaml_path.write_text(
+        "\n".join(
+            [
+                "nodes:",
+                "  Parent:",
+                "    due: 2025-10-11",
+                "    children: [Child]",
+                "  Child:",
+                "    orig_due: 2025-10-01",
+                "    due: 2025-10-10",
+            ]
+        )
+        + "\n"
+    )
+
+    data = graph.write_dot_from_yaml(
+        str(yaml_path),
+        str(dot_path),
+        validate_due_dates=True,
+    )
+
+    assert data["nodes"]["Child"]["due"] == "10/11/25"
+    assert data["nodes"]["Child"]["orig_due"] == "10/01/25"
+    assert (
+        "**WARNING!** moving due date of Child from 10/10/25 "
+        "to 10/11/25 because child of Parent"
+    ) in capsys.readouterr().out
+
+
+def test_due_conflict_can_break_dependency(tmp_path, capsys):
     yaml_path = tmp_path / "graph.yaml"
     dot_path = tmp_path / "graph.dot"
     yaml_path.write_text(
@@ -202,10 +298,40 @@ def test_watch_graph_refuses_child_due_before_parent(tmp_path):
         + "\n"
     )
 
-    with pytest.raises(ValueError, match="Refusing to render watch_graph"):
-        graph.write_dot_from_yaml(
-            str(yaml_path),
-            str(dot_path),
-            update_yaml=False,
-            validate_due_dates=True,
-        )
+    data = graph.write_dot_from_yaml(
+        str(yaml_path),
+        str(dot_path),
+        validate_due_dates=True,
+        resolve_due_date_conflict=lambda *_: "break",
+    )
+
+    assert data["nodes"]["Child"]["due"] == "10/09/25"
+    assert "orig_due" not in data["nodes"]["Child"]
+    assert data["nodes"]["Child"]["parents"] == []
+    assert data["nodes"]["Parent"]["children"] == []
+    assert (
+        "**WARNING!** breaking dependency between Parent and Child"
+    ) in capsys.readouterr().out
+
+
+def test_due_node_warns_when_parent_has_no_due_date():
+    data = {
+        "nodes": {
+            "Parent": {
+                "children": ["Child"],
+                "parents": [],
+            },
+            "Child": {
+                "due": "2025-10-10",
+                "children": [],
+                "parents": ["Parent"],
+            },
+        }
+    }
+
+    dot = yaml_to_dot(data)
+
+    assert (
+        '<font color="red"><font point-size="12"><b>Warning! Depends '
+        "on parents without due dates!</b></font></font>"
+    ) in dot

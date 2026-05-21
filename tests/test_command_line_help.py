@@ -28,6 +28,7 @@ def test_help_then_subcommand_shows_subcommand_options(capsys):
     assert "usage:" in out
     assert "cpb" in out
     assert "--comments-to-margin" in out
+    assert "--no-comments" in out
 
 
 def test_short_and_long_help_are_interchangeable_for_subcommand_help(capsys):
@@ -37,6 +38,19 @@ def test_short_and_long_help_are_interchangeable_for_subcommand_help(capsys):
     long_out = capsys.readouterr().out
     assert "--comments-to-margin" in short_out
     assert "--comments-to-margin" in long_out
+    assert "--no-comments" in short_out
+    assert "--no-comments" in long_out
+
+
+def test_cpb_rejects_conflicting_comment_flags(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        command_line.main(
+            ["cpb", "--no-comments", "--comments-to-margin", "notes.md"]
+        )
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "argument --no-comments" in err
+    assert "--comments-to-margin" in err
 
 
 def test_gd_help_mentions_install_alias(capsys):

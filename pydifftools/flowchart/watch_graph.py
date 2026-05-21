@@ -1,4 +1,5 @@
 import subprocess
+import sys
 import time
 import shutil
 import math
@@ -357,6 +358,46 @@ def _svg_add_task_links(svg_root, namespace):
             group.insert(index, link)
 
 
+def _resolve_due_date_conflict_with_qt(
+    name, old_due_text, new_due_text, parent, message
+):
+    # Run the tiny PySide prompt in its own process so watchdog and preview
+    # server worker threads do not create Qt widgets outside the main thread.
+    prompt_script = """
+import sys
+from PySide6.QtWidgets import QApplication, QMessageBox
+
+app = QApplication(sys.argv[:1])
+box = QMessageBox()
+box.setWindowTitle("wgrph due date")
+box.setIcon(QMessageBox.Icon.Warning)
+box.setText(sys.argv[1])
+box.setInformativeText("Choose how to resolve this dependency date conflict.")
+move_button = box.addButton("Move due date", QMessageBox.ButtonRole.AcceptRole)
+break_button = box.addButton(
+    "Break dependency", QMessageBox.ButtonRole.DestructiveRole
+)
+box.setDefaultButton(move_button)
+box.exec()
+if box.clickedButton() is break_button:
+    sys.exit(1)
+sys.exit(0)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", prompt_script, message],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return "move"
+    if result.returncode == 1:
+        return "break"
+    stderr = result.stderr.strip()
+    if stderr:
+        raise RuntimeError(f"wgrph due-date dialog failed: {stderr}")
+    raise RuntimeError("wgrph due-date dialog failed.")
+
+
 def build_graph(
     yaml_file,
     dot_file,
@@ -365,6 +406,7 @@ def build_graph(
     order_by_date=False,
     prev_data=None,
     target_task=None,
+    resolve_due_date_conflict=None,
 ):
     # Graphviz is required for dot -> svg rendering.
     if shutil.which("dot") is None:
@@ -380,6 +422,7 @@ def build_graph(
         old_data=prev_data,
         validate_due_dates=True,
         filter_task=target_task,
+        resolve_due_date_conflict=resolve_due_date_conflict,
     )
     subprocess.run(
         ["dot", "-Tsvg", str(dot_file), "-o", str(svg_file)],
@@ -606,6 +649,7 @@ class GraphEventHandler(FileSystemEventHandler):
         wrap_width=55,
         data=None,
         state=None,
+        resolve_due_date_conflict=None,
         debounce=0.25,
     ):
         self.yaml_file = Path(yaml_file)
@@ -618,6 +662,7 @@ class GraphEventHandler(FileSystemEventHandler):
         self.webdriver = webdriver
         self.wrap_width = wrap_width
         self.data = data
+        self.resolve_due_date_conflict = resolve_due_date_conflict
         if state is None:
             self.state = {"order_by_date": False, "target_task": None}
         else:
@@ -636,6 +681,11 @@ class GraphEventHandler(FileSystemEventHandler):
                 return
             self._last_handled = now
             try:
+                build_kwargs = {}
+                if self.resolve_due_date_conflict is not None:
+                    build_kwargs["resolve_due_date_conflict"] = (
+                        self.resolve_due_date_conflict
+                    )
                 self.data = build_graph(
                     self.yaml_file,
                     self.dot_file,
@@ -644,6 +694,7 @@ class GraphEventHandler(FileSystemEventHandler):
                     self.state["order_by_date"],
                     self.data,
                     self.state["target_task"],
+                    **build_kwargs,
                 )
             except Exception as exc:
                 if isinstance(exc, EmptyGraphYamlError):
@@ -734,6 +785,11 @@ class FlowchartPreviewServer:
                 ):
                     event_handler.state["order_by_date"] = order_by_date
                     event_handler.state["target_task"] = target_task
+                    build_kwargs = {}
+                    if event_handler.resolve_due_date_conflict is not None:
+                        build_kwargs["resolve_due_date_conflict"] = (
+                            event_handler.resolve_due_date_conflict
+                        )
                     event_handler.data = build_graph(
                         event_handler.yaml_file,
                         event_handler.dot_file,
@@ -742,6 +798,7 @@ class FlowchartPreviewServer:
                         event_handler.state["order_by_date"],
                         event_handler.data,
                         event_handler.state["target_task"],
+                        **build_kwargs,
                     )
 
                 body = _watch_html(
@@ -830,6 +887,7 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
         initial_state["order_by_date"],
         None,
         initial_state["target_task"],
+        _resolve_due_date_conflict_with_qt,
     )
 
     options = Options()
@@ -845,6 +903,7 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
         wrap_width,
         data,
         initial_state,
+        _resolve_due_date_conflict_with_qt,
     )
     preview_server = FlowchartPreviewServer(event_handler)
     preview_server.start()

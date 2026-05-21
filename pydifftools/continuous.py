@@ -21,6 +21,9 @@ from .browser_lifecycle import (
 FORWARD_SEARCH_HOST = "127.0.0.1"
 FORWARD_SEARCH_PORT = 51235
 MARGIN_COMMENTS_FILTER_MARKER = "-- PYDIFFTOOLS_SPECIAL_MARGIN_COMMENTS_FILTER"
+NO_COMMENTS_FILTER_MARKER = (
+    "-- PYDIFFTOOLS_SPECIAL_NO_COMMENTS_FILTER"
+)
 
 
 def forward_search_listener(stop_event, search_queue):
@@ -56,47 +59,79 @@ def _file_contains_text(path, text):
         return text in fp.read()
 
 
-def _is_margin_comments_filter(path):
-    return _file_contains_text(path, MARGIN_COMMENTS_FILTER_MARKER)
+def _comment_filter_mode(path):
+    if not os.path.exists(path):
+        return None
+    if _file_contains_text(path, MARGIN_COMMENTS_FILTER_MARKER):
+        return "margin"
+    if _file_contains_text(path, NO_COMMENTS_FILTER_MARKER):
+        return "none"
+    return "default"
 
 
-def _set_comment_filter_mode(source_dir, comments_to_margin):
+def _set_comment_filter_mode(source_dir, mode):
+    if mode not in {"default", "margin", "none"}:
+        raise ValueError(f"Unknown comment filter mode: {mode}")
     package_dir = os.path.dirname(os.path.abspath(__file__))
     active_filter = os.path.join(source_dir, "comment_tags.lua")
     inactive_filter = os.path.join(source_dir, "comment_tags.lua.inactive")
-    packaged_default = os.path.join(package_dir, "comment_tags.lua")
-    packaged_margin = os.path.join(package_dir, "comment_tags_margin.lua")
+    packaged_filters = {
+        "default": os.path.join(package_dir, "comment_tags.lua"),
+        "margin": os.path.join(package_dir, "comment_tags_margin.lua"),
+        "none": os.path.join(package_dir, "comment_tags_no_comments.lua"),
+    }
 
-    active_is_margin = _is_margin_comments_filter(active_filter)
-    inactive_is_margin = _is_margin_comments_filter(inactive_filter)
+    active_mode = _comment_filter_mode(active_filter)
+    inactive_mode = _comment_filter_mode(inactive_filter)
 
-    if comments_to_margin:
-        if active_is_margin:
+    if mode == "default":
+        if active_mode == "default":
             return
-        if os.path.exists(active_filter):
-            os.replace(active_filter, inactive_filter)
-        shutil.copy2(packaged_margin, active_filter)
+        if active_mode in {"margin", "none"}:
+            if inactive_mode == "default":
+                temp_filter = active_filter + ".swap_tmp"
+                os.replace(active_filter, temp_filter)
+                os.replace(inactive_filter, active_filter)
+                os.replace(temp_filter, inactive_filter)
+            else:
+                os.replace(active_filter, inactive_filter)
+                shutil.copy2(packaged_filters["default"], active_filter)
+            return
+        if active_mode is None:
+            if inactive_mode == "default":
+                os.replace(inactive_filter, active_filter)
+            else:
+                shutil.copy2(packaged_filters["default"], active_filter)
+            return
+        shutil.copy2(packaged_filters["default"], active_filter)
         return
 
-    if active_is_margin:
-        if os.path.exists(inactive_filter) and not inactive_is_margin:
-            temp_filter = active_filter + ".swap_tmp"
-            os.replace(active_filter, temp_filter)
-            os.replace(inactive_filter, active_filter)
-            os.replace(temp_filter, inactive_filter)
-        else:
-            os.replace(active_filter, inactive_filter)
-            shutil.copy2(packaged_default, active_filter)
+    if active_mode == mode:
         return
+    if active_mode == "default":
+        os.replace(active_filter, inactive_filter)
+        shutil.copy2(packaged_filters[mode], active_filter)
+        return
+    if active_mode in {"margin", "none"}:
+        shutil.copy2(packaged_filters[mode], active_filter)
+        return
+    if active_mode is None and inactive_mode != "default":
+        shutil.copy2(packaged_filters["default"], inactive_filter)
+    shutil.copy2(packaged_filters[mode], active_filter)
 
-    if not os.path.exists(active_filter):
-        if os.path.exists(inactive_filter) and not inactive_is_margin:
-            os.replace(inactive_filter, active_filter)
-        else:
-            shutil.copy2(packaged_default, active_filter)
 
-
-def run_pandoc(filename, html_file, comments_to_margin=False):
+def run_pandoc(
+    filename,
+    html_file,
+    comments_to_margin=False,
+    no_comments=False,
+):
+    if comments_to_margin:
+        comment_filter_mode = "margin"
+    elif no_comments:
+        comment_filter_mode = "none"
+    else:
+        comment_filter_mode = "default"
     # Pandoc and pandoc-crossref must be installed for HTML rendering.
     if shutil.which("pandoc") is None:
         raise RuntimeError(
@@ -122,24 +157,28 @@ def run_pandoc(filename, html_file, comments_to_margin=False):
     # Collect companion files from the markdown file's directory so cpb works
     # even when started from a different working directory.
     source_dir = os.path.dirname(os.path.abspath(filename))
-    # If this markdown uses <comment> tags, copy the packaged comment assets
-    # into the markdown directory before collecting css/lua/js companion files.
     with open(filename, encoding="utf-8") as fp:
         markdown_text = fp.read()
     if (
         "<comment>" in markdown_text
+        or "<comment-left>" in markdown_text
+        or "<comment-right>" in markdown_text
         or "comment-right" in markdown_text
         or "comment-left" in markdown_text
     ):
-        package_dir = os.path.dirname(os.path.abspath(__file__))
-        for asset_name in ["comments.css", "comment_toggle.js"]:
-            target_path = os.path.join(source_dir, asset_name)
-            if not os.path.exists(target_path):
-                shutil.copy2(
-                    os.path.join(package_dir, asset_name),
-                    target_path,
-                )
-        _set_comment_filter_mode(source_dir, comments_to_margin)
+        # Keep the active comment filter in the markdown directory so pandoc
+        # picks it up alongside other user-supplied project filters.
+        _set_comment_filter_mode(source_dir, comment_filter_mode)
+        # Only copy the comment UI assets when comments should be rendered.
+        if comment_filter_mode != "none":
+            package_dir = os.path.dirname(os.path.abspath(__file__))
+            for asset_name in ["comments.css", "comment_toggle.js"]:
+                target_path = os.path.join(source_dir, asset_name)
+                if not os.path.exists(target_path):
+                    shutil.copy2(
+                        os.path.join(package_dir, asset_name),
+                        target_path,
+                    )
     localfiles = {}
     for k in ["csl", "bib"]:
         localfiles[k] = [
@@ -261,10 +300,17 @@ def run_pandoc(filename, html_file, comments_to_margin=False):
 
 
 class Handler(FileSystemEventHandler):
-    def __init__(self, filename, observer, comments_to_margin=False):
+    def __init__(
+        self,
+        filename,
+        observer,
+        comments_to_margin=False,
+        no_comments=False,
+    ):
         self.observer = observer
         self.filename = filename
         self.comments_to_margin = comments_to_margin
+        self.no_comments = no_comments
         self.html_file = filename.rsplit(".", 1)[0] + ".html"
         self.init_chrome()
 
@@ -278,6 +324,7 @@ class Handler(FileSystemEventHandler):
             self.filename,
             self.html_file,
             comments_to_margin=self.comments_to_margin,
+            no_comments=self.no_comments,
         )
         if not os.path.exists(self.html_file):
             print("html doesn't exist")
@@ -294,6 +341,7 @@ class Handler(FileSystemEventHandler):
                 self.filename,
                 self.html_file,
                 comments_to_margin=self.comments_to_margin,
+                no_comments=self.no_comments,
             )
             self.append_autorefresh()
             try:
@@ -388,13 +436,19 @@ position
             "Temporarily replace comment_tags.lua with the special margin "
             "comments filter for printing."
         ),
+        "no_comments": (
+            "Render the HTML without comment tags or comment div blocks."
+        ),
     },
     filename_extensions={"filename": ".md"},
 )
-def cpb(filename, comments_to_margin=False):
+def cpb(filename, comments_to_margin=False, no_comments=False):
     observer = Observer()
     event_handler = Handler(
-        filename, observer, comments_to_margin=comments_to_margin
+        filename,
+        observer,
+        comments_to_margin=comments_to_margin,
+        no_comments=no_comments,
     )
     search_queue = queue.Queue()
     stop_event = threading.Event()

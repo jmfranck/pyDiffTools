@@ -1010,16 +1010,33 @@ def test_comment_filter_mode_switches_to_margin_and_back(tmp_path):
     inactive_filter = project_dir / "comment_tags.lua.inactive"
     active_filter.write_text("normal filter\n")
 
-    continuous._set_comment_filter_mode(str(project_dir), True)
+    continuous._set_comment_filter_mode(str(project_dir), "margin")
     active_margin = active_filter.read_text()
     assert continuous.MARGIN_COMMENTS_FILTER_MARKER in active_margin
     assert inactive_filter.read_text() == "normal filter\n"
 
-    continuous._set_comment_filter_mode(str(project_dir), False)
+    continuous._set_comment_filter_mode(str(project_dir), "default")
     assert active_filter.read_text() == "normal filter\n"
     assert (
         continuous.MARGIN_COMMENTS_FILTER_MARKER in inactive_filter.read_text()
     )
+
+
+def test_comment_filter_mode_switches_to_no_comments_and_back(tmp_path):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    active_filter = project_dir / "comment_tags.lua"
+    inactive_filter = project_dir / "comment_tags.lua.inactive"
+    active_filter.write_text("normal filter\n")
+
+    continuous._set_comment_filter_mode(str(project_dir), "none")
+    active_none = active_filter.read_text()
+    assert continuous.NO_COMMENTS_FILTER_MARKER in active_none
+    assert inactive_filter.read_text() == "normal filter\n"
+
+    continuous._set_comment_filter_mode(str(project_dir), "default")
+    assert active_filter.read_text() == "normal filter\n"
+    assert continuous.NO_COMMENTS_FILTER_MARKER in inactive_filter.read_text()
 
 
 def test_comment_filter_mode_restores_repo_default_when_inactive_missing(
@@ -1035,7 +1052,7 @@ def test_comment_filter_mode_restores_repo_default_when_inactive_missing(
     )
     active_filter.write_text(margin_repo_filter.read_text())
 
-    continuous._set_comment_filter_mode(str(project_dir), False)
+    continuous._set_comment_filter_mode(str(project_dir), "default")
 
     assert active_filter.exists()
     assert inactive_filter.exists()
@@ -1058,6 +1075,17 @@ def test_margin_comment_filter_uses_overlay_style_for_inline_comments():
     assert "comment-inline-break-after" in margin_filter
     assert "comment-pin comment-pin-block" in margin_filter
     assert "pandoc.RawInline(" in margin_filter
+
+
+def test_no_comments_filter_ships_with_special_marker():
+    no_comments_filter = (
+        Path(continuous.__file__).resolve().parent
+        / "comment_tags_no_comments.lua"
+    ).read_text()
+    assert continuous.NO_COMMENTS_FILTER_MARKER in no_comments_filter
+    assert "function Div(el)" in no_comments_filter
+    assert "function Inlines(inlines)" in no_comments_filter
+    assert "function Blocks(blocks)" in no_comments_filter
 
 
 def test_run_pandoc_comment_tag_regression_end_to_end(tmp_path):
@@ -1144,6 +1172,53 @@ It's still unclear what causes the low-$E_a$ region.
             overlay_with_list = True
             break
     assert overlay_with_list
+
+
+def test_run_pandoc_no_comments_removes_all_comment_rendering(tmp_path):
+    markdown_content = """Lead-in prose that should remain.
+<comment>
+Inline comment text that should disappear.
+</comment>
+Middle sentence.
+
+<comment-right>
+Block comment text that should disappear.
+
+* comment bullet
+</comment-right>
+
+::: {.comment-left}
+Div comment text that should disappear.
+:::
+
+Closing prose with [@dummy_ref] that should remain.
+"""
+    markdown_file = tmp_path / "notes.md"
+    html_file = tmp_path / "notes.html"
+    markdown_file.write_text(markdown_content)
+    write_minimal_bibliography_and_csl(tmp_path)
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        run_pandoc(str(markdown_file), str(html_file), no_comments=True)
+    finally:
+        os.chdir(cwd)
+
+    html_content = html_file.read_text()
+
+    assert "Lead-in prose that should remain." in html_content
+    assert "Middle sentence." in html_content
+    assert "Closing prose with" in html_content
+    assert "Inline comment text that should disappear." not in html_content
+    assert "Block comment text that should disappear." not in html_content
+    assert "Div comment text that should disappear." not in html_content
+    assert 'class="comment-pin"' not in html_content
+    assert "comment-overlay" not in html_content
+    assert 'class="comment-right"' not in html_content
+    assert 'class="comment-left"' not in html_content
+    assert not (tmp_path / "comments.css").exists()
+    assert not (tmp_path / "comment_toggle.js").exists()
 
 
 def test_comment_css_arrow_geometry_constants(tmp_path):
