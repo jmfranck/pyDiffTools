@@ -26,7 +26,7 @@ from pydifftools.browser_lifecycle import (
     browser_window_is_alive,
     close_browser_window,
 )
-from .graph import EmptyGraphYamlError, write_dot_from_yaml
+from .graph import EmptyGraphYamlError, endpoint_projects, write_dot_from_yaml
 
 
 def _reload_svg(driver, svg_src) -> None:
@@ -236,35 +236,48 @@ def _watch_view_state_from_params(params):
     # reliably switch back to the overview without depending on prior state.
     order_by_date = False
     target_task = None
+    filter_completed = False
+    if "p" in params:
+        p_value = params["p"][-1]
+        filter_completed = p_value in ("1", "true", "yes", "on", "")
     if "d" in params:
         d_value = params["d"][-1]
         order_by_date = d_value in ("1", "true", "yes", "on", "")
+        if order_by_date:
+            filter_completed = False
     if "t" in params:
         t_value = params["t"][-1]
         if t_value is not None and str(t_value) != "":
             target_task = str(t_value)
             order_by_date = False
-    return order_by_date, target_task
+            filter_completed = False
+    return order_by_date, target_task, filter_completed
 
 
-def _watch_footer_links(order_by_date, target_task=None):
+def _watch_footer_links(
+    order_by_date, target_task=None, filter_completed=False
+):
     links = []
-    if order_by_date:
-        links.append(("/", "project overview"))
-    else:
+    if not order_by_date:
         links.append(("/?d=1", "date-ordered"))
-        if target_task is not None and str(target_task).strip():
-            links.append(("/", "project overview"))
+    if not filter_completed:
+        links.append(("/?p=1", "full plan"))
+    if order_by_date or filter_completed:
+        links.append(("/", "project overview"))
+    elif target_task is not None and str(target_task).strip():
+        links.append(("/", "project overview"))
     return links
 
 
-def _watch_html(svg_url, order_by_date, target_task=None):
+def _watch_html(
+    svg_url, order_by_date, target_task=None, filter_completed=False
+):
     # Keep the SVG as the page's main content so browser zoom behavior matches
     # the original watcher experience (the graph scales, not just footer text).
     footer_html = " | ".join(
         f"<a href='{footer_url}'>{footer_label}</a>"
         for footer_url, footer_label in _watch_footer_links(
-            order_by_date, target_task
+            order_by_date, target_task, filter_completed
         )
     )
     return (
@@ -406,6 +419,7 @@ def build_graph(
     order_by_date=False,
     prev_data=None,
     target_task=None,
+    filter_completed=False,
     resolve_due_date_conflict=None,
 ):
     # Graphviz is required for dot -> svg rendering.
@@ -422,6 +436,7 @@ def build_graph(
         old_data=prev_data,
         validate_due_dates=True,
         filter_task=target_task,
+        filter_completed=filter_completed,
         resolve_due_date_conflict=resolve_due_date_conflict,
     )
     subprocess.run(
@@ -437,37 +452,10 @@ def build_graph(
     _svg_add_task_links(svg_root, namespace)
 
     if not order_by_date:
-        # In dependency view mode, each node explicitly tagged with
-        # ``style: endpoint`` defines a project color. A project includes the
-        # endpoint plus ancestors, but stops before any ancestor that is
-        # itself an endpoint.
-        endpoints = set()
-        for name, node_data in data["nodes"].items():
-            if node_data.get("style") == "endpoint":
-                endpoints.add(name)
-
-        projects = {}
-        for endpoint in sorted(endpoints):
-            projects[endpoint] = [endpoint]
-            ancestors_to_visit = []
-            if "parents" in data["nodes"][endpoint]:
-                for parent in data["nodes"][endpoint]["parents"]:
-                    ancestors_to_visit.append(parent)
-            already_seen = set([endpoint])
-            while ancestors_to_visit:
-                ancestor = ancestors_to_visit.pop()
-                if ancestor in already_seen:
-                    continue
-                already_seen.add(ancestor)
-                if ancestor in endpoints:
-                    continue
-                projects[endpoint].append(ancestor)
-                if (
-                    ancestor in data["nodes"]
-                    and "parents" in data["nodes"][ancestor]
-                ):
-                    for parent in data["nodes"][ancestor]["parents"]:
-                        ancestors_to_visit.append(parent)
+        # In dependency view mode, each endpoint style defines a project
+        # color. A project includes the endpoint plus ancestors, but stops
+        # before any ancestor that is itself an endpoint.
+        projects = endpoint_projects(data)
 
         title_to_group = {}
         node_title_to_group = {}
@@ -664,7 +652,11 @@ class GraphEventHandler(FileSystemEventHandler):
         self.data = data
         self.resolve_due_date_conflict = resolve_due_date_conflict
         if state is None:
-            self.state = {"order_by_date": False, "target_task": None}
+            self.state = {
+                "order_by_date": False,
+                "target_task": None,
+                "filter_completed": False,
+            }
         else:
             self.state = state
         self.debounce = debounce
@@ -686,6 +678,8 @@ class GraphEventHandler(FileSystemEventHandler):
                     build_kwargs["resolve_due_date_conflict"] = (
                         self.resolve_due_date_conflict
                     )
+                if self.state["filter_completed"]:
+                    build_kwargs["filter_completed"] = True
                 self.data = build_graph(
                     self.yaml_file,
                     self.dot_file,
@@ -775,21 +769,30 @@ class FlowchartPreviewServer:
                 params = urllib.parse.parse_qs(
                     parsed.query, keep_blank_values=True
                 )
-                order_by_date, target_task = _watch_view_state_from_params(
-                    params
-                )
+                (
+                    order_by_date,
+                    target_task,
+                    filter_completed,
+                ) = _watch_view_state_from_params(params)
 
                 if (
                     order_by_date != event_handler.state["order_by_date"]
                     or target_task != event_handler.state["target_task"]
+                    or filter_completed
+                    != event_handler.state["filter_completed"]
                 ):
                     event_handler.state["order_by_date"] = order_by_date
                     event_handler.state["target_task"] = target_task
+                    event_handler.state["filter_completed"] = (
+                        filter_completed
+                    )
                     build_kwargs = {}
                     if event_handler.resolve_due_date_conflict is not None:
                         build_kwargs["resolve_due_date_conflict"] = (
                             event_handler.resolve_due_date_conflict
                         )
+                    if event_handler.state["filter_completed"]:
+                        build_kwargs["filter_completed"] = True
                     event_handler.data = build_graph(
                         event_handler.yaml_file,
                         event_handler.dot_file,
@@ -805,6 +808,7 @@ class FlowchartPreviewServer:
                     "/graph.svg",
                     event_handler.state["order_by_date"],
                     event_handler.state["target_task"],
+                    event_handler.state["filter_completed"],
                 )
                 body_bytes = body.encode("utf-8")
                 _send_preview_response(
@@ -850,10 +854,11 @@ class FlowchartPreviewServer:
         "wrap_width": "Line wrap width used when generating node labels",
         "d": "Render nodes by date without showing connections",
         "t": "Task name to focus on (show incomplete ancestor tasks only)",
+        "p": "Render the full plan with completed tasks filtered out",
     },
     filename_extensions={"yaml": (".yaml", ".yml")},
 )
-def wgrph(yaml, wrap_width=55, d=False, t=None):
+def wgrph(yaml, wrap_width=55, d=False, t=None, p=False):
     # Selenium is only required when actually launching the watcher, so it is
     # imported here to avoid breaking the command-line tools when the optional
     # dependency is not installed.
@@ -875,7 +880,11 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
 
     # The browser now drives filtering/date-mode by GET query parameters
     # handled by the local preview server. Keep Python state in sync there.
-    initial_state = {"order_by_date": False, "target_task": None}
+    initial_state = {
+        "order_by_date": False,
+        "target_task": None,
+        "filter_completed": False,
+    }
 
     # Build the default dependency graph first. Optional -t / -d args are then
     # applied by requesting server URLs with query parameters.
@@ -887,7 +896,7 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
         initial_state["order_by_date"],
         None,
         initial_state["target_task"],
-        _resolve_due_date_conflict_with_qt,
+        resolve_due_date_conflict=_resolve_due_date_conflict_with_qt,
     )
 
     options = Options()
@@ -921,6 +930,8 @@ def wgrph(yaml, wrap_width=55, d=False, t=None):
         )
     elif d:
         driver.get(preview_server.base_url + "?d=1")
+    elif p:
+        driver.get(preview_server.base_url + "?p=1")
 
     observer = Observer()
     observer.schedule(event_handler, yaml_file.parent, recursive=False)

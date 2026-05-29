@@ -335,3 +335,27 @@ def test_due_node_warns_when_parent_has_no_due_date():
         '<font color="red"><font point-size="12"><b>Warning! Depends '
         "on parents without due dates!</b></font></font>"
     ) in dot
+
+
+def test_due_node_ignores_completed_parent_without_due_date():
+    data = {
+        "nodes": {
+            "Parent": {
+                "children": ["Child"],
+                "parents": [],
+                "style": "completed",
+            },
+            "Child": {
+                "due": "2025-10-10",
+                "children": [],
+                "parents": ["Parent"],
+            },
+        }
+    }
+
+    dot = yaml_to_dot(data)
+
+    assert (
+        '<font color="red"><font point-size="12"><b>Warning! Depends '
+        "on parents without due dates!</b></font></font>"
+    ) not in dot
