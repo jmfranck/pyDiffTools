@@ -112,6 +112,19 @@ def test_file_completers_are_extension_specific(monkeypatch):
     assert cpb_action.completer.allowednames == ["*.md"]
 
 
+def test_wgrph_has_full_plan_flag():
+    from pydifftools import command_line
+
+    parser = command_line.build_parser()
+    p_action = next(
+        action
+        for action in parser._pydifft_subparsers["wgrph"]._actions
+        if action.dest == "p"
+    )
+
+    assert "-p" in p_action.option_strings
+
+
 def _collect_argcomplete_suggestions(monkeypatch, comp_line):
     argcomplete = pytest.importorskip("argcomplete")
     from argcomplete import io as argcomplete_io

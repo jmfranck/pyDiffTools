@@ -56,6 +56,7 @@ _register_block_str_presenter()
 class EmptyGraphYamlError(ValueError):
     pass
 
+
 def load_graph_yaml(
     path: str, old_data: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
@@ -320,8 +321,7 @@ def _node_text_with_due(node, depends_on_undated_parent=False):
 
     # Completed tasks should always show their calendar date so the original
     # deadline remains visible even if it was today or overdue when finished.
-    style_name = str(node.get("style", ""))
-    is_completed = "complete" in style_name
+    is_completed = node_is_completed(node)
     # Replace the actual date with high-visibility notices when the deadline
     # is today or overdue.  These are rendered in a bold 12 pt font so they are
     # immediately noticeable in the diagram.  Completed tasks skip these
@@ -364,6 +364,68 @@ def _node_text_with_due(node, depends_on_undated_parent=False):
         return node["text"] + "\n" + formatted
 
     return formatted
+
+
+def node_is_completed(node):
+    return "complete" in str(node.get("style", ""))
+
+
+def node_is_endpoint(node):
+    return "endpoint" in str(node.get("style", ""))
+
+
+def trace_ancestors(
+    data,
+    start_name,
+    stop_at=None,
+    include_stopped=False,
+    skip_over=None,
+):
+    ancestors = []
+    nodes = data.get("nodes", {})
+    if start_name not in nodes:
+        return ancestors
+    ancestors_to_visit = list(nodes[start_name].get("parents", []))
+    already_seen = set([start_name])
+    while ancestors_to_visit:
+        ancestor = ancestors_to_visit.pop()
+        if ancestor in already_seen:
+            continue
+        already_seen.add(ancestor)
+        if ancestor not in nodes:
+            continue
+        ancestor_node = nodes[ancestor]
+        if stop_at is not None and stop_at(ancestor, ancestor_node):
+            if include_stopped:
+                ancestors.append(ancestor)
+            continue
+        if skip_over is not None and skip_over(ancestor, ancestor_node):
+            for parent in ancestor_node.get("parents", []):
+                ancestors_to_visit.append(parent)
+            continue
+        ancestors.append(ancestor)
+        for parent in ancestor_node.get("parents", []):
+            ancestors_to_visit.append(parent)
+    return ancestors
+
+
+def endpoint_projects(data):
+    endpoints = set()
+    for name, node_data in data.get("nodes", {}).items():
+        if node_is_endpoint(node_data):
+            endpoints.add(name)
+
+    projects = {}
+    for endpoint in sorted(endpoints):
+        projects[endpoint] = [endpoint]
+        projects[endpoint].extend(
+            trace_ancestors(
+                data,
+                endpoint,
+                stop_at=lambda name, _node: name in endpoints,
+            )
+        )
+    return projects
 
 
 def _node_label(text, wrap_width=55):
@@ -414,6 +476,8 @@ def _append_node(
     if node_has_due:
         for parent in node.get("parents", []):
             parent_node = data["nodes"].get(parent, {})
+            if node_is_completed(parent_node):
+                continue
             parent_due = parent_node.get("due")
             if parent_due is None or not str(parent_due).strip():
                 depends_on_undated_parent = True
@@ -585,6 +649,65 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
     return "\n".join(lines)
 
 
+def _filter_nodes_for_dot(
+    data, node_names, include_completed_endpoint_ancestors=False
+):
+    nodes = data.get("nodes", {})
+    included = []
+    included_set = set()
+
+    def include_node(name):
+        if name not in included_set:
+            included.append(name)
+            included_set.add(name)
+
+    for name in node_names:
+        if name not in nodes:
+            continue
+        if node_is_completed(nodes[name]):
+            continue
+        include_node(name)
+
+    if include_completed_endpoint_ancestors:
+        for name in list(included):
+            completed_endpoint_ancestors = trace_ancestors(
+                data,
+                name,
+                stop_at=lambda _name, node: node_is_endpoint(node),
+                include_stopped=True,
+                skip_over=lambda _name, node: (
+                    node_is_completed(node) and not node_is_endpoint(node)
+                ),
+            )
+            for ancestor in completed_endpoint_ancestors:
+                if ancestor not in nodes:
+                    continue
+                if node_is_completed(nodes[ancestor]) and node_is_endpoint(
+                    nodes[ancestor]
+                ):
+                    include_node(ancestor)
+
+    data_for_dot = {"nodes": {}, "styles": {}}
+    if "styles" in data:
+        data_for_dot["styles"] = data["styles"]
+    for name in included:
+        data_for_dot["nodes"][name] = dict(nodes[name])
+    for name in data_for_dot["nodes"]:
+        if "children" in data_for_dot["nodes"][name]:
+            data_for_dot["nodes"][name]["children"] = [
+                child
+                for child in data_for_dot["nodes"][name]["children"]
+                if child in included_set
+            ]
+        if "parents" in data_for_dot["nodes"][name]:
+            data_for_dot["nodes"][name]["parents"] = [
+                parent
+                for parent in data_for_dot["nodes"][name]["parents"]
+                if parent in included_set
+            ]
+    return data_for_dot
+
+
 def save_graph_yaml(path, data):
     # Ensure stored dates are normalized before writing.
     _normalize_graph_dates(data)
@@ -609,6 +732,7 @@ def write_dot_from_yaml(
     old_data=None,
     validate_due_dates=False,
     filter_task=None,
+    filter_completed=False,
     resolve_due_date_conflict=None,
 ):
     data = load_graph_yaml(str(yaml_path), old_data=old_data)
@@ -649,10 +773,7 @@ def write_dot_from_yaml(
                 parent_due = adjust_due_after_parents(parent)
                 if parent_due is None:
                     continue
-                if (
-                    latest_parent_due is None
-                    or parent_due > latest_parent_due
-                ):
+                if latest_parent_due is None or parent_due > latest_parent_due:
                     latest_parent = parent
                     latest_parent_due = parent_due
             while (
@@ -681,9 +802,8 @@ def write_dot_from_yaml(
                     if latest_parent in node.get("parents", []):
                         node["parents"].remove(latest_parent)
                     parent_node = data["nodes"].get(latest_parent)
-                    if (
-                        parent_node is not None
-                        and name in parent_node.get("children", [])
+                    if parent_node is not None and name in parent_node.get(
+                        "children", []
                     ):
                         parent_node["children"].remove(name)
                     print(
@@ -743,7 +863,9 @@ def write_dot_from_yaml(
                     f"'{filter_task}' matches {matches}."
                 )
             else:
-                keys = sorted(str(name) for name in data.get("nodes", {}).keys())
+                keys = sorted(
+                    str(name) for name in data.get("nodes", {}).keys()
+                )
                 preview = ", ".join(keys)
                 print(
                     "Task filter requested a missing node. "
@@ -756,40 +878,14 @@ def write_dot_from_yaml(
                 )
         # Include the target task alongside its ancestors in the filtered view.
         ancestors = set([filter_task])
-        parents_to_check = list(data["nodes"][filter_task]["parents"])
-        while parents_to_check:
-            parent = parents_to_check.pop()
-            if parent in ancestors:
-                continue
-            ancestors.add(parent)
-            if parent in data["nodes"] and "parents" in data["nodes"][parent]:
-                for grandparent in data["nodes"][parent]["parents"]:
-                    parents_to_check.append(grandparent)
-        incomplete_ancestors = set()
-        for name in ancestors:
-            if name not in data["nodes"]:
-                continue
-            if "complete" in str(data["nodes"][name].get("style", "")):
-                continue
-            incomplete_ancestors.add(name)
-        data_for_dot = {"nodes": {}, "styles": {}}
-        if "styles" in data:
-            data_for_dot["styles"] = data["styles"]
-        for name in incomplete_ancestors:
-            data_for_dot["nodes"][name] = dict(data["nodes"][name])
-        for name in data_for_dot["nodes"]:
-            if "children" in data_for_dot["nodes"][name]:
-                data_for_dot["nodes"][name]["children"] = [
-                    child
-                    for child in data_for_dot["nodes"][name]["children"]
-                    if child in incomplete_ancestors
-                ]
-            if "parents" in data_for_dot["nodes"][name]:
-                data_for_dot["nodes"][name]["parents"] = [
-                    parent
-                    for parent in data_for_dot["nodes"][name]["parents"]
-                    if parent in incomplete_ancestors
-                ]
+        ancestors.update(trace_ancestors(data, filter_task))
+        data_for_dot = _filter_nodes_for_dot(data, ancestors)
+    elif filter_completed:
+        data_for_dot = _filter_nodes_for_dot(
+            data,
+            data.get("nodes", {}).keys(),
+            include_completed_endpoint_ancestors=True,
+        )
     dot_str = yaml_to_dot(
         data_for_dot, wrap_width=wrap_width, order_by_date=order_by_date
     )
