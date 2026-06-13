@@ -1,6 +1,7 @@
 import time
 
 import pytest
+from selenium.common.exceptions import SessionNotCreatedException
 
 from pydifftools import command_line
 
@@ -51,6 +52,60 @@ def test_cpb_rejects_conflicting_comment_flags(capsys):
     err = capsys.readouterr().err
     assert "argument --no-comments" in err
     assert "--comments-to-margin" in err
+
+
+def test_chromedriver_mismatch_has_concise_upgrade_guidance(
+    monkeypatch, capsys
+):
+    def fail_to_start_chrome(**_kwargs):
+        raise SessionNotCreatedException(
+            "session not created: This version of ChromeDriver only "
+            "supports Chrome version 149\n"
+            "Current browser version is 148.0.7778.215 with binary path "
+            "/usr/bin/google-chrome"
+        )
+
+    monkeypatch.setitem(
+        command_line._COMMAND_SPECS["cpb"],
+        "handler",
+        fail_to_start_chrome,
+    )
+    monkeypatch.setattr(
+        command_line.shutil,
+        "which",
+        lambda name: "/usr/bin/apt-get" if name == "apt-get" else None,
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        command_line.main(["cpb", "notes.md"])
+
+    assert excinfo.value.code == 1
+    err = capsys.readouterr().err
+    assert "ChromeDriver 149 and Chrome 148 do not match" in err
+    assert "sudo apt update" in err
+    assert (
+        "sudo apt install --only-upgrade google-chrome-stable" in err
+    )
+    assert "Traceback" not in err
+
+
+def test_other_chrome_session_errors_are_not_hidden(monkeypatch):
+    def fail_to_start_chrome(**_kwargs):
+        raise SessionNotCreatedException(
+            "session not created: user data directory is already in use"
+        )
+
+    monkeypatch.setitem(
+        command_line._COMMAND_SPECS["cpb"],
+        "handler",
+        fail_to_start_chrome,
+    )
+
+    with pytest.raises(
+        SessionNotCreatedException,
+        match="user data directory is already in use",
+    ):
+        command_line.main(["cpb", "notes.md"])
 
 
 def test_gd_help_mentions_install_alias(capsys):
