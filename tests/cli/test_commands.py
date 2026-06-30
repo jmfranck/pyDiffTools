@@ -73,6 +73,27 @@ def write_minimal_bibliography_and_csl(target_dir):
     )
 
 
+def run_pandoc_with_stubbed_tools(
+    tmp_path,
+    monkeypatch,
+    markdown_text="# Title\n\n<comment>hello</comment>\n",
+    **kwargs,
+):
+    markdown_file = tmp_path / "notes.md"
+    html_file = tmp_path / "notes.html"
+    markdown_file.write_text(markdown_text)
+    monkeypatch.setattr(
+        "pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool"
+    )
+
+    def fake_run(_command):
+        html_file.write_text("<html><head></head><body>ok</body></html>")
+
+    monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
+    run_pandoc(str(markdown_file), str(html_file), **kwargs)
+    return html_file
+
+
 def test_wgrph_missing_file(tmp_path):
     env = _make_cli_env(tmp_path)
     cmd = [
@@ -1062,29 +1083,30 @@ def test_default_comment_filter_does_not_prompt(tmp_path, monkeypatch):
         continuous, "_confirm_restore_comment_filter", fail_prompt
     )
 
-    effective_mode = continuous._set_comment_filter_mode(
-        str(project_dir), "default"
-    )
+    run_pandoc_with_stubbed_tools(project_dir, monkeypatch)
 
-    assert effective_mode == "default"
     assert active_filter.read_text() == (
         package_dir / "comment_tags.lua"
     ).read_text()
 
 
-def test_comment_filter_mode_switches_to_margin_and_back(tmp_path):
+def test_comment_filter_mode_switches_to_margin_and_back(
+    tmp_path, monkeypatch
+):
     project_dir = tmp_path / "project"
     project_dir.mkdir()
     active_filter = project_dir / "comment_tags.lua"
     inactive_filter = project_dir / "comment_tags.lua.inactive"
     active_filter.write_text("normal filter\n")
 
-    continuous._set_comment_filter_mode(str(project_dir), "margin")
+    run_pandoc_with_stubbed_tools(
+        project_dir, monkeypatch, comments_to_margin=True
+    )
     active_margin = active_filter.read_text()
     assert continuous.MARGIN_COMMENTS_FILTER_MARKER in active_margin
     assert inactive_filter.read_text() == "normal filter\n"
 
-    continuous._set_comment_filter_mode(str(project_dir), "default")
+    run_pandoc_with_stubbed_tools(project_dir, monkeypatch)
     assert active_filter.read_text() == "normal filter\n"
     assert (
         continuous.MARGIN_COMMENTS_FILTER_MARKER in inactive_filter.read_text()
@@ -1111,11 +1133,8 @@ def test_no_comments_filter_restore_prompt_can_restore_default(
         continuous, "_confirm_restore_comment_filter", restore_default
     )
 
-    effective_mode = continuous._set_comment_filter_mode(
-        str(project_dir), "default"
-    )
+    run_pandoc_with_stubbed_tools(project_dir, monkeypatch)
 
-    assert effective_mode == "default"
     assert prompt_calls == ["none"]
     assert active_filter.read_text() == (
         package_dir / "comment_tags.lua"
@@ -1138,11 +1157,8 @@ def test_no_comments_filter_restore_prompt_can_keep_filter(
         continuous, "_confirm_restore_comment_filter", lambda _mode: False
     )
 
-    effective_mode = continuous._set_comment_filter_mode(
-        str(project_dir), "default"
-    )
+    run_pandoc_with_stubbed_tools(project_dir, monkeypatch)
 
-    assert effective_mode == "none"
     assert active_filter.read_text() == no_comments_text
 
 
@@ -1156,11 +1172,8 @@ def test_custom_filter_restore_prompt_can_keep_filter(tmp_path, monkeypatch):
         continuous, "_confirm_restore_comment_filter", lambda _mode: False
     )
 
-    effective_mode = continuous._set_comment_filter_mode(
-        str(project_dir), "default"
-    )
+    run_pandoc_with_stubbed_tools(project_dir, monkeypatch)
 
-    assert effective_mode == "custom"
     assert active_filter.read_text() == "local custom filter\n"
 
 
@@ -1182,11 +1195,8 @@ def test_custom_filter_restore_prompt_can_restore_default(
         continuous, "_confirm_restore_comment_filter", restore_default
     )
 
-    effective_mode = continuous._set_comment_filter_mode(
-        str(project_dir), "default"
-    )
+    run_pandoc_with_stubbed_tools(project_dir, monkeypatch)
 
-    assert effective_mode == "default"
     assert prompt_calls == ["custom"]
     assert active_filter.read_text() == (
         package_dir / "comment_tags.lua"
@@ -1194,7 +1204,7 @@ def test_custom_filter_restore_prompt_can_restore_default(
 
 
 def test_comment_filter_mode_restores_repo_default_when_inactive_missing(
-    tmp_path,
+    tmp_path, monkeypatch
 ):
     project_dir = tmp_path / "project"
     project_dir.mkdir()
@@ -1206,7 +1216,7 @@ def test_comment_filter_mode_restores_repo_default_when_inactive_missing(
     )
     active_filter.write_text(margin_repo_filter.read_text())
 
-    continuous._set_comment_filter_mode(str(project_dir), "default")
+    run_pandoc_with_stubbed_tools(project_dir, monkeypatch)
 
     assert active_filter.exists()
     assert inactive_filter.exists()

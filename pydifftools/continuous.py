@@ -136,73 +136,6 @@ sys.exit(1)
     raise RuntimeError("pydifft cpb filter dialog failed.")
 
 
-def _set_comment_filter_mode(source_dir, mode):
-    if mode not in {"default", "margin", "none"}:
-        raise ValueError(f"Unknown comment filter mode: {mode}")
-    package_dir = os.path.dirname(os.path.abspath(__file__))
-    active_filter = os.path.join(source_dir, "comment_tags.lua")
-    inactive_filter = os.path.join(source_dir, "comment_tags.lua.inactive")
-    packaged_filters = {
-        "default": os.path.join(package_dir, "comment_tags.lua"),
-        "margin": os.path.join(package_dir, "comment_tags_margin.lua"),
-        "none": os.path.join(package_dir, "comment_tags_no_comments.lua"),
-    }
-
-    active_mode = _comment_filter_mode(active_filter, packaged_filters)
-    inactive_mode = _comment_filter_mode(inactive_filter, packaged_filters)
-
-    if mode == "default":
-        if active_mode == "default":
-            return "default"
-        if active_mode == "none":
-            if _confirm_restore_comment_filter("none"):
-                shutil.copy2(packaged_filters["default"], active_filter)
-                return "default"
-            return "none"
-        if active_mode == "custom":
-            if _confirm_restore_comment_filter("custom"):
-                shutil.copy2(packaged_filters["default"], active_filter)
-                return "default"
-            return "custom"
-        if active_mode == "margin":
-            if inactive_mode in {"default", "custom"}:
-                temp_filter = active_filter + ".swap_tmp"
-                os.replace(active_filter, temp_filter)
-                os.replace(inactive_filter, active_filter)
-                os.replace(temp_filter, inactive_filter)
-                return inactive_mode
-            else:
-                os.replace(active_filter, inactive_filter)
-                shutil.copy2(packaged_filters["default"], active_filter)
-                return "default"
-        if active_mode == "missing":
-            if inactive_mode in {"default", "custom"}:
-                os.replace(inactive_filter, active_filter)
-                return inactive_mode
-            else:
-                shutil.copy2(packaged_filters["default"], active_filter)
-                return "default"
-        shutil.copy2(packaged_filters["default"], active_filter)
-        return "default"
-
-    if active_mode == mode:
-        return mode
-    if active_mode in {"default", "custom"}:
-        os.replace(active_filter, inactive_filter)
-        shutil.copy2(packaged_filters[mode], active_filter)
-        return mode
-    if active_mode in {"margin", "none"}:
-        shutil.copy2(packaged_filters[mode], active_filter)
-        return mode
-    if active_mode == "missing" and inactive_mode not in {
-        "default",
-        "custom",
-    }:
-        shutil.copy2(packaged_filters["default"], inactive_filter)
-    shutil.copy2(packaged_filters[mode], active_filter)
-    return mode
-
-
 def run_pandoc(
     filename,
     html_file,
@@ -251,12 +184,87 @@ def run_pandoc(
     ):
         # Keep the active comment filter in the markdown directory so pandoc
         # picks it up alongside other user-supplied project filters.
-        effective_filter_mode = _set_comment_filter_mode(
-            source_dir, comment_filter_mode
+        # {{{ select the active comment_tags.lua filter
+        package_dir = os.path.dirname(os.path.abspath(__file__))
+        active_filter = os.path.join(source_dir, "comment_tags.lua")
+        inactive_filter = os.path.join(
+            source_dir, "comment_tags.lua.inactive"
         )
+        packaged_filters = {
+            "default": os.path.join(package_dir, "comment_tags.lua"),
+            "margin": os.path.join(package_dir, "comment_tags_margin.lua"),
+            "none": os.path.join(package_dir, "comment_tags_no_comments.lua"),
+        }
+        active_mode = _comment_filter_mode(active_filter, packaged_filters)
+        inactive_mode = _comment_filter_mode(inactive_filter, packaged_filters)
+
+        if comment_filter_mode == "default":
+            if active_mode == "default":
+                effective_filter_mode = "default"
+            elif active_mode == "none":
+                if _confirm_restore_comment_filter("none"):
+                    shutil.copy2(
+                        packaged_filters["default"], active_filter
+                    )
+                    effective_filter_mode = "default"
+                else:
+                    effective_filter_mode = "none"
+            elif active_mode == "custom":
+                if _confirm_restore_comment_filter("custom"):
+                    shutil.copy2(
+                        packaged_filters["default"], active_filter
+                    )
+                    effective_filter_mode = "default"
+                else:
+                    effective_filter_mode = "custom"
+            elif active_mode == "margin":
+                if inactive_mode in {"default", "custom"}:
+                    temp_filter = active_filter + ".swap_tmp"
+                    os.replace(active_filter, temp_filter)
+                    os.replace(inactive_filter, active_filter)
+                    os.replace(temp_filter, inactive_filter)
+                    effective_filter_mode = inactive_mode
+                else:
+                    os.replace(active_filter, inactive_filter)
+                    shutil.copy2(
+                        packaged_filters["default"], active_filter
+                    )
+                    effective_filter_mode = "default"
+            elif active_mode == "missing":
+                if inactive_mode in {"default", "custom"}:
+                    os.replace(inactive_filter, active_filter)
+                    effective_filter_mode = inactive_mode
+                else:
+                    shutil.copy2(
+                        packaged_filters["default"], active_filter
+                    )
+                    effective_filter_mode = "default"
+            else:
+                shutil.copy2(packaged_filters["default"], active_filter)
+                effective_filter_mode = "default"
+        else:
+            effective_filter_mode = comment_filter_mode
+            if active_mode == comment_filter_mode:
+                pass
+            elif active_mode in {"default", "custom"}:
+                os.replace(active_filter, inactive_filter)
+                shutil.copy2(
+                    packaged_filters[comment_filter_mode], active_filter
+                )
+            else:
+                if active_mode == "missing" and inactive_mode not in {
+                    "default",
+                    "custom",
+                }:
+                    shutil.copy2(
+                        packaged_filters["default"], inactive_filter
+                    )
+                shutil.copy2(
+                    packaged_filters[comment_filter_mode], active_filter
+                )
+        # }}}
         # Only copy the comment UI assets when comments should be rendered.
         if effective_filter_mode != "none":
-            package_dir = os.path.dirname(os.path.abspath(__file__))
             for asset_name in ["comments.css", "comment_toggle.js"]:
                 target_path = os.path.join(source_dir, asset_name)
                 if not os.path.exists(target_path):
@@ -568,6 +576,4 @@ def cpb(filename, comments_to_margin=False, no_comments=False):
 
 
 if __name__ == "__main__":
-    filename = sys.argv[1]
-    cpb(filename)
-    # Open the HTML file in the default web browser
+    raise SystemExit("Use `pydifft cpb <filename.md>` instead.")
