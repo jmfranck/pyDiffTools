@@ -229,6 +229,83 @@ def test_postprocess_adds_shared_pygments_stylesheet_link(fb, tmp_path):
     assert ".highlight" in css
 
 
+def test_notebook_source_collapses_by_default(fb, tmp_path):
+    page = tmp_path / "page.html"
+    page.write_text(
+        "<html><body>"
+        '<div data-script="doc.qmd" data-index="1"></div>'
+        "</body></html>"
+    )
+
+    fb.substitute_code_placeholders(
+        page,
+        {("doc.qmd", 1): "<pre>RESULT</pre>"},
+        {("doc.qmd", 1): "print('hello')"},
+    )
+
+    html = page.read_text()
+    assert '<details class="pydifft-source"><summary>SOURCE</summary>' in html
+    assert '<div class="highlight"><pre>' in html
+    assert "RESULT" in html
+
+
+def test_notebook_source_display_modes(fb, tmp_path):
+    always_page = tmp_path / "always.html"
+    always_page.write_text(
+        "<html><body>"
+        '<div data-script="doc.qmd" data-index="1"></div>'
+        "</body></html>"
+    )
+    fb.substitute_code_placeholders(
+        always_page,
+        {("doc.qmd", 1): "<pre>RESULT</pre>"},
+        {("doc.qmd", 1): "print('hello')"},
+        code_display=fb.CODE_DISPLAY_ALWAYS,
+    )
+    always_html = always_page.read_text()
+    assert "pydifft-source" not in always_html
+    assert '<div class="highlight"><pre>' in always_html
+    assert "RESULT" in always_html
+
+    no_code_page = tmp_path / "no_code.html"
+    no_code_page.write_text(
+        "<html><body>"
+        '<div data-script="doc.qmd" data-index="1"></div>'
+        "</body></html>"
+    )
+    fb.substitute_code_placeholders(
+        no_code_page,
+        {("doc.qmd", 1): "<pre>RESULT</pre>"},
+        {("doc.qmd", 1): "print('hello')"},
+        code_display=fb.CODE_DISPLAY_NONE,
+    )
+    no_code_html = no_code_page.read_text()
+    assert "pydifft-source" not in no_code_html
+    assert '<div class="highlight"><pre>' not in no_code_html
+    assert "print" not in no_code_html
+    assert "RESULT" in no_code_html
+
+
+def test_no_code_empty_output_is_not_pending(fb, tmp_path):
+    page = tmp_path / "empty_result.html"
+    page.write_text(
+        "<html><body>"
+        '<div data-script="doc.qmd" data-index="1"></div>'
+        "</body></html>"
+    )
+
+    fb.substitute_code_placeholders(
+        page,
+        {("doc.qmd", 1): ""},
+        {("doc.qmd", 1): "print('quiet')"},
+        code_display=fb.CODE_DISPLAY_NONE,
+    )
+
+    html = page.read_text()
+    assert 'data-output-state="complete"' in html
+    assert not fb.notebook_marker_is_pending("doc.qmd", html)
+
+
 def test_dev_server_handler_disables_conditional_cache(fb, monkeypatch):
     handler = fb.NoCacheHTTPRequestHandler.__new__(
         fb.NoCacheHTTPRequestHandler

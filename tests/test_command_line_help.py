@@ -54,6 +54,15 @@ def test_cpb_rejects_conflicting_comment_flags(capsys):
     assert "--comments-to-margin" in err
 
 
+def test_qmdb_rejects_conflicting_code_flags(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        command_line.main(["qmdb", "--always-code", "--no-code"])
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "argument --no-code" in err
+    assert "--always-code" in err
+
+
 def test_chromedriver_mismatch_has_concise_upgrade_guidance(
     monkeypatch, capsys
 ):

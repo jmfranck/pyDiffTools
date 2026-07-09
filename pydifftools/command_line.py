@@ -943,6 +943,14 @@ def main(argv=None):
             "argument --no-comments: not allowed with argument "
             "--comments-to-margin"
         )
+    if (
+        namespace.command == "qmdb"
+        and namespace.always_code
+        and namespace.no_code
+    ):
+        parser._pydifft_subparsers["qmdb"].error(
+            "argument --no-code: not allowed with argument --always-code"
+        )
     handler = namespace._handler
     handler_kwargs = dict(vars(namespace))
     handler_kwargs.pop("_handler", None)

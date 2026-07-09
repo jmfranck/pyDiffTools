@@ -37,6 +37,14 @@ from ansi2html import Ansi2HTMLConverter
 
 _ansi_conv = Ansi2HTMLConverter(inline=True)
 PYGMENTS_CSS = Path("assets") / "pygments.css"
+CODE_DISPLAY_COLLAPSED = "collapsed"
+CODE_DISPLAY_ALWAYS = "always"
+CODE_DISPLAY_NONE = "none"
+CODE_DISPLAY_MODES = {
+    CODE_DISPLAY_COLLAPSED,
+    CODE_DISPLAY_ALWAYS,
+    CODE_DISPLAY_NONE,
+}
 
 
 def _ansi_to_html(text: str, *, default_style: str | None = None) -> str:
@@ -101,10 +109,17 @@ heading_pattern = re.compile(
 class RenderNotebook:
     """Track trunks, branches, and leaves along with build state."""
 
-    def __init__(self, render_files, tree, include_map):
+    def __init__(
+        self,
+        render_files,
+        tree,
+        include_map,
+        code_display=CODE_DISPLAY_COLLAPSED,
+    ):
         self.render_files = render_files
         self.tree = tree
         self.include_map = include_map
+        self.code_display = code_display
         self.nodes = {}
         self.notebook_outputs = None
         self.notebook_code_map = None
@@ -375,6 +390,7 @@ class RenderNotebook:
                     html_file,
                     self.notebook_outputs,
                     self.notebook_code_map,
+                    code_display=self.code_display,
                 )
         # Rebuild display pages first, then inject navigation, and only then
         # refresh the browser so users do not see a nav-less intermediate page.
@@ -1001,9 +1017,20 @@ def qmdinit(path, force=False):
     help={
         "no_browser": "Do not launch a browser when using --watch",
         "webtex": "Use Pandoc's --webtex option instead of MathJax",
+        "always_code": (
+            "Show notebook source code inline, matching the old qmdb behavior"
+        ),
+        "no_code": (
+            "Hide notebook source code entirely and show only notebook output"
+        ),
     },
 )
-def qmdb(no_browser=False, webtex=False):
+def qmdb(
+    no_browser=False,
+    webtex=False,
+    always_code=False,
+    no_code=False,
+):
     """Build and watch the current directory using the fast notebook
     builder."""
 
@@ -1012,7 +1039,29 @@ def qmdb(no_browser=False, webtex=False):
         # Minimal fallback when optional dependencies are unavailable.
         _write_placeholder_outputs()
         return
-    watch_and_serve(no_browser=no_browser, webtex=webtex)
+    code_display = resolve_code_display(
+        always_code=always_code,
+        no_code=no_code,
+    )
+    watch_and_serve(
+        no_browser=no_browser,
+        webtex=webtex,
+        code_display=code_display,
+    )
+
+
+def resolve_code_display(
+    always_code: bool = False,
+    no_code: bool = False,
+) -> str:
+    """Return the notebook source-code display mode for qmdb."""
+    if always_code and no_code:
+        raise ValueError("--always-code and --no-code cannot be used together")
+    if always_code:
+        return CODE_DISPLAY_ALWAYS
+    if no_code:
+        return CODE_DISPLAY_NONE
+    return CODE_DISPLAY_COLLAPSED
 
 
 def ensure_pandoc_available():
@@ -1280,11 +1329,14 @@ def notebook_marker_is_pending(src: str, html_text: str) -> bool:
             for node in root.xpath("//div[@data-script][@data-index]"):
                 if node.get("data-script") != src:
                     continue
+                if node.get("data-output-state") == "complete":
+                    continue
                 if len(node) == 0 and not "".join(node.itertext()).strip():
                     return True
             return False
     pattern = re.compile(
         r"<div\b"
+        r"(?![^>]*\bdata-output-state=['\"]complete['\"])"
         rf"(?=[^>]*\bdata-script=['\"]{re.escape(src)}['\"])"
         r"(?=[^>]*\bdata-index=['\"]?\d+['\"]?)"
         r"[^>]*>\s*</div>",
@@ -1502,10 +1554,13 @@ def substitute_code_placeholders(
     html_path: Path,
     outputs: dict[tuple[str, int], str],
     codes: dict[tuple[str, int], str],
+    code_display: str = CODE_DISPLAY_COLLAPSED,
 ) -> None:
     """Replace script placeholders in ``html_path`` using executed outputs and
     embed syntax highlighted source code.
     """
+    if code_display not in CODE_DISPLAY_MODES:
+        raise ValueError(f"unknown code display mode: {code_display}")
     parser = lxml_html.HTMLParser(encoding="utf-8")
     tree = lxml_html.parse(str(html_path), parser)
     root = tree.getroot()
@@ -1533,8 +1588,7 @@ def substitute_code_placeholders(
             code = codes[(src, idx)]
         else:
             code = ""
-        code_html = highlight(code, PythonLexer(), formatter)
-        frags = lxml_html.fragments_fromstring(code_html)
+        frags = highlighted_code_fragments(code, formatter, code_display)
         if not missing_output and html:
             frags += lxml_html.fragments_fromstring(html)
         elif missing_output:
@@ -1550,6 +1604,10 @@ def substitute_code_placeholders(
             frags.append(waiting)
         # Keep the data-script marker node in place so later async passes can
         # replace the temporary "Running notebook ..." block with final output.
+        if missing_output:
+            node.attrib.pop("data-output-state", None)
+        else:
+            node.set("data-output-state", "complete")
         node.text = None
         for child in list(node):
             node.remove(child)
@@ -1560,7 +1618,38 @@ def substitute_code_placeholders(
         tree.write(str(html_path), encoding="utf-8", method="html")
 
 
-def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
+def highlighted_code_fragments(
+    code: str,
+    formatter: HtmlFormatter,
+    code_display: str,
+) -> list:
+    """Return source-code HTML fragments for the requested display mode."""
+    if code_display == CODE_DISPLAY_NONE:
+        return []
+    code_html = highlight(code, PythonLexer(), formatter)
+    frags = lxml_html.fragments_fromstring(code_html)
+    if code_display == CODE_DISPLAY_ALWAYS:
+        return frags
+
+    details = lxml_html.fragment_fromstring(
+        '<details class="pydifft-source">'
+        "<summary>SOURCE</summary>"
+        "</details>",
+        create_parent=False,
+    )
+    for frag in frags:
+        details.append(frag)
+    return [details]
+
+
+def build_all(
+    webtex: bool = False,
+    changed_paths=None,
+    refresh_callback=None,
+    code_display: str = CODE_DISPLAY_COLLAPSED,
+):
+    if code_display not in CODE_DISPLAY_MODES:
+        raise ValueError(f"unknown code display mode: {code_display}")
     ensure_pandoc_available()
     ensure_pandoc_crossref()
     ensure_template_assets(PROJECT_ROOT)
@@ -1593,7 +1682,12 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     render_files = load_rendered_files()
     bibliography, csl = load_bibliography_csl()
     tree, roots, include_map = analyze_includes(render_files)
-    graph = RenderNotebook(render_files, tree, include_map)
+    graph = RenderNotebook(
+        render_files,
+        tree,
+        include_map,
+        code_display=code_display,
+    )
     graph.mark_outdated(checksums)
     graph.refresh_status_tags(checksums)
     anchors = collect_anchors(render_files, include_map)
@@ -1768,7 +1862,12 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
         for f in build_files:
             html_file = (BUILD_DIR / f).with_suffix(".html")
             if html_file.exists():
-                substitute_code_placeholders(html_file, outputs, code_map)
+                substitute_code_placeholders(
+                    html_file,
+                    outputs,
+                    code_map,
+                    code_display=code_display,
+                )
 
     # phase 4: assemble the served pages from staged fragments
     graph.update_display_targets(display_targets)
@@ -1877,12 +1976,16 @@ def _serve_forever(httpd: ThreadingHTTPServer):
     httpd.serve_forever()
 
 
-def watch_and_serve(no_browser: bool = False, webtex: bool = False):
+def watch_and_serve(
+    no_browser: bool = False,
+    webtex: bool = False,
+    code_display: str = CODE_DISPLAY_COLLAPSED,
+):
     if no_browser:
         # In headless scenarios we only need the build artifacts and can exit
         # immediately instead of launching a server loop that waits for a
         # browser connection.
-        return build_all(webtex=webtex)
+        return build_all(webtex=webtex, code_display=code_display)
     port = 8000
     render_files = load_rendered_files()
 
@@ -1911,7 +2014,10 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
     # Launch the initial build asynchronously so the browser opens immediately.
     initial_executor = ThreadPoolExecutor(max_workers=1)
     initial_future = initial_executor.submit(
-        build_all, webtex=webtex, refresh_callback=refresher.refresh
+        build_all,
+        webtex=webtex,
+        refresh_callback=refresher.refresh,
+        code_display=code_display,
     )
     if Observer is None:
         raise ImportError(
@@ -1943,6 +2049,7 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
             webtex=webtex,
             changed_paths=[path],
             refresh_callback=refresher.refresh,
+            code_display=code_display,
         )
 
     handler = ChangeHandler(rebuild, refresher)
@@ -2010,5 +2117,23 @@ if __name__ == "__main__":
         action="store_true",
         help="Use Pandoc's --webtex option instead of MathJax",
     )
+    code_group = parser.add_mutually_exclusive_group()
+    code_group.add_argument(
+        "--always-code",
+        action="store_true",
+        help="Show notebook source code inline",
+    )
+    code_group.add_argument(
+        "--no-code",
+        action="store_true",
+        help="Hide notebook source code and show only notebook output",
+    )
     args = parser.parse_args()
-    watch_and_serve(no_browser=args.no_browser, webtex=args.webtex)
+    watch_and_serve(
+        no_browser=args.no_browser,
+        webtex=args.webtex,
+        code_display=resolve_code_display(
+            always_code=args.always_code,
+            no_code=args.no_code,
+        ),
+    )
