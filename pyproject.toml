@@ -18,6 +18,7 @@ dependencies = [
     "python-dateutil",
     "jinja2",
     "ipykernel",
+    "matplotlib",
     "nbformat",
     "nbconvert",
     "pygments",
