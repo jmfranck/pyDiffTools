@@ -17,6 +17,7 @@ dependencies = [
     "pydot",
     "python-dateutil",
     "jinja2",
+    "ipykernel",
     "nbformat",
     "nbconvert",
     "pygments",

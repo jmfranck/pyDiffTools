@@ -78,6 +78,12 @@ jobs:
           source "${HOME}/conda/etc/profile.d/conda.sh"
           conda activate base
           pip install -e . --no-build-isolation
+      - name: Register Jupyter kernel
+        run: |
+          source "${HOME}/conda/etc/profile.d/conda.sh"
+          conda activate base
+          python -m ipykernel install --sys-prefix --name python3 --display-name "Python 3"
+          python -m jupyter kernelspec list
       - name: Run pytest
         run: |
           source "${HOME}/conda/etc/profile.d/conda.sh"
