@@ -1,3 +1,5 @@
+import base64
+import os
 import shutil
 import threading
 import time
@@ -172,6 +174,9 @@ def test_render_file_paths_are_rooted_at_build_dir(fb, monkeypatch):
     assert called["cwd"] == fb.BUILD_DIR.resolve()
     assert args[1] == "project1/subproject1/tasks.qmd"
     assert args[args.index("--lua-filter") + 1] == "obs.lua"
+    resource_paths = args[args.index("--resource-path") + 1].split(os.pathsep)
+    assert "project1/subproject1" in resource_paths
+    assert "." in resource_paths
     assert args[args.index("--template") + 1] == "../_template/body-only.html"
     assert args[args.index("--bibliography") + 1] == "../references.bib"
     assert (
@@ -304,6 +309,166 @@ def test_no_code_empty_output_is_not_pending(fb, tmp_path):
     html = page.read_text()
     assert 'data-output-state="complete"' in html
     assert not fb.notebook_marker_is_pending("doc.qmd", html)
+
+
+def test_outputs_to_html_prefers_markdown_over_plain(fb):
+    html = fb.outputs_to_html(
+        [
+            {
+                "output_type": "display_data",
+                "data": {
+                    "text/plain": "<IPython.core.display.Markdown object>",
+                    "text/markdown": "## Generated\n\n$x$",
+                },
+            }
+        ],
+        source="doc.qmd",
+    )
+
+    assert "<IPython.core.display.Markdown object>" not in html
+    assert "<h2" in html
+    assert "Generated" in html
+    assert "math inline" in html
+
+
+def test_nb_capture_auto_import_after_reset_orders_outputs(fb):
+    code = (
+        "%reset -f\n"
+        "import matplotlib\n"
+        "matplotlib.use('Agg')\n"
+        "import matplotlib.pyplot as plt\n"
+        "fig1, ax1 = plt.subplots()\n"
+        "ax1.plot([0, 1], [0, 1])\n"
+        "fig2, ax2 = plt.subplots()\n"
+        "ax2.plot([0, 1], [1, 0])\n"
+        "with nb_capture() as out:\n"
+        "    out.md('## Intro')\n"
+        "    out.fig(fig1)\n"
+        "    out.md('## Between')\n"
+        "    out.fig(fig2)\n"
+    )
+
+    outputs, code_map = fb.execute_code_blocks(
+        {"capture_test.qmd": [(code, "capture-md5", False)]}
+    )
+
+    html = outputs[("capture_test.qmd", 1)]
+    first_image = html.find("data:image/png;base64")
+    second_image = html.find("data:image/png;base64", first_image + 1)
+    assert "Intro" in html
+    assert "Between" in html
+    assert html.count("data:image/png;base64") == 2
+    assert html.find("Intro") < first_image
+    assert first_image < html.find("Between")
+    assert html.find("Between") < second_image
+    assert fb.NB_CAPTURE_IMPORT not in code_map[("capture_test.qmd", 1)]
+
+
+def test_generated_markdown_output_renders_in_build(fb):
+    qmd = Path("generated_markdown.qmd")
+    qmd.write_text(
+        "# Generated markdown test\n\n"
+        "```{python}\n"
+        "from IPython.display import display, Markdown\n"
+        "display(Markdown('## Generated\\n\\n$x$'))\n"
+        "```\n"
+    )
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    if "project" not in config:
+        config["project"] = {}
+    config["project"]["render"] = ["generated_markdown.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    fb.build_all()
+
+    html_path = Path("_display/generated_markdown.html")
+    deadline = time.time() + 8
+    html = ""
+    while time.time() < deadline:
+        if html_path.exists():
+            html = html_path.read_text()
+            if "Running notebook" not in html and "Generated" in html:
+                break
+        time.sleep(0.2)
+
+    assert "<IPython.core.display.Markdown object>" not in html
+    assert '<h2 id="generated">Generated</h2>' in html
+    assert "math inline" in html
+
+
+def test_markdown_image_next_to_source_is_embedded(fb):
+    nested = Path("image_case")
+    nested.mkdir()
+    png_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0l"
+        "EQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    )
+    (nested / "filename.png").write_bytes(png_bytes)
+    (nested / "page.qmd").write_text("# Image\n\n![](filename.png)\n")
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    if "project" not in config:
+        config["project"] = {}
+    config["project"]["render"] = ["image_case/page.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    fb.build_all()
+
+    html = Path("_display/image_case/page.html").read_text()
+    assert "data:image/png;base64" in html
+    assert 'src="filename.png"' not in html
+    assert "src='filename.png'" not in html
+
+
+def test_markdown_image_can_embed_from_build_or_display(fb):
+    nested = Path("image_locations")
+    nested.mkdir()
+    png_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0l"
+        "EQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    )
+    build_image = Path("_build/image_locations/from_build.png")
+    display_image = Path("_display/image_locations/from_display.png")
+    build_image.parent.mkdir(parents=True)
+    display_image.parent.mkdir(parents=True)
+    build_image.write_bytes(png_bytes)
+    display_image.write_bytes(png_bytes)
+    (nested / "page.qmd").write_text(
+        "# Image locations\n\n"
+        "![](from_build.png)\n\n"
+        "![](from_display.png)\n"
+    )
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    if "project" not in config:
+        config["project"] = {}
+    config["project"]["render"] = ["image_locations/page.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    fb.build_all()
+
+    html = Path("_display/image_locations/page.html").read_text()
+    assert html.count("data:image/png;base64") == 2
+    assert "from_build.png" not in html
+    assert "from_display.png" not in html
+
+
+def test_deleted_staged_qmd_forces_rebuild(fb):
+    qmd = Path("force_stage.qmd")
+    qmd.write_text("# Force stage\n\nContent\n")
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    if "project" not in config:
+        config["project"] = {}
+    config["project"]["render"] = ["force_stage.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    fb.build_all()
+
+    staged_qmd = Path("_build/force_stage.qmd")
+    assert staged_qmd.exists()
+    staged_qmd.unlink()
+
+    fb.build_all()
+
+    assert staged_qmd.exists()
 
 
 def test_dev_server_handler_disables_conditional_cache(fb, monkeypatch):
@@ -705,31 +870,20 @@ def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(
     while time.time() < deadline:
         build_html = Path("_build/async_pending.html").read_text()
         display_html = Path("_display/async_pending.html").read_text()
-        build_has_output = (
-            "PENDING_REBUILD_OUTPUT" in build_html
-            or "NOTEBOOK_OUTPUT_MARKER" in build_html
-        )
-        display_has_output = (
-            "PENDING_REBUILD_OUTPUT" in display_html
-            or "NOTEBOOK_OUTPUT_MARKER" in display_html
-        )
+        build_has_output = "PENDING_REBUILD_OUTPUT" in build_html
+        display_has_output = "PENDING_REBUILD_OUTPUT" in display_html
         if (
-            build_has_output
-            and display_has_output
-            and "Running notebook" not in build_html
-            and "Running notebook" not in display_html
-        ):
-            break
+                build_has_output
+                and display_has_output
+                and "Running notebook" not in build_html
+                and "Running notebook" not in display_html
+                and "on-this-page" in display_html
+            ):
+                break
         time.sleep(0.2)
 
-    assert (
-        "PENDING_REBUILD_OUTPUT" in build_html
-        or "NOTEBOOK_OUTPUT_MARKER" in build_html
-    )
-    assert (
-        "PENDING_REBUILD_OUTPUT" in display_html
-        or "NOTEBOOK_OUTPUT_MARKER" in display_html
-    )
+    assert "PENDING_REBUILD_OUTPUT" in build_html
+    assert "PENDING_REBUILD_OUTPUT" in display_html
     assert "Running notebook" not in build_html
     assert "Running notebook" not in display_html
     assert "on-this-page" in display_html

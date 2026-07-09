@@ -3,6 +3,7 @@
 
 import argparse
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -45,6 +46,8 @@ CODE_DISPLAY_MODES = {
     CODE_DISPLAY_ALWAYS,
     CODE_DISPLAY_NONE,
 }
+NB_CAPTURE_IMPORT = "from pydifftools.notebook.display import nb_capture"
+NB_CAPTURE_INJECTION_VERSION = "nb_capture_auto_import_v1"
 
 
 def _ansi_to_html(text: str, *, default_style: str | None = None) -> str:
@@ -53,6 +56,35 @@ def _ansi_to_html(text: str, *, default_style: str | None = None) -> str:
     if default_style and "span class" not in html:
         html = f'<span style="{default_style}">{html}</span>'
     return f"<pre>{html}</pre>"
+
+
+def _mime_text(value) -> str:
+    """Normalize a Jupyter MIME payload to text."""
+    if isinstance(value, list):
+        return "".join(str(part) for part in value)
+    return str(value)
+
+
+def _inject_nb_capture_import(code: str) -> str:
+    """Add the nb_capture import to executable code without changing source."""
+    lines = code.splitlines(keepends=True)
+    if any(line.strip() == NB_CAPTURE_IMPORT for line in lines):
+        return code
+    if not lines:
+        return NB_CAPTURE_IMPORT + "\n"
+
+    insert_at = 0
+    for idx, line in enumerate(lines):
+        if line.strip():
+            insert_at = idx
+            break
+    else:
+        return code + NB_CAPTURE_IMPORT + "\n"
+
+    if lines[insert_at].lstrip().startswith("%reset -f"):
+        insert_at += 1
+    lines.insert(insert_at, NB_CAPTURE_IMPORT + "\n")
+    return "".join(lines)
 
 
 class LoggingExecutePreprocessor(ExecutePreprocessor):
@@ -196,10 +228,12 @@ class RenderNotebook:
         for path in self.nodes:
             tags = []
             src = PROJECT_ROOT / path
+            staged_file = BUILD_DIR / path
             html_file = (BUILD_DIR / path).with_suffix(".html")
+            staged_exists = staged_file.exists()
             html_exists = html_file.exists()
 
-            if not src.exists() or not html_exists:
+            if not src.exists() or not staged_exists or not html_exists:
                 tags.append("missing html")
             else:
                 new_hash = self._hash_file(src)
@@ -514,7 +548,110 @@ def load_bibliography_csl():
     return bib, csl
 
 
-def outputs_to_html(outputs: list[dict]) -> str:
+def _add_unique_path(paths: list[Path], path: Path) -> None:
+    resolved = Path(path).resolve()
+    if resolved not in paths:
+        paths.append(resolved)
+
+
+def pandoc_resource_paths(source=None) -> list[Path]:
+    """Return resource search paths for a staged source."""
+    paths: list[Path] = []
+    build_dir = Path(BUILD_DIR).resolve()
+    display_dir = Path(DISPLAY_DIR).resolve()
+    if source is not None:
+        staged_src = Path(source)
+        if not staged_src.is_absolute():
+            staged_src = build_dir / staged_src
+        staged_src = staged_src.resolve()
+        _add_unique_path(paths, staged_src.parent)
+        try:
+            rel = staged_src.relative_to(build_dir)
+        except ValueError:
+            rel = Path(source)
+        project_src = (PROJECT_ROOT / rel).resolve()
+        display_src = (display_dir / rel).resolve()
+        _add_unique_path(paths, display_src.parent)
+        _add_unique_path(paths, project_src.parent)
+    _add_unique_path(paths, build_dir)
+    _add_unique_path(paths, display_dir)
+    _add_unique_path(paths, PROJECT_ROOT)
+    return paths
+
+
+def pandoc_resource_path_arg(source=None) -> str:
+    build_dir = Path(BUILD_DIR).resolve()
+    rel_paths = []
+    for path in pandoc_resource_paths(source):
+        rel_paths.append(os.path.relpath(path, build_dir))
+    return os.pathsep.join(rel_paths)
+
+
+def render_markdown_fragment(
+    text: str,
+    source=None,
+    bibliography=None,
+    csl=None,
+    webtex: bool = False,
+) -> str:
+    """Render a Markdown fragment to HTML using Pandoc."""
+    build_dir = Path(BUILD_DIR).resolve()
+    build_dir.mkdir(parents=True, exist_ok=True)
+    args = [
+        "pandoc",
+        "--from",
+        "markdown+raw_html",
+        "--to",
+        "html",
+        "--embed-resources",
+        "--resource-path",
+        pandoc_resource_path_arg(source),
+    ]
+    obs_filter = build_dir / "obs.lua"
+    if obs_filter.exists():
+        args += ["--lua-filter", os.path.relpath(obs_filter, build_dir)]
+    if shutil.which("pandoc-crossref"):
+        args += ["--filter", "pandoc-crossref"]
+    args += ["--citeproc"]
+    if webtex:
+        args += ["--webtex"]
+    if bibliography:
+        bib_path = Path(os.path.expanduser(bibliography))
+        if not bib_path.is_absolute():
+            bib_path = PROJECT_ROOT / bib_path
+        if not bib_path.exists():
+            raise FileNotFoundError(
+                f"Bibliography file {bibliography} not found"
+            )
+        args += ["--bibliography", os.path.relpath(bib_path, build_dir)]
+    if csl:
+        csl_path = Path(os.path.expanduser(csl))
+        if not csl_path.is_absolute():
+            csl_path = PROJECT_ROOT / csl_path
+        if not csl_path.exists():
+            raise FileNotFoundError(f"CSL file {csl} not found")
+        args += ["--csl", os.path.relpath(csl_path, build_dir)]
+    try:
+        proc = subprocess.run(
+            args,
+            input=text,
+            check=True,
+            cwd=build_dir,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"{e.stderr}\nwhen trying to run:{' '.join(args)}")
+    return proc.stdout
+
+
+def outputs_to_html(
+    outputs: list[dict],
+    source=None,
+    bibliography=None,
+    csl=None,
+    webtex: bool = False,
+) -> str:
     """Convert Jupyter cell outputs to HTML with embedded images."""
     parts = []
     for out in outputs:
@@ -525,7 +662,16 @@ def outputs_to_html(outputs: list[dict]) -> str:
         elif typ in {"display_data", "execute_result"}:
             data = out.get("data", {})
             if "text/html" in data:
-                parts.append(data["text/html"])
+                parts.append(_mime_text(data["text/html"]))
+            elif "text/markdown" in data:
+                html = render_markdown_fragment(
+                    _mime_text(data["text/markdown"]),
+                    source=source,
+                    bibliography=bibliography,
+                    csl=csl,
+                    webtex=webtex,
+                )
+                parts.append(html)
             elif "image/png" in data:
                 src = f"data:image/png;base64,{data['image/png']}"
                 parts.append(f"<img src='{src}'/>")
@@ -533,7 +679,7 @@ def outputs_to_html(outputs: list[dict]) -> str:
                 src = f"data:image/jpeg;base64,{data['image/jpeg']}"
                 parts.append(f"<img src='{src}'/>")
             elif "text/plain" in data:
-                parts.append(_ansi_to_html(data["text/plain"]))
+                parts.append(_ansi_to_html(_mime_text(data["text/plain"])))
         elif typ == "error":
             tb = "\n".join(out.get("traceback", []))
             if not tb:
@@ -545,7 +691,12 @@ def outputs_to_html(outputs: list[dict]) -> str:
 NOTEBOOK_CACHE_DIR = Path("_nbcache")
 
 
-def execute_code_blocks(blocks):
+def execute_code_blocks(
+    blocks,
+    bibliography=None,
+    csl=None,
+    webtex: bool = False,
+):
     """Run code blocks as Jupyter notebooks with caching."""
     cache_dir = NOTEBOOK_CACHE_DIR
     if not cache_dir.is_absolute():
@@ -602,7 +753,15 @@ def execute_code_blocks(blocks):
     def run_job(job):
         src, total_groups, group_idx, group_data, codes = job
         group_indices, group_codes, group_md5s = group_data
-        hash_input = (src + ":" + "".join(group_md5s)).encode()
+        hash_input = (
+            src
+            + ":"
+            + NB_CAPTURE_INJECTION_VERSION
+            + ":"
+            + NB_CAPTURE_IMPORT
+            + ":"
+            + "".join(group_md5s)
+        ).encode()
         nb_hash = hashlib.md5(hash_input).hexdigest()
         nb_path = cache_dir / f"{nb_hash}.ipynb"
         if nb_path.exists():
@@ -615,7 +774,10 @@ def execute_code_blocks(blocks):
                 f"for {src} at {nb_path}:"
             )
             nb = nbformat.v4.new_notebook()
-            nb.cells = [nbformat.v4.new_code_cell(c) for c in group_codes]
+            nb.cells = [
+                nbformat.v4.new_code_cell(_inject_nb_capture_import(c))
+                for c in group_codes
+            ]
             ep = LoggingExecutePreprocessor(
                 kernel_name="python3", timeout=10800, allow_errors=True
             )
@@ -662,12 +824,37 @@ def execute_code_blocks(blocks):
             for future in as_completed(futures):
                 src, group_indices, nb, codes = future.result()
                 for offset, cell in enumerate(nb.cells):
-                    html = outputs_to_html(cell.get("outputs", []))
+                    html = outputs_to_html(
+                        cell.get("outputs", []),
+                        source=src,
+                        bibliography=bibliography,
+                        csl=csl,
+                        webtex=webtex,
+                    )
                     idx = group_indices[offset]
                     outputs[(src, idx)] = html
                     code_map[(src, idx)] = codes[idx - 1]
 
     return outputs, code_map
+
+
+def _execute_code_blocks_for_build(
+    blocks, bibliography=None, csl=None, webtex=False
+):
+    """Call the active notebook executor with context when it supports it."""
+    params = inspect.signature(execute_code_blocks).parameters
+    accepts_kwargs = any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in params.values()
+    )
+    if accepts_kwargs or "bibliography" in params:
+        return execute_code_blocks(
+            blocks,
+            bibliography=bibliography,
+            csl=csl,
+            webtex=webtex,
+        )
+    return execute_code_blocks(blocks)
 
 
 def analyze_includes(render_files):
@@ -1261,6 +1448,8 @@ def render_file(
         "markdown+raw_html",
         "--standalone",
         "--embed-resources",
+        "--resource-path",
+        pandoc_resource_path_arg(staged_src),
         "--lua-filter",
         os.path.relpath(build_dir / "obs.lua", build_dir),
         "--filter",
@@ -1288,7 +1477,7 @@ def render_file(
         if not csl_path.exists():
             raise FileNotFoundError(f"CSL file {csl} not found")
         args += ["--csl", os.path.relpath(csl_path, build_dir)]
-    print("in directory",build_dir)
+    print("in directory", build_dir)
     print(
         f"Running pandoc on {src}..."
         + "\n\t"
@@ -1801,7 +1990,11 @@ def build_all(
         )
         notebook_executor = ThreadPoolExecutor(max_workers=1)
         notebook_future = notebook_executor.submit(
-            execute_code_blocks, code_blocks
+            _execute_code_blocks_for_build,
+            code_blocks,
+            bibliography,
+            csl,
+            webtex,
         )
 
     order = graph.render_order()
