@@ -943,11 +943,82 @@ def main(argv=None):
             "argument --no-comments: not allowed with argument "
             "--comments-to-margin"
         )
+    if (
+        namespace.command == "qmdb"
+        and namespace.always_code
+        and namespace.no_code
+    ):
+        parser._pydifft_subparsers["qmdb"].error(
+            "argument --no-code: not allowed with argument --always-code"
+        )
     handler = namespace._handler
     handler_kwargs = dict(vars(namespace))
     handler_kwargs.pop("_handler", None)
     handler_kwargs.pop("command", None)
-    handler(**handler_kwargs)
+    # {{{ explain Chrome and ChromeDriver version mismatches
+    from selenium.common.exceptions import SessionNotCreatedException
+
+    try:
+        handler(**handler_kwargs)
+    except SessionNotCreatedException as exc:
+        details = str(exc)
+        driver_match = re.search(
+            r"ChromeDriver only supports Chrome version (\d+)",
+            details,
+        )
+        browser_match = re.search(
+            r"Current browser version is (\d+)",
+            details,
+        )
+        if driver_match is None or browser_match is None:
+            raise
+
+        driver_major = int(driver_match.group(1))
+        browser_major = int(browser_match.group(1))
+        print(
+            "pydifft: Chrome could not start because ChromeDriver "
+            f"{driver_major} and Chrome {browser_major} do not match.",
+            file=sys.stderr,
+        )
+        if shutil.which("apt-get") is not None:
+            if browser_major < driver_major:
+                binary_match = re.search(
+                    r"binary path ([^;\n]+)",
+                    details,
+                )
+                browser_binary = (
+                    binary_match.group(1) if binary_match is not None else ""
+                )
+                browser_package = (
+                    "chromium"
+                    if "chromium" in browser_binary
+                    else "google-chrome-stable"
+                )
+                packages = browser_package
+            elif driver_major < browser_major:
+                packages = "chromium-driver"
+            else:
+                packages = "google-chrome-stable chromium-driver"
+            print(
+                "Update the older system package:\n"
+                "  sudo apt update\n"
+                f"  sudo apt install --only-upgrade {packages}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Update the older Chrome or ChromeDriver installation so "
+                "their major versions match.",
+                file=sys.stderr,
+            )
+        print(
+            "Then retry. You can verify the versions with:\n"
+            "  google-chrome --version\n"
+            "  chromedriver --version",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
+    # }}}
 
 
 if __name__ == "__main__":

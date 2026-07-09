@@ -3,6 +3,7 @@
 
 import argparse
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -37,6 +38,16 @@ from ansi2html import Ansi2HTMLConverter
 
 _ansi_conv = Ansi2HTMLConverter(inline=True)
 PYGMENTS_CSS = Path("assets") / "pygments.css"
+CODE_DISPLAY_COLLAPSED = "collapsed"
+CODE_DISPLAY_ALWAYS = "always"
+CODE_DISPLAY_NONE = "none"
+CODE_DISPLAY_MODES = {
+    CODE_DISPLAY_COLLAPSED,
+    CODE_DISPLAY_ALWAYS,
+    CODE_DISPLAY_NONE,
+}
+NB_CAPTURE_IMPORT = "from pydifftools.notebook.display import nb_capture"
+NB_CAPTURE_INJECTION_VERSION = "nb_capture_auto_import_v1"
 
 
 def _ansi_to_html(text: str, *, default_style: str | None = None) -> str:
@@ -45,6 +56,35 @@ def _ansi_to_html(text: str, *, default_style: str | None = None) -> str:
     if default_style and "span class" not in html:
         html = f'<span style="{default_style}">{html}</span>'
     return f"<pre>{html}</pre>"
+
+
+def _mime_text(value) -> str:
+    """Normalize a Jupyter MIME payload to text."""
+    if isinstance(value, list):
+        return "".join(str(part) for part in value)
+    return str(value)
+
+
+def _inject_nb_capture_import(code: str) -> str:
+    """Add the nb_capture import to executable code without changing source."""
+    lines = code.splitlines(keepends=True)
+    if any(line.strip() == NB_CAPTURE_IMPORT for line in lines):
+        return code
+    if not lines:
+        return NB_CAPTURE_IMPORT + "\n"
+
+    insert_at = 0
+    for idx, line in enumerate(lines):
+        if line.strip():
+            insert_at = idx
+            break
+    else:
+        return code + NB_CAPTURE_IMPORT + "\n"
+
+    if lines[insert_at].lstrip().startswith("%reset -f"):
+        insert_at += 1
+    lines.insert(insert_at, NB_CAPTURE_IMPORT + "\n")
+    return "".join(lines)
 
 
 class LoggingExecutePreprocessor(ExecutePreprocessor):
@@ -101,10 +141,17 @@ heading_pattern = re.compile(
 class RenderNotebook:
     """Track trunks, branches, and leaves along with build state."""
 
-    def __init__(self, render_files, tree, include_map):
+    def __init__(
+        self,
+        render_files,
+        tree,
+        include_map,
+        code_display=CODE_DISPLAY_COLLAPSED,
+    ):
         self.render_files = render_files
         self.tree = tree
         self.include_map = include_map
+        self.code_display = code_display
         self.nodes = {}
         self.notebook_outputs = None
         self.notebook_code_map = None
@@ -181,10 +228,12 @@ class RenderNotebook:
         for path in self.nodes:
             tags = []
             src = PROJECT_ROOT / path
+            staged_file = BUILD_DIR / path
             html_file = (BUILD_DIR / path).with_suffix(".html")
+            staged_exists = staged_file.exists()
             html_exists = html_file.exists()
 
-            if not src.exists() or not html_exists:
+            if not src.exists() or not staged_exists or not html_exists:
                 tags.append("missing html")
             else:
                 new_hash = self._hash_file(src)
@@ -375,6 +424,7 @@ class RenderNotebook:
                     html_file,
                     self.notebook_outputs,
                     self.notebook_code_map,
+                    code_display=self.code_display,
                 )
         # Rebuild display pages first, then inject navigation, and only then
         # refresh the browser so users do not see a nav-less intermediate page.
@@ -498,7 +548,110 @@ def load_bibliography_csl():
     return bib, csl
 
 
-def outputs_to_html(outputs: list[dict]) -> str:
+def _add_unique_path(paths: list[Path], path: Path) -> None:
+    resolved = Path(path).resolve()
+    if resolved not in paths:
+        paths.append(resolved)
+
+
+def pandoc_resource_paths(source=None) -> list[Path]:
+    """Return resource search paths for a staged source."""
+    paths: list[Path] = []
+    build_dir = Path(BUILD_DIR).resolve()
+    display_dir = Path(DISPLAY_DIR).resolve()
+    if source is not None:
+        staged_src = Path(source)
+        if not staged_src.is_absolute():
+            staged_src = build_dir / staged_src
+        staged_src = staged_src.resolve()
+        _add_unique_path(paths, staged_src.parent)
+        try:
+            rel = staged_src.relative_to(build_dir)
+        except ValueError:
+            rel = Path(source)
+        project_src = (PROJECT_ROOT / rel).resolve()
+        display_src = (display_dir / rel).resolve()
+        _add_unique_path(paths, display_src.parent)
+        _add_unique_path(paths, project_src.parent)
+    _add_unique_path(paths, build_dir)
+    _add_unique_path(paths, display_dir)
+    _add_unique_path(paths, PROJECT_ROOT)
+    return paths
+
+
+def pandoc_resource_path_arg(source=None) -> str:
+    build_dir = Path(BUILD_DIR).resolve()
+    rel_paths = []
+    for path in pandoc_resource_paths(source):
+        rel_paths.append(os.path.relpath(path, build_dir))
+    return os.pathsep.join(rel_paths)
+
+
+def render_markdown_fragment(
+    text: str,
+    source=None,
+    bibliography=None,
+    csl=None,
+    webtex: bool = False,
+) -> str:
+    """Render a Markdown fragment to HTML using Pandoc."""
+    build_dir = Path(BUILD_DIR).resolve()
+    build_dir.mkdir(parents=True, exist_ok=True)
+    args = [
+        "pandoc",
+        "--from",
+        "markdown+raw_html",
+        "--to",
+        "html",
+        "--embed-resources",
+        "--resource-path",
+        pandoc_resource_path_arg(source),
+    ]
+    obs_filter = build_dir / "obs.lua"
+    if obs_filter.exists():
+        args += ["--lua-filter", os.path.relpath(obs_filter, build_dir)]
+    if shutil.which("pandoc-crossref"):
+        args += ["--filter", "pandoc-crossref"]
+    args += ["--citeproc"]
+    if webtex:
+        args += ["--webtex"]
+    if bibliography:
+        bib_path = Path(os.path.expanduser(bibliography))
+        if not bib_path.is_absolute():
+            bib_path = PROJECT_ROOT / bib_path
+        if not bib_path.exists():
+            raise FileNotFoundError(
+                f"Bibliography file {bibliography} not found"
+            )
+        args += ["--bibliography", os.path.relpath(bib_path, build_dir)]
+    if csl:
+        csl_path = Path(os.path.expanduser(csl))
+        if not csl_path.is_absolute():
+            csl_path = PROJECT_ROOT / csl_path
+        if not csl_path.exists():
+            raise FileNotFoundError(f"CSL file {csl} not found")
+        args += ["--csl", os.path.relpath(csl_path, build_dir)]
+    try:
+        proc = subprocess.run(
+            args,
+            input=text,
+            check=True,
+            cwd=build_dir,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"{e.stderr}\nwhen trying to run:{' '.join(args)}")
+    return proc.stdout
+
+
+def outputs_to_html(
+    outputs: list[dict],
+    source=None,
+    bibliography=None,
+    csl=None,
+    webtex: bool = False,
+) -> str:
     """Convert Jupyter cell outputs to HTML with embedded images."""
     parts = []
     for out in outputs:
@@ -509,7 +662,16 @@ def outputs_to_html(outputs: list[dict]) -> str:
         elif typ in {"display_data", "execute_result"}:
             data = out.get("data", {})
             if "text/html" in data:
-                parts.append(data["text/html"])
+                parts.append(_mime_text(data["text/html"]))
+            elif "text/markdown" in data:
+                html = render_markdown_fragment(
+                    _mime_text(data["text/markdown"]),
+                    source=source,
+                    bibliography=bibliography,
+                    csl=csl,
+                    webtex=webtex,
+                )
+                parts.append(html)
             elif "image/png" in data:
                 src = f"data:image/png;base64,{data['image/png']}"
                 parts.append(f"<img src='{src}'/>")
@@ -517,7 +679,7 @@ def outputs_to_html(outputs: list[dict]) -> str:
                 src = f"data:image/jpeg;base64,{data['image/jpeg']}"
                 parts.append(f"<img src='{src}'/>")
             elif "text/plain" in data:
-                parts.append(_ansi_to_html(data["text/plain"]))
+                parts.append(_ansi_to_html(_mime_text(data["text/plain"])))
         elif typ == "error":
             tb = "\n".join(out.get("traceback", []))
             if not tb:
@@ -529,7 +691,12 @@ def outputs_to_html(outputs: list[dict]) -> str:
 NOTEBOOK_CACHE_DIR = Path("_nbcache")
 
 
-def execute_code_blocks(blocks):
+def execute_code_blocks(
+    blocks,
+    bibliography=None,
+    csl=None,
+    webtex: bool = False,
+):
     """Run code blocks as Jupyter notebooks with caching."""
     cache_dir = NOTEBOOK_CACHE_DIR
     if not cache_dir.is_absolute():
@@ -586,7 +753,15 @@ def execute_code_blocks(blocks):
     def run_job(job):
         src, total_groups, group_idx, group_data, codes = job
         group_indices, group_codes, group_md5s = group_data
-        hash_input = (src + ":" + "".join(group_md5s)).encode()
+        hash_input = (
+            src
+            + ":"
+            + NB_CAPTURE_INJECTION_VERSION
+            + ":"
+            + NB_CAPTURE_IMPORT
+            + ":"
+            + "".join(group_md5s)
+        ).encode()
         nb_hash = hashlib.md5(hash_input).hexdigest()
         nb_path = cache_dir / f"{nb_hash}.ipynb"
         if nb_path.exists():
@@ -599,7 +774,10 @@ def execute_code_blocks(blocks):
                 f"for {src} at {nb_path}:"
             )
             nb = nbformat.v4.new_notebook()
-            nb.cells = [nbformat.v4.new_code_cell(c) for c in group_codes]
+            nb.cells = [
+                nbformat.v4.new_code_cell(_inject_nb_capture_import(c))
+                for c in group_codes
+            ]
             ep = LoggingExecutePreprocessor(
                 kernel_name="python3", timeout=10800, allow_errors=True
             )
@@ -646,12 +824,37 @@ def execute_code_blocks(blocks):
             for future in as_completed(futures):
                 src, group_indices, nb, codes = future.result()
                 for offset, cell in enumerate(nb.cells):
-                    html = outputs_to_html(cell.get("outputs", []))
+                    html = outputs_to_html(
+                        cell.get("outputs", []),
+                        source=src,
+                        bibliography=bibliography,
+                        csl=csl,
+                        webtex=webtex,
+                    )
                     idx = group_indices[offset]
                     outputs[(src, idx)] = html
                     code_map[(src, idx)] = codes[idx - 1]
 
     return outputs, code_map
+
+
+def _execute_code_blocks_for_build(
+    blocks, bibliography=None, csl=None, webtex=False
+):
+    """Call the active notebook executor with context when it supports it."""
+    params = inspect.signature(execute_code_blocks).parameters
+    accepts_kwargs = any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in params.values()
+    )
+    if accepts_kwargs or "bibliography" in params:
+        return execute_code_blocks(
+            blocks,
+            bibliography=bibliography,
+            csl=csl,
+            webtex=webtex,
+        )
+    return execute_code_blocks(blocks)
 
 
 def analyze_includes(render_files):
@@ -1001,9 +1204,20 @@ def qmdinit(path, force=False):
     help={
         "no_browser": "Do not launch a browser when using --watch",
         "webtex": "Use Pandoc's --webtex option instead of MathJax",
+        "always_code": (
+            "Show notebook source code inline, matching the old qmdb behavior"
+        ),
+        "no_code": (
+            "Hide notebook source code entirely and show only notebook output"
+        ),
     },
 )
-def qmdb(no_browser=False, webtex=False):
+def qmdb(
+    no_browser=False,
+    webtex=False,
+    always_code=False,
+    no_code=False,
+):
     """Build and watch the current directory using the fast notebook
     builder."""
 
@@ -1012,7 +1226,29 @@ def qmdb(no_browser=False, webtex=False):
         # Minimal fallback when optional dependencies are unavailable.
         _write_placeholder_outputs()
         return
-    watch_and_serve(no_browser=no_browser, webtex=webtex)
+    code_display = resolve_code_display(
+        always_code=always_code,
+        no_code=no_code,
+    )
+    watch_and_serve(
+        no_browser=no_browser,
+        webtex=webtex,
+        code_display=code_display,
+    )
+
+
+def resolve_code_display(
+    always_code: bool = False,
+    no_code: bool = False,
+) -> str:
+    """Return the notebook source-code display mode for qmdb."""
+    if always_code and no_code:
+        raise ValueError("--always-code and --no-code cannot be used together")
+    if always_code:
+        return CODE_DISPLAY_ALWAYS
+    if no_code:
+        return CODE_DISPLAY_NONE
+    return CODE_DISPLAY_COLLAPSED
 
 
 def ensure_pandoc_available():
@@ -1212,6 +1448,8 @@ def render_file(
         "markdown+raw_html",
         "--standalone",
         "--embed-resources",
+        "--resource-path",
+        pandoc_resource_path_arg(staged_src),
         "--lua-filter",
         os.path.relpath(build_dir / "obs.lua", build_dir),
         "--filter",
@@ -1239,7 +1477,7 @@ def render_file(
         if not csl_path.exists():
             raise FileNotFoundError(f"CSL file {csl} not found")
         args += ["--csl", os.path.relpath(csl_path, build_dir)]
-    print("in directory",build_dir)
+    print("in directory", build_dir)
     print(
         f"Running pandoc on {src}..."
         + "\n\t"
@@ -1280,11 +1518,14 @@ def notebook_marker_is_pending(src: str, html_text: str) -> bool:
             for node in root.xpath("//div[@data-script][@data-index]"):
                 if node.get("data-script") != src:
                     continue
+                if node.get("data-output-state") == "complete":
+                    continue
                 if len(node) == 0 and not "".join(node.itertext()).strip():
                     return True
             return False
     pattern = re.compile(
         r"<div\b"
+        r"(?![^>]*\bdata-output-state=['\"]complete['\"])"
         rf"(?=[^>]*\bdata-script=['\"]{re.escape(src)}['\"])"
         r"(?=[^>]*\bdata-index=['\"]?\d+['\"]?)"
         r"[^>]*>\s*</div>",
@@ -1502,10 +1743,13 @@ def substitute_code_placeholders(
     html_path: Path,
     outputs: dict[tuple[str, int], str],
     codes: dict[tuple[str, int], str],
+    code_display: str = CODE_DISPLAY_COLLAPSED,
 ) -> None:
     """Replace script placeholders in ``html_path`` using executed outputs and
     embed syntax highlighted source code.
     """
+    if code_display not in CODE_DISPLAY_MODES:
+        raise ValueError(f"unknown code display mode: {code_display}")
     parser = lxml_html.HTMLParser(encoding="utf-8")
     tree = lxml_html.parse(str(html_path), parser)
     root = tree.getroot()
@@ -1533,8 +1777,7 @@ def substitute_code_placeholders(
             code = codes[(src, idx)]
         else:
             code = ""
-        code_html = highlight(code, PythonLexer(), formatter)
-        frags = lxml_html.fragments_fromstring(code_html)
+        frags = highlighted_code_fragments(code, formatter, code_display)
         if not missing_output and html:
             frags += lxml_html.fragments_fromstring(html)
         elif missing_output:
@@ -1550,6 +1793,10 @@ def substitute_code_placeholders(
             frags.append(waiting)
         # Keep the data-script marker node in place so later async passes can
         # replace the temporary "Running notebook ..." block with final output.
+        if missing_output:
+            node.attrib.pop("data-output-state", None)
+        else:
+            node.set("data-output-state", "complete")
         node.text = None
         for child in list(node):
             node.remove(child)
@@ -1560,7 +1807,38 @@ def substitute_code_placeholders(
         tree.write(str(html_path), encoding="utf-8", method="html")
 
 
-def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
+def highlighted_code_fragments(
+    code: str,
+    formatter: HtmlFormatter,
+    code_display: str,
+) -> list:
+    """Return source-code HTML fragments for the requested display mode."""
+    if code_display == CODE_DISPLAY_NONE:
+        return []
+    code_html = highlight(code, PythonLexer(), formatter)
+    frags = lxml_html.fragments_fromstring(code_html)
+    if code_display == CODE_DISPLAY_ALWAYS:
+        return frags
+
+    details = lxml_html.fragment_fromstring(
+        '<details class="pydifft-source">'
+        "<summary>SOURCE</summary>"
+        "</details>",
+        create_parent=False,
+    )
+    for frag in frags:
+        details.append(frag)
+    return [details]
+
+
+def build_all(
+    webtex: bool = False,
+    changed_paths=None,
+    refresh_callback=None,
+    code_display: str = CODE_DISPLAY_COLLAPSED,
+):
+    if code_display not in CODE_DISPLAY_MODES:
+        raise ValueError(f"unknown code display mode: {code_display}")
     ensure_pandoc_available()
     ensure_pandoc_crossref()
     ensure_template_assets(PROJECT_ROOT)
@@ -1593,7 +1871,12 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
     render_files = load_rendered_files()
     bibliography, csl = load_bibliography_csl()
     tree, roots, include_map = analyze_includes(render_files)
-    graph = RenderNotebook(render_files, tree, include_map)
+    graph = RenderNotebook(
+        render_files,
+        tree,
+        include_map,
+        code_display=code_display,
+    )
     graph.mark_outdated(checksums)
     graph.refresh_status_tags(checksums)
     anchors = collect_anchors(render_files, include_map)
@@ -1707,7 +1990,11 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
         )
         notebook_executor = ThreadPoolExecutor(max_workers=1)
         notebook_future = notebook_executor.submit(
-            execute_code_blocks, code_blocks
+            _execute_code_blocks_for_build,
+            code_blocks,
+            bibliography,
+            csl,
+            webtex,
         )
 
     order = graph.render_order()
@@ -1768,7 +2055,12 @@ def build_all(webtex: bool = False, changed_paths=None, refresh_callback=None):
         for f in build_files:
             html_file = (BUILD_DIR / f).with_suffix(".html")
             if html_file.exists():
-                substitute_code_placeholders(html_file, outputs, code_map)
+                substitute_code_placeholders(
+                    html_file,
+                    outputs,
+                    code_map,
+                    code_display=code_display,
+                )
 
     # phase 4: assemble the served pages from staged fragments
     graph.update_display_targets(display_targets)
@@ -1877,12 +2169,16 @@ def _serve_forever(httpd: ThreadingHTTPServer):
     httpd.serve_forever()
 
 
-def watch_and_serve(no_browser: bool = False, webtex: bool = False):
+def watch_and_serve(
+    no_browser: bool = False,
+    webtex: bool = False,
+    code_display: str = CODE_DISPLAY_COLLAPSED,
+):
     if no_browser:
         # In headless scenarios we only need the build artifacts and can exit
         # immediately instead of launching a server loop that waits for a
         # browser connection.
-        return build_all(webtex=webtex)
+        return build_all(webtex=webtex, code_display=code_display)
     port = 8000
     render_files = load_rendered_files()
 
@@ -1911,7 +2207,10 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
     # Launch the initial build asynchronously so the browser opens immediately.
     initial_executor = ThreadPoolExecutor(max_workers=1)
     initial_future = initial_executor.submit(
-        build_all, webtex=webtex, refresh_callback=refresher.refresh
+        build_all,
+        webtex=webtex,
+        refresh_callback=refresher.refresh,
+        code_display=code_display,
     )
     if Observer is None:
         raise ImportError(
@@ -1943,6 +2242,7 @@ def watch_and_serve(no_browser: bool = False, webtex: bool = False):
             webtex=webtex,
             changed_paths=[path],
             refresh_callback=refresher.refresh,
+            code_display=code_display,
         )
 
     handler = ChangeHandler(rebuild, refresher)
@@ -2010,5 +2310,23 @@ if __name__ == "__main__":
         action="store_true",
         help="Use Pandoc's --webtex option instead of MathJax",
     )
+    code_group = parser.add_mutually_exclusive_group()
+    code_group.add_argument(
+        "--always-code",
+        action="store_true",
+        help="Show notebook source code inline",
+    )
+    code_group.add_argument(
+        "--no-code",
+        action="store_true",
+        help="Hide notebook source code and show only notebook output",
+    )
     args = parser.parse_args()
-    watch_and_serve(no_browser=args.no_browser, webtex=args.webtex)
+    watch_and_serve(
+        no_browser=args.no_browser,
+        webtex=args.webtex,
+        code_display=resolve_code_display(
+            always_code=args.always_code,
+            no_code=args.no_code,
+        ),
+    )
