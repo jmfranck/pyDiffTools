@@ -1,4 +1,5 @@
 import base64
+import io
 import os
 import re
 import shutil
@@ -25,9 +26,7 @@ def fb(tmp_path, monkeypatch):
         "NAV_TEMPLATE",
         "MATHJAX_DIR",
     )
-    original_paths = {
-        name: getattr(fast_build, name) for name in path_names
-    }
+    original_paths = {name: getattr(fast_build, name) for name in path_names}
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PYDIFFTOOLS_FAKE_MATHJAX", "1")
     fast_build.qmdinit(tmp_path, force=True)
@@ -129,7 +128,7 @@ def test_missing_include_error(fb, tmp_path):
         fb.analyze_includes([src.as_posix()])
 
 
-def test_build_all_includes(fb, monkeypatch):
+def test_state_machine_builds_includes(fb, monkeypatch):
     def execute(blocks, **_kwargs):
         outputs = {}
         codes = {}
@@ -141,7 +140,7 @@ def test_build_all_includes(fb, monkeypatch):
 
     monkeypatch.setattr(fb, "execute_code_blocks", execute)
     shutil.rmtree("_build", ignore_errors=True)
-    fb.build_all()
+    fb.RenderNotebook.from_project().build()
     assert Path("_build/project1/subproject1/tasks.html").exists()
     assert Path("_build/project1/subproject1/tryforerror.html").exists()
 
@@ -401,7 +400,7 @@ def test_generated_markdown_output_renders_in_build(fb):
     config["project"]["render"] = ["generated_markdown.qmd"]
     Path("_quarto.yml").write_text(yaml.safe_dump(config))
 
-    fb.build_all()
+    fb.RenderNotebook.from_project().build()
 
     html_path = Path("_display/generated_markdown.html")
     html = html_path.read_text()
@@ -427,7 +426,7 @@ def test_markdown_image_next_to_source_is_embedded(fb):
     config["project"]["render"] = ["image_case/page.qmd"]
     Path("_quarto.yml").write_text(yaml.safe_dump(config))
 
-    fb.build_all()
+    fb.RenderNotebook.from_project().build()
 
     html = Path("_display/image_case/page.html").read_text()
     assert "data:image/png;base64" in html
@@ -459,7 +458,7 @@ def test_markdown_image_can_embed_from_build_or_display(fb):
     config["project"]["render"] = ["image_locations/page.qmd"]
     Path("_quarto.yml").write_text(yaml.safe_dump(config))
 
-    fb.build_all()
+    fb.RenderNotebook.from_project().build()
 
     html = Path("_display/image_locations/page.html").read_text()
     assert html.count("data:image/png;base64") == 2
@@ -476,13 +475,13 @@ def test_deleted_staged_qmd_forces_rebuild(fb):
     config["project"]["render"] = ["force_stage.qmd"]
     Path("_quarto.yml").write_text(yaml.safe_dump(config))
 
-    fb.build_all()
+    fb.RenderNotebook.from_project().build()
 
     staged_qmd = Path("_build/force_stage.qmd")
     assert staged_qmd.exists()
     staged_qmd.unlink()
 
-    fb.build_all()
+    fb.RenderNotebook.from_project().build()
 
     assert staged_qmd.exists()
 
@@ -534,26 +533,22 @@ def test_navigation_persists_after_notebook_updates(fb, monkeypatch):
         html = "<pre>INITIAL_OUTPUT</pre>"
         code = "print('one')"
         progress_callback(src, 1, 1, "running")
-        progress_callback(
-            src, 1, 1, "complete", html=html, code=code
-        )
+        progress_callback(src, 1, 1, "complete", html=html, code=code)
         return {(src, 1): html}, {(src, 1): code}
 
     monkeypatch.setattr(fb, "execute_code_blocks", execute)
-    fb.build_all()
-    render_files = fb.load_rendered_files()
+    graph = fb.RenderNotebook.from_project()
+    graph.build()
     target = Path("_display/navigation_update.html")
     assert "on-this-page" in target.read_text()
 
-    tree, _, include_map = fb.analyze_includes(render_files)
-    graph = fb.RenderNotebook(render_files, tree, include_map)
-    graph.mark_rendered(qmd.as_posix())
+    graph.invalidate_targets({qmd.as_posix()})
     graph.record_notebook_cell(
         qmd.as_posix(), 1, "<pre>UPDATED_OUTPUT</pre>", "print('two')"
     )
-    graph.apply_notebook_outputs(
-        [qmd.as_posix()], {qmd.as_posix()}, None
-    )
+    graph._substitute_available_outputs({qmd.as_posix()})
+    graph._mark_staged(qmd.as_posix())
+    graph.publish_ready_targets({qmd.as_posix()})
 
     html = target.read_text()
     assert "UPDATED_OUTPUT" in html
@@ -576,9 +571,7 @@ def test_refresh_callback_never_sees_menu_less_page(fb, monkeypatch):
         html = "<pre>MENU_GUARD_OUTPUT</pre>"
         code = "print('menu guard')"
         progress_callback(src, 1, 1, "running")
-        progress_callback(
-            src, 1, 1, "complete", html=html, code=code
-        )
+        progress_callback(src, 1, 1, "complete", html=html, code=code)
         return {(src, 1): html}, {(src, 1): code}
 
     monkeypatch.setattr(fb, "execute_code_blocks", execute)
@@ -590,7 +583,7 @@ def test_refresh_callback_never_sees_menu_less_page(fb, monkeypatch):
         if page.exists():
             refresh_states.append("on-this-page" in page.read_text())
 
-    fb.build_all(refresh_callback=refresh_callback)
+    fb.RenderNotebook.from_project().build(refresh_callback=refresh_callback)
     assert refresh_states
     assert all(refresh_states)
 
@@ -604,7 +597,7 @@ def test_all_render_targets_receive_navigation_template(fb):
     config["project"]["render"] = ["first_page.qmd", "second_page.qmd"]
     Path("_quarto.yml").write_text(yaml.safe_dump(config))
 
-    fb.build_all()
+    fb.RenderNotebook.from_project().build()
 
     for page in ["first_page", "second_page"]:
         html = Path(f"_display/{page}.html").read_text()
@@ -646,7 +639,7 @@ def test_pandoc_failure_is_propagated(fb, monkeypatch):
     monkeypatch.setattr(fb, "render_file", fail_render)
 
     with pytest.raises(RuntimeError, match="pandoc exploded"):
-        fb.build_all()
+        fb.RenderNotebook.from_project().build()
 
     checksums = Path("_build/checksums.json")
     assert not checksums.exists() or "broken.qmd" not in checksums.read_text()
@@ -678,7 +671,7 @@ def test_pandoc_failure_does_not_leave_notebook_writer(fb, monkeypatch):
     monkeypatch.setattr(fb, "render_file", fail_render)
 
     pool = ThreadPoolExecutor(max_workers=1)
-    build_future = pool.submit(fb.build_all)
+    build_future = pool.submit(fb.RenderNotebook.from_project().build)
     try:
         assert notebook_started.wait(5)
         assert pandoc_failed.wait(5)
@@ -726,12 +719,13 @@ def test_quarto_config_change_rebuilds_every_graph_file(fb, monkeypatch):
     config["project"]["render"] = ["root.qmd"]
     Path("_quarto.yml").write_text(yaml.safe_dump(config))
 
-    fb.build_all()
+    machine = fb.RenderNotebook.from_project()
+    machine.build()
     rendered.clear()
 
     config["project"]["render"] = ["root.qmd", "child.qmd"]
     Path("_quarto.yml").write_text(yaml.safe_dump(config))
-    fb.build_all(changed_paths=["_quarto.yml"])
+    machine.build(changed_paths=["_quarto.yml"])
 
     assert set(rendered) == {"root.qmd", "child.qmd"}
 
@@ -807,6 +801,7 @@ def test_notebook_progress_callback_and_kernel_environment(fb, monkeypatch):
         "_check_assign_resources",
         lambda self, resources: setattr(self, "resources", resources),
     )
+
     def setup_kernel(preprocessor, **kwargs):
         captured["env"] = kwargs["env"]
         return DummySetupKernel(preprocessor)
@@ -932,9 +927,7 @@ def test_tree_shows_notebook_cell_states_on_source_line(fb):
         "```python\nprint('two')\n```\n"
         "```python\n%reset -f\nprint('three')\n```\n"
     )
-    graph = fb.RenderNotebook(
-        [qmd.as_posix()], {qmd.as_posix(): []}, {}
-    )
+    graph = fb.RenderNotebook([qmd.as_posix()], {qmd.as_posix(): []}, {})
     graph.notebook_progress(qmd.as_posix(), 1, 1, "complete", cached=True)
     graph.notebook_progress(qmd.as_posix(), 1, 2, "running")
 
@@ -945,6 +938,124 @@ def test_tree_shows_notebook_cell_states_on_source_line(fb):
 
     graph.notebook_progress(qmd.as_posix(), 2, 3, "complete", cached=True)
     assert "n.b. #2(✓ cached)" in str(graph)
+    assert "notebook …" not in str(graph)
+
+
+def test_staged_precedes_complete_display_publication(fb):
+    qmd = Path("state_transition.qmd")
+    qmd.write_text("# State transition\n")
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    config["project"]["render"] = [qmd.as_posix()]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+    machine = fb.RenderNotebook.from_project()
+    staged_html = Path("_build/state_transition.html")
+    staged_html.parent.mkdir(parents=True, exist_ok=True)
+    staged_html.write_text("<html><body><h1>Ready</h1></body></html>")
+
+    machine.pandoc_started({qmd.as_posix()})
+    machine.pandoc_completed(qmd.as_posix())
+
+    node = machine.nodes[qmd.as_posix()]
+    assert node.phase == fb.RenderPhase.STAGED
+    assert "[staged]" in str(machine)
+    assert "[complete]" not in str(machine)
+    assert not Path("_display/state_transition.html").exists()
+
+    machine.publish_ready_targets({qmd.as_posix()})
+
+    assert node.phase == fb.RenderPhase.COMPLETE
+    assert Path("_display/state_transition.html").exists()
+    assert "[complete]" in str(machine)
+
+
+def test_fragment_completes_after_all_display_parents(fb):
+    Path("first.qmd").write_text("{{< include shared.qmd >}}\n")
+    Path("second.qmd").write_text("{{< include shared.qmd >}}\n")
+    Path("shared.qmd").write_text("shared text\n")
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    config["project"]["render"] = ["first.qmd", "second.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+    machine = fb.RenderNotebook.from_project()
+    for path, body in {
+        "first.qmd": '<div data-include="shared.html"></div>',
+        "second.qmd": '<div data-include="shared.html"></div>',
+        "shared.qmd": "<html><body><p>shared text</p></body></html>",
+    }.items():
+        staged = (fb.BUILD_DIR / path).with_suffix(".html")
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        staged.write_text(f"<html><body>{body}</body></html>")
+        node = machine.nodes[path]
+        node.stage_revision = node.revision
+        node.phase = fb.RenderPhase.STAGED
+
+    machine.publish_ready_targets({"first.qmd"})
+
+    shared = machine.nodes["shared.qmd"]
+    assert shared.phase == fb.RenderPhase.STAGED
+    assert shared.published_targets == {"first.qmd"}
+
+    machine.publish_ready_targets({"second.qmd"})
+
+    assert shared.phase == fb.RenderPhase.COMPLETE
+    assert shared.published_targets == {"first.qmd", "second.qmd"}
+
+
+def test_display_failure_cannot_mark_complete(fb, monkeypatch):
+    qmd = Path("display_failure.qmd")
+    qmd.write_text("# Failure\n")
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    config["project"]["render"] = [qmd.as_posix()]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+    machine = fb.RenderNotebook.from_project()
+    node = machine.nodes[qmd.as_posix()]
+    node.stage_revision = node.revision
+    node.phase = fb.RenderPhase.STAGED
+    monkeypatch.setattr(
+        machine,
+        "update_display_page",
+        lambda _target: (_ for _ in ()).throw(RuntimeError("copy failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="copy failed"):
+        machine.publish_ready_targets({qmd.as_posix()})
+
+    assert node.phase == fb.RenderPhase.FAILED
+    assert node.label == "display failed"
+    assert "complete" not in node.label
+
+
+def test_tree_colors_only_on_tty_and_honors_no_color(fb, monkeypatch):
+    qmd = Path("colors.qmd")
+    qmd.write_text(
+        "```python\nprint('green')\n```\n" "```python\nprint('red')\n```\n"
+    )
+    graph = fb.RenderNotebook([qmd.as_posix()], {qmd.as_posix(): []}, {})
+    node = graph.nodes[qmd.as_posix()]
+    node.phase = fb.RenderPhase.COMPLETE
+    node.notebooks[0]["states"] = [fb.COMPLETE_CELL, fb.PENDING_CELL]
+
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    colored = TtyBuffer()
+    monkeypatch.setattr(fb.sys, "stdout", colored)
+    graph.print_tree_status()
+    assert f"{fb.GREEN}complete{fb.RESET}" in colored.getvalue()
+    assert f"{fb.GREEN}{fb.COMPLETE_CELL}{fb.RESET}" in colored.getvalue()
+    assert f"{fb.RED}{fb.PENDING_CELL}{fb.RESET}" in colored.getvalue()
+
+    graph._last_tree = None
+    monkeypatch.setenv("NO_COLOR", "1")
+    plain = TtyBuffer()
+    monkeypatch.setattr(fb.sys, "stdout", plain)
+    graph.print_tree_status()
+    assert "\033[" not in plain.getvalue()
+
+
+def test_build_all_interface_is_removed(fb):
+    assert not hasattr(fb, "build_all")
 
 
 def test_tree_does_not_mark_changed_cell_complete_from_old_html(fb):
@@ -965,9 +1076,7 @@ def test_tree_does_not_mark_changed_cell_complete_from_old_html(fb):
     assert "n.b. #1(✗)" in str(graph)
 
 
-def test_notebook_cells_replace_placeholders_incrementally(
-    fb, monkeypatch
-):
+def test_notebook_cells_replace_placeholders_incrementally(fb, monkeypatch):
     first_complete = threading.Event()
     finish_second = threading.Event()
 
@@ -1003,7 +1112,7 @@ def test_notebook_cells_replace_placeholders_incrementally(
     Path("_quarto.yml").write_text(yaml.safe_dump(config))
 
     pool = ThreadPoolExecutor(max_workers=1)
-    build_future = pool.submit(fb.build_all)
+    build_future = pool.submit(fb.RenderNotebook.from_project().build)
     try:
         assert first_complete.wait(5)
         display = Path("_display/incremental.html")
@@ -1012,10 +1121,7 @@ def test_notebook_cells_replace_placeholders_incrementally(
         while time.time() < deadline:
             if display.exists():
                 partial = display.read_text()
-                if (
-                    "FIRST_OUTPUT" in partial
-                    and "Running notebook" in partial
-                ):
+                if "FIRST_OUTPUT" in partial and "Running notebook" in partial:
                     break
             time.sleep(0.1)
         assert "FIRST_OUTPUT" in partial
@@ -1065,13 +1171,12 @@ def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(
         html = f"<pre>{marker}</pre>"
         code = "print('async pending done')"
         progress_callback(src, 1, 1, "running")
-        progress_callback(
-            src, 1, 1, "complete", html=html, code=code
-        )
+        progress_callback(src, 1, 1, "complete", html=html, code=code)
         return {(src, 1): html}, {(src, 1): code}
 
     monkeypatch.setattr(fb, "execute_code_blocks", execute)
-    fb.build_all()
+    machine = fb.RenderNotebook.from_project()
+    machine.build()
 
     # Simulate the failing state: stale staged/display HTML still contains a
     # pending notebook marker from a prior run.
@@ -1084,7 +1189,7 @@ def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(
     Path("_build/async_pending.html").write_text(pending_html)
     Path("_display/async_pending.html").write_text(pending_html)
 
-    fb.build_all()
+    machine.build()
 
     logs = capsys.readouterr().out
     assert "Build tree:" in logs
@@ -1128,13 +1233,11 @@ def test_render_notebook_status_tags_and_tree_output(fb, monkeypatch):
         html = "<pre>STATUS_OUTPUT</pre>"
         code = "print('hello')"
         progress_callback(src, 1, 1, "running")
-        progress_callback(
-            src, 1, 1, "complete", html=html, code=code
-        )
+        progress_callback(src, 1, 1, "complete", html=html, code=code)
         return {(src, 1): html}, {(src, 1): code}
 
     monkeypatch.setattr(fb, "execute_code_blocks", execute)
-    fb.build_all()
+    fb.RenderNotebook.from_project().build()
 
     pending_html = (
         "<html><body>"
@@ -1151,8 +1254,6 @@ def test_render_notebook_status_tags_and_tree_output(fb, monkeypatch):
     render_files = fb.load_rendered_files()
     tree, _, include_map = fb.analyze_includes(render_files)
     graph = fb.RenderNotebook(render_files, tree, include_map)
-    graph.mark_outdated(fb.load_checksums())
-    graph.refresh_status_tags(fb.load_checksums())
 
     assert graph.status_contains("status_tags.qmd", "unrun ipynb")
     assert graph.status_contains("status_tags.qmd", "waiting on include build")

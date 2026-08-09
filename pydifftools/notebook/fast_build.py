@@ -7,9 +7,12 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 import threading
@@ -51,6 +54,9 @@ NOTEBOOK_CACHE_DIR = Path("_nbcache")
 PENDING_CELL = "✗"
 RUNNING_CELL = "…"
 COMPLETE_CELL = "✓"
+GREEN = "\033[32m"
+RED = "\033[31m"
+RESET = "\033[0m"
 
 
 def _short_time(timestamp=None):
@@ -60,15 +66,15 @@ def _short_time(timestamp=None):
     local = time.localtime(timestamp)
     hour = local.tm_hour % 12 or 12
     hundredths = int(timestamp % 1 * 100)
-    return (
-        f"{hour}:{local.tm_min:02d}:{local.tm_sec:02d}.{hundredths:02d}"
-    )
+    return f"{hour}:{local.tm_min:02d}:{local.tm_sec:02d}.{hundredths:02d}"
+
 
 def _is_noexec(code):
     for line in code.splitlines():
         if line.strip():
             return line.lstrip().startswith("%noexec")
     return False
+
 
 def _notebook_groups(cells):
     """Split executable cells at ``%reset -f`` boundaries."""
@@ -85,6 +91,7 @@ def _notebook_groups(cells):
         groups.append(current)
     return groups
 
+
 def _notebook_cache_path(src, md5s):
     cache_dir = NOTEBOOK_CACHE_DIR
     if not cache_dir.is_absolute():
@@ -99,6 +106,7 @@ def _notebook_cache_path(src, md5s):
         + "".join(md5s)
     ).encode()
     return cache_dir / f"{hashlib.md5(value).hexdigest()}.ipynb"
+
 
 def _ansi_to_html(text: str, *, default_style: str | None = None) -> str:
     """Return HTML for text that may contain ANSI escape codes."""
@@ -135,6 +143,7 @@ def _inject_nb_capture_import(code: str) -> str:
         insert_at += 1
     lines.insert(insert_at, NB_CAPTURE_IMPORT + "\n")
     return "".join(lines)
+
 
 class ProgressExecutePreprocessor(ExecutePreprocessor):
     """Execute notebook cells while publishing structured progress."""
@@ -186,8 +195,54 @@ heading_pattern = re.compile(
 )
 
 
+class RenderPhase(str, Enum):
+    DIRTY = "dirty"
+    PANDOC = "pandoc …"
+    STAGING = "staging …"
+    STAGED = "staged"
+    COMPLETE = "complete"
+    FAILED = "failed"
+
+
+@dataclass
+class RenderNode:
+    path: str
+    kind: str
+    children: list[str]
+    parents: list[str]
+    revision: str | None = None
+    stage_revision: str | None = None
+    phase: RenderPhase = RenderPhase.DIRTY
+    diagnostics: list[str] = field(default_factory=list)
+    status_at: str | None = None
+    notebooks: list[dict] = field(default_factory=list)
+    pandoc_finished: bool = False
+    required_display_targets: set[str] = field(default_factory=set)
+    published_targets: set[str] = field(default_factory=set)
+
+    @property
+    def has_notebook(self):
+        return bool(self.notebooks)
+
+    @property
+    def notebooks_complete(self):
+        return all(
+            symbol == COMPLETE_CELL
+            for notebook in self.notebooks
+            for symbol in notebook["states"]
+        )
+
+    @property
+    def label(self):
+        if self.phase == RenderPhase.DIRTY:
+            return ", ".join(self.diagnostics) or "dirty"
+        if self.phase == RenderPhase.FAILED:
+            return self.diagnostics[-1] if self.diagnostics else "failed"
+        return self.phase.value
+
+
 class RenderNotebook:
-    """Track trunks, branches, and leaves along with build state."""
+    """Own the QMD dependency graph and drive it through publication."""
 
     def __init__(
         self,
@@ -195,54 +250,61 @@ class RenderNotebook:
         tree,
         include_map,
         code_display=CODE_DISPLAY_COLLAPSED,
+        checksums=None,
     ):
         self.render_files = render_files
         self.tree = tree
         self.include_map = include_map
         self.code_display = code_display
-        self.nodes = {}
+        self.checksums = load_checksums() if checksums is None else checksums
+        self.roots = {}
+        self.nodes: dict[str, RenderNode] = {}
         self.notebook_outputs = {}
         self.notebook_code_map = {}
-        self.rendered_paths = set()
         self._last_tree = None
         self._lock = threading.RLock()
-        self._build_nodes()
+        self._build_nodes(self.checksums)
+
+    @classmethod
+    def from_project(cls, code_display=CODE_DISPLAY_COLLAPSED):
+        render_files = load_rendered_files()
+        tree, roots, include_map = analyze_includes(render_files)
+        machine = cls(
+            render_files,
+            tree,
+            include_map,
+            code_display=code_display,
+            checksums=load_checksums(),
+        )
+        machine.roots = roots
+        return machine
 
     @staticmethod
     def count_code_blocks(text):
         """Count python code blocks in a Quarto document."""
         return len(code_pattern.findall(text))
 
-    def _build_nodes(self):
+    def _build_nodes(self, checksums, previous=None):
+        previous = {} if previous is None else previous
         for path in [*self.render_files, *self.tree]:
             if path not in self.nodes:
-                if path in self.tree:
-                    children = list(self.tree[path])
-                else:
-                    children = []
-                if path in self.include_map:
-                    parents = list(self.include_map[path])
-                else:
-                    parents = []
-                self.nodes[path] = {
-                    "type": "trunk" if path in self.render_files else "branch",
-                    "children": children,
-                    "parents": parents,
-                    "has_notebook": False,
-                    "needs_build": False,
-                    "status_tags": [],
-                    "status_at": None,
-                    "active_status": None,
-                    "notebooks": [],
-                }
-        for path in list(self.nodes.keys()):
-            if (
-                not self.nodes[path]["children"]
-                and path not in self.render_files
-            ):
-                self.nodes[path]["type"] = "leaf"
+                children = list(self.tree.get(path, []))
+                kind = "trunk" if path in self.render_files else "branch"
+                if not children and path not in self.render_files:
+                    kind = "leaf"
+                self.nodes[path] = RenderNode(
+                    path=path,
+                    kind=kind,
+                    children=children,
+                    parents=list(self.include_map.get(path, [])),
+                )
+
+        for path, node in self.nodes.items():
             src = PROJECT_ROOT / path
+            staged_file = BUILD_DIR / path
+            html_file = staged_file.with_suffix(".html")
             if src.exists():
+                node.revision = self._hash_file(src)
                 text = src.read_text()
                 cells = []
                 for code in code_pattern.findall(text):
@@ -253,7 +315,6 @@ class RenderNotebook:
                             _is_noexec(code),
                         )
                     )
-                html_file = (BUILD_DIR / path).with_suffix(".html")
                 html_text = html_file.read_text() if html_file.exists() else ""
                 completed = completed_notebook_cells(
                     path,
@@ -279,7 +340,7 @@ class RenderNotebook:
                     else:
                         states = [PENDING_CELL] * len(indices)
                         stamp = None
-                    self.nodes[path]["notebooks"].append(
+                    node.notebooks.append(
                         {
                             "index": group_idx,
                             "cell_indices": indices,
@@ -287,107 +348,90 @@ class RenderNotebook:
                             "stamp": stamp,
                         }
                     )
-                self.nodes[path]["has_notebook"] = bool(
-                    self.nodes[path]["notebooks"]
-                )
+            node.status_at = _short_time(
+                html_file.stat().st_mtime
+                if html_file.exists()
+                else src.stat().st_mtime if src.exists() else None
+            )
+            if (
+                not src.exists()
+                or not staged_file.exists()
+                or not html_file.exists()
+            ):
+                node.diagnostics.append("missing html")
+            elif checksums.get(path) != node.revision:
+                node.diagnostics.append("old html")
+            elif node.has_notebook and (
+                "Running notebook " in html_text
+                or notebook_marker_is_pending(path, html_text)
+            ):
+                node.diagnostics.append("unrun ipynb")
+            else:
+                node.phase = RenderPhase.STAGED
+                node.stage_revision = node.revision
+
+            old = previous.get(path)
+            if (
+                old is not None
+                and old.revision == node.revision
+                and old.stage_revision == node.revision
+                and node.phase == RenderPhase.STAGED
+                and old.phase in {RenderPhase.STAGED, RenderPhase.COMPLETE}
+            ):
+                node.phase = old.phase
+                node.stage_revision = old.stage_revision
+                node.diagnostics = list(old.diagnostics)
+                node.notebooks = old.notebooks
+                node.published_targets = set(old.published_targets)
+
+        for path, node in self.nodes.items():
+            targets = collect_render_targets(
+                {path}, self.include_map, self.render_files
+            )
+            if path in self.render_files:
+                targets.add(path)
+            node.required_display_targets = targets
+            node.published_targets.intersection_update(targets)
+            if node.phase == RenderPhase.COMPLETE and not targets.issubset(
+                node.published_targets
+            ):
+                node.phase = RenderPhase.STAGED
+
+        for node in self.nodes.values():
+            if any(
+                "missing html" in self.nodes[child].diagnostics
+                for child in node.children
+                if child in self.nodes
+            ):
+                node.diagnostics.append("waiting on include build")
+                if node.phase == RenderPhase.STAGED:
+                    node.phase = RenderPhase.DIRTY
+                    node.stage_revision = None
+
+    def reconcile_project(self):
+        """Refresh graph topology while preserving unchanged runtime state."""
+        with self._lock:
+            previous = self.nodes
+            self.render_files = load_rendered_files()
+            self.tree, self.roots, self.include_map = analyze_includes(
+                self.render_files
+            )
+            self.checksums = load_checksums()
+            self.nodes = {}
+            self._build_nodes(self.checksums, previous)
 
     def all_paths(self):
         return list(self.nodes.keys())
-
-    def mark_outdated(self, checksums):
-        for path in self.nodes:
-            src = PROJECT_ROOT / path
-            if not src.exists():
-                self.nodes[path]["needs_build"] = False
-                continue
-            new_hash = self._hash_file(src)
-            if path in checksums:
-                old_hash = checksums[path]
-            else:
-                old_hash = None
-            self.nodes[path]["needs_build"] = new_hash != old_hash
 
     def _hash_file(self, path):
         data = path.read_bytes()
         return hashlib.md5(data).hexdigest()
 
-    def refresh_status_tags(self, checksums):
-        """Refresh per-node build tags from source/staged html state.
-
-        The tags are intended to describe the staged build lifecycle:
-        - missing html
-        - old html
-        - unrun ipynb
-        - waiting on include build
-        - complete
-        """
-        # first pass: source/hash freshness and notebook placeholders
-        for path, data in self.nodes.items():
-            if data["active_status"]:
-                data["status_tags"] = [data["active_status"]]
-                continue
-            tags = []
-            src = PROJECT_ROOT / path
-            staged_file = BUILD_DIR / path
-            html_file = (BUILD_DIR / path).with_suffix(".html")
-            staged_exists = staged_file.exists()
-            html_exists = html_file.exists()
-
-            if not src.exists() or not staged_exists or not html_exists:
-                tags.append("missing html")
-            else:
-                new_hash = self._hash_file(src)
-                if path not in checksums or checksums[path] != new_hash:
-                    tags.append("old html")
-
-            html_text = ""
-            if html_exists:
-                html_text = html_file.read_text()
-
-            # Structured data-script markers survive output substitution, so
-            # use their output state to detect an interrupted prior build.
-            if self.nodes[path]["has_notebook"] and (
-                "Running notebook " in html_text
-                or notebook_marker_is_pending(path, html_text)
-            ):
-                tags.append("unrun ipynb")
-
-            previous = self.nodes[path]["status_tags"]
-            self.nodes[path]["status_tags"] = tags
-            if tags != previous or self.nodes[path]["status_at"] is None:
-                artifact = html_file if html_exists else staged_file
-                if not artifact.exists():
-                    artifact = src
-                timestamp = (
-                    artifact.stat().st_mtime if artifact.exists() else None
-                )
-                self.nodes[path]["status_at"] = _short_time(timestamp)
-
-        # second pass: include status depends on children being rendered
-        for path in self.nodes:
-            if not self.nodes[path]["children"]:
-                continue
-            waiting_on_child = False
-            for child in self.nodes[path]["children"]:
-                if self.status_contains(child, "missing html"):
-                    waiting_on_child = True
-                    break
-            if waiting_on_child:
-                self.nodes[path]["status_tags"].append(
-                    "waiting on include build"
-                )
-
-            if not self.nodes[path]["status_tags"]:
-                self.nodes[path]["status_tags"].append("complete")
-
-        for path in self.nodes:
-            if not self.nodes[path]["status_tags"]:
-                self.nodes[path]["status_tags"].append("complete")
-
     def status_contains(self, path, tag):
         if path not in self.nodes:
             return False
-        return tag in self.nodes[path]["status_tags"]
+        node = self.nodes[path]
+        return tag == node.label or tag in node.diagnostics
 
     def nodes_with_tag(self, tag):
         matches = []
@@ -396,23 +440,52 @@ class RenderNotebook:
                 matches.append(path)
         return matches
 
-    def stage_targets(self, changed_paths):
-        if changed_paths:
-            for path in changed_paths:
-                if path in self.nodes:
-                    self.nodes[path]["needs_build"] = True
-                    for parent in self.nodes[path]["parents"]:
-                        if parent in self.nodes:
-                            self.nodes[parent]["needs_build"] = True
-        return sorted([p for p, d in self.nodes.items() if d["needs_build"]])
-
-    def update_checksums(self, checksums):
-        for path, data in self.nodes.items():
-            if not data["needs_build"]:
+    def invalidate_targets(self, targets):
+        """Make every contributor wait for fresh publication of targets."""
+        targets = set(targets)
+        for node in self.nodes.values():
+            if not node.required_display_targets.intersection(targets):
                 continue
-            src = PROJECT_ROOT / path
-            if src.exists():
-                checksums[path] = self._hash_file(src)
+            node.published_targets.difference_update(targets)
+            if node.phase == RenderPhase.COMPLETE:
+                node.phase = RenderPhase.STAGED
+                node.status_at = _short_time()
+
+    def force_stage(self, paths):
+        """Invalidate changed sources and the staged parents they feed."""
+        stack = list(paths)
+        forced = set()
+        while stack:
+            path = stack.pop()
+            if path in forced or path not in self.nodes:
+                continue
+            forced.add(path)
+            node = self.nodes[path]
+            node.phase = RenderPhase.DIRTY
+            node.stage_revision = None
+            node.pandoc_finished = False
+            node.diagnostics = ["old html"]
+            node.published_targets.clear()
+            stack.extend(node.parents)
+        affected = set()
+        for path in forced:
+            affected.update(self.nodes[path].required_display_targets)
+        self.invalidate_targets(affected)
+        return forced
+
+    def stage_targets(self):
+        return sorted(
+            path
+            for path, node in self.nodes.items()
+            if node.phase in {RenderPhase.DIRTY, RenderPhase.FAILED}
+            and (PROJECT_ROOT / path).exists()
+        )
+
+    def update_checksums(self, staged_paths):
+        for path in staged_paths:
+            node = self.nodes[path]
+            if node.stage_revision == node.revision:
+                self.checksums[path] = node.revision
 
     def render_order(self):
         return build_order(self.render_files, self.tree)
@@ -426,13 +499,11 @@ class RenderNotebook:
                 return
             branch = "└── " if is_last else "├── "
             label = node
-            if self.nodes[node]["status_tags"]:
-                label += (
-                    " [" + ", ".join(self.nodes[node]["status_tags"]) + "]"
-                )
-            if self.nodes[node]["status_at"]:
-                label += " " + self.nodes[node]["status_at"]
-            notebooks = self.nodes[node]["notebooks"]
+            data = self.nodes[node]
+            label += f" [{data.label}]"
+            if data.status_at:
+                label += " " + data.status_at
+            notebooks = data.notebooks
             if notebooks:
                 labels = []
                 for notebook in notebooks:
@@ -442,7 +513,7 @@ class RenderNotebook:
                     labels.append(f"n.b. #{notebook['index']}({state})")
                 label += "  " + " ".join(labels)
             lines.append(prefix + branch + label)
-            children = sorted(self.nodes[node]["children"])
+            children = sorted(data.children)
             child_prefix = prefix + ("    " if is_last else "│   ")
             for index, child in enumerate(children):
                 walk(child, child_prefix, index == len(children) - 1)
@@ -454,30 +525,35 @@ class RenderNotebook:
             walk(trunk, "", index == len(trunks) - 1)
         return "\n".join(lines)
 
-    def print_tree_status(self, checksums=None):
+    @staticmethod
+    def _colorize_tree(tree):
+        tree = re.sub(
+            r"(?<=\[)complete(?=\])",
+            f"{GREEN}complete{RESET}",
+            tree,
+        )
+        return tree.replace(
+            COMPLETE_CELL, f"{GREEN}{COMPLETE_CELL}{RESET}"
+        ).replace(PENDING_CELL, f"{RED}{PENDING_CELL}{RESET}")
+
+    def print_tree_status(self):
         """Print the tree only when its status has changed."""
         with self._lock:
-            if checksums is not None:
-                self.refresh_status_tags(checksums)
             tree = str(self)
             if tree == self._last_tree:
                 return
             self._last_tree = tree
+            if sys.stdout.isatty() and "NO_COLOR" not in os.environ:
+                tree = self._colorize_tree(tree)
             print("Build tree:", flush=True)
             for line in tree.splitlines():
                 print("  " + line, flush=True)
 
-    def set_node_status(self, path, status):
-        """Set a transient build status and timestamp for one source file."""
-        with self._lock:
-            if path not in self.nodes:
-                return
-            data = self.nodes[path]
-            if data["active_status"] == status:
-                return
-            data["active_status"] = status
-            data["status_tags"] = [status]
-            data["status_at"] = _short_time()
+    def set_phase(self, path, phase, diagnostic=None):
+        node = self.nodes[path]
+        node.phase = phase
+        node.status_at = _short_time()
+        node.diagnostics = [] if diagnostic is None else [diagnostic]
 
     def notebook_progress(
         self,
@@ -492,7 +568,7 @@ class RenderNotebook:
         with self._lock:
             if src not in self.nodes:
                 return
-            notebooks = self.nodes[src]["notebooks"]
+            notebooks = self.nodes[src].notebooks
             if not 1 <= notebook_index <= len(notebooks):
                 return
             notebook = notebooks[notebook_index - 1]
@@ -505,49 +581,30 @@ class RenderNotebook:
                 "cached": COMPLETE_CELL,
             }[state]
             notebook["stamp"] = "cached" if cached else _short_time()
-            if src in self.rendered_paths:
-                pending = any(
-                    symbol != COMPLETE_CELL
-                    for item in notebooks
-                    for symbol in item["states"]
-                )
-                status = "notebook …" if pending else "complete"
-                self.set_node_status(src, status)
 
-    def mark_rendered(self, path):
-        """Record Pandoc completion and expose any pending notebook state."""
+    def pandoc_started(self, paths):
         with self._lock:
-            self.rendered_paths.add(path)
-            notebooks = self.nodes[path]["notebooks"]
-            pending = any(
-                symbol != COMPLETE_CELL
-                for item in notebooks
-                for symbol in item["states"]
-            )
-            self.set_node_status(path, "notebook …" if pending else "complete")
+            for path in paths:
+                self.set_phase(path, RenderPhase.PANDOC)
 
-    def stage_from_incomplete(self):
-        """Choose stage files from status tags and propagate to parents."""
-        stage_set = set()
-        stack = []
-        for path in self.nodes:
-            if self.status_contains(path, "old html"):
-                stack.append(path)
-            elif self.status_contains(path, "missing html"):
-                stack.append(path)
-            elif self.status_contains(path, "unrun ipynb"):
-                stack.append(path)
-            elif self.status_contains(path, "waiting on include build"):
-                stack.append(path)
-        while stack:
-            path = stack.pop()
-            if path in stage_set:
-                continue
-            stage_set.add(path)
-            for parent in self.nodes[path]["parents"]:
-                if parent in self.nodes:
-                    stack.append(parent)
-        return sorted(stage_set)
+    def pandoc_failed(self, path):
+        with self._lock:
+            self.set_phase(path, RenderPhase.FAILED, "pandoc failed")
+
+    def pandoc_completed(self, path):
+        with self._lock:
+            node = self.nodes[path]
+            node.pandoc_finished = True
+            self._substitute_available_outputs({path})
+            if node.notebooks_complete:
+                self._mark_staged(path)
+            else:
+                self.set_phase(path, RenderPhase.STAGING)
+
+    def _mark_staged(self, path):
+        node = self.nodes[path]
+        node.stage_revision = node.revision
+        self.set_phase(path, RenderPhase.STAGED)
 
     def refresh_if_ready(self, refresh_callback):
         """Refresh the browser if a callback was provided."""
@@ -576,38 +633,92 @@ class RenderNotebook:
         # display tree that the web server presents.
         postprocess_html(dest_html, BUILD_DIR, DISPLAY_DIR)
 
-    def apply_notebook_outputs(
-        self,
-        build_files,
-        display_targets,
-        refresh_callback,
-    ):
-        """Insert all available outputs into Pandoc-ready source files."""
-        with self._lock:
-            ready = [
-                path for path in build_files if path in self.rendered_paths
-            ]
-            if not ready:
-                return
-            for path in ready:
-                html_file = (BUILD_DIR / path).with_suffix(".html")
-                if html_file.exists():
-                    substitute_code_placeholders(
-                        html_file,
-                        self.notebook_outputs,
-                        self.notebook_code_map,
-                        code_display=self.code_display,
-                    )
-            # Copy, assemble, and add navigation as one locked operation so
-            # concurrent notebook workers cannot expose a partial display page.
-            self.update_display_targets(display_targets)
-            self.refresh_navigation(display_targets)
-            self.refresh_if_ready(refresh_callback)
+    def _substitute_available_outputs(self, paths):
+        for path in paths:
+            html_file = (BUILD_DIR / path).with_suffix(".html")
+            if html_file.exists():
+                substitute_code_placeholders(
+                    html_file,
+                    self.notebook_outputs,
+                    self.notebook_code_map,
+                    code_display=self.code_display,
+                )
 
     def update_display_targets(self, display_targets):
         """Refresh display HTML for all targets from _build fragments."""
         for target in sorted(display_targets):
             self.update_display_page(target)
+
+    def _contributors(self, target):
+        return [
+            node
+            for node in self.nodes.values()
+            if target in node.required_display_targets
+        ]
+
+    def _target_ready(self, target):
+        contributors = self._contributors(target)
+        return bool(contributors) and all(
+            node.stage_revision == node.revision
+            and node.phase in {RenderPhase.STAGED, RenderPhase.COMPLETE}
+            for node in contributors
+        )
+
+    def preview_targets(self, targets, refresh_callback=None):
+        """Publish an explicitly non-final browser preview."""
+        with self._lock:
+            try:
+                self.update_display_targets(targets)
+                self.refresh_navigation(targets)
+            except BaseException:
+                for target in targets:
+                    for node in self._contributors(target):
+                        self.set_phase(
+                            node.path,
+                            RenderPhase.FAILED,
+                            "display failed",
+                        )
+                self.print_tree_status()
+                raise
+            self.refresh_if_ready(refresh_callback)
+
+    def publish_ready_targets(self, targets, refresh_callback=None):
+        """Publish ready pages and complete their current contributors."""
+        with self._lock:
+            published = []
+            for target in sorted(set(targets)):
+                if not self._target_ready(target):
+                    continue
+                contributors = self._contributors(target)
+                try:
+                    self.update_display_page(target)
+                    self.refresh_navigation({target})
+                except BaseException:
+                    for node in contributors:
+                        self.set_phase(
+                            node.path,
+                            RenderPhase.FAILED,
+                            "display failed",
+                        )
+                    self.print_tree_status()
+                    raise
+                for node in contributors:
+                    node.published_targets.add(target)
+                published.append(target)
+
+            for node in self.nodes.values():
+                if (
+                    node.phase != RenderPhase.COMPLETE
+                    and node.stage_revision == node.revision
+                    and node.required_display_targets.issubset(
+                        node.published_targets
+                    )
+                ):
+                    self.set_phase(node.path, RenderPhase.COMPLETE)
+            if published:
+                self.print_tree_status()
+                self.refresh_if_ready(refresh_callback)
+            return published
 
     def record_notebook_outputs(self, outputs, code_map):
         """Merge notebook outputs that may have arrived incrementally."""
@@ -623,44 +734,48 @@ class RenderNotebook:
             self.notebook_outputs[(src, idx)] = html
             self.notebook_code_map[(src, idx)] = code
 
-    def handle_notebook_future(
+    def notebook_event(
         self,
-        notebook_future,
-        notebook_executor,
-        build_files,
-        display_targets,
+        src,
+        notebook_index,
+        cell_index,
+        state,
+        *,
+        html=None,
+        code=None,
+        cached=False,
         refresh_callback,
     ):
-        """Merge any legacy all-at-once result and finalize the tree."""
-        try:
-            outputs, code_map = notebook_future.result()
-        except Exception as error:
-            print(f"Notebook execution failed: {error}", flush=True)
-            for path in build_files:
-                if self.nodes[path]["has_notebook"]:
-                    self.set_node_status(path, "notebook failed")
+        """Consume a notebook worker event and drive resulting transitions."""
+        with self._lock:
+            self.notebook_progress(
+                src,
+                notebook_index,
+                cell_index,
+                state,
+                cached=cached,
+            )
+            self.record_notebook_cell(src, cell_index, html, code)
+            node = self.nodes.get(src)
+            if node is None or not node.pandoc_finished:
+                self.print_tree_status()
+                return
+            if state in {"complete", "cached"}:
+                self._substitute_available_outputs({src})
+                targets = node.required_display_targets
+                if node.notebooks_complete:
+                    self._mark_staged(src)
+                    self.print_tree_status()
+                    self.publish_ready_targets(targets, refresh_callback)
+                else:
+                    self.preview_targets(targets, refresh_callback)
             self.print_tree_status()
-            raise
-        finally:
-            if notebook_executor:
-                notebook_executor.shutdown(wait=False)
-        self.record_notebook_outputs(outputs, code_map)
-        for src, idx in outputs:
-            if src not in self.nodes:
-                continue
-            for notebook in self.nodes[src]["notebooks"]:
-                if idx not in notebook["cell_indices"]:
-                    continue
-                offset = notebook["cell_indices"].index(idx)
-                if notebook["states"][offset] != COMPLETE_CELL:
-                    self.notebook_progress(
-                        src, notebook["index"], idx, "complete"
-                    )
-                break
-        self.apply_notebook_outputs(
-            build_files, display_targets, refresh_callback
-        )
-        self.print_tree_status()
+
+    def notebook_failed(self, paths):
+        for path in paths:
+            node = self.nodes[path]
+            if node.has_notebook:
+                self.set_phase(path, RenderPhase.FAILED, "notebook failed")
 
     def refresh_navigation(self, targets=None):
         """Rebuild navigation only on pages changed by this update."""
@@ -699,6 +814,225 @@ class RenderNotebook:
             html_file = (DISPLAY_DIR / page["file"]).with_suffix(".html")
             if html_file.exists():
                 add_navigation(html_file, pages, page["file"])
+
+    def build(
+        self,
+        webtex=False,
+        changed_paths=None,
+        refresh_callback=None,
+    ):
+        """Reconcile the project and drive every affected node to display."""
+        if self.code_display not in CODE_DISPLAY_MODES:
+            raise ValueError(f"unknown code display mode: {self.code_display}")
+        ensure_pandoc_available()
+        ensure_pandoc_crossref()
+        ensure_template_assets(PROJECT_ROOT)
+        BUILD_DIR.mkdir(parents=True, exist_ok=True)
+        DISPLAY_DIR.mkdir(parents=True, exist_ok=True)
+        ensure_pygments_css(DISPLAY_DIR)
+        if not webtex:
+            ensure_mathjax()
+            shutil.copytree(
+                MATHJAX_DIR,
+                DISPLAY_DIR / "mathjax",
+                dirs_exist_ok=True,
+            )
+
+        self.reconcile_project()
+        if yaml is not None:
+            cfg = yaml.safe_load(Path("_quarto.yml").read_text())
+            if "project" in cfg and "render" in cfg["project"]:
+                cfg["project"]["render"] = []
+            (BUILD_DIR / "_quarto.yml").write_text(yaml.safe_dump(cfg))
+        else:
+            (BUILD_DIR / "_quarto.yml").write_text(
+                Path("_quarto.yml").read_text()
+            )
+        if Path("_template/obs.lua").exists():
+            shutil.copy2("_template/obs.lua", BUILD_DIR / "obs.lua")
+
+        bibliography, csl = load_bibliography_csl()
+        anchors = collect_anchors(self.render_files, self.include_map)
+        changed = set()
+        config_changed = False
+        for path in changed_paths or []:
+            candidate = Path(path)
+            try:
+                rel = candidate.resolve().relative_to(PROJECT_ROOT)
+            except ValueError:
+                continue
+            if rel.as_posix() == "_quarto.yml":
+                config_changed = True
+            elif rel.suffix == ".qmd":
+                changed.add(rel.as_posix())
+
+        if config_changed:
+            self.force_stage(self.all_paths())
+        elif changed:
+            self.force_stage(changed)
+
+        build_files = self.stage_targets()
+        display_targets = {
+            target
+            for target in self.render_files
+            if any(
+                target in node.required_display_targets
+                and target not in node.published_targets
+                for node in self.nodes.values()
+            )
+        }
+        for path in build_files:
+            display_targets.update(self.nodes[path].required_display_targets)
+        self.print_tree_status()
+
+        # {{{ prepare staged QMD and notebook work
+        code_blocks = mirror_and_modify(build_files, anchors, self.roots)
+
+        def notebook_callback(
+            src,
+            notebook_index,
+            cell_index,
+            state,
+            *,
+            html=None,
+            code=None,
+            cached=False,
+        ):
+            self.notebook_event(
+                src,
+                notebook_index,
+                cell_index,
+                state,
+                html=html,
+                code=code,
+                cached=cached,
+                refresh_callback=refresh_callback,
+            )
+
+        notebook_executor = None
+        notebook_future = None
+        if code_blocks:
+            notebook_executor = ThreadPoolExecutor(max_workers=1)
+            notebook_future = notebook_executor.submit(
+                execute_code_blocks,
+                code_blocks,
+                bibliography=bibliography,
+                csl=csl,
+                webtex=webtex,
+                progress_callback=notebook_callback,
+            )
+        # }}}
+
+        render_targets = [
+            path for path in self.render_order() if path in build_files
+        ]
+        preview_targets = {
+            target
+            for target in display_targets
+            if not self._target_ready(target)
+        }
+        try:
+            if preview_targets:
+                self.preview_targets(preview_targets, refresh_callback)
+            if render_targets:
+                self.pandoc_started(render_targets)
+                self.print_tree_status()
+                workers = max(1, min(len(render_targets), 4))
+                future_to_target = {}
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    for path in render_targets:
+                        future = pool.submit(
+                            render_file,
+                            Path(path),
+                            BUILD_DIR / path,
+                            path not in self.render_files,
+                            bibliography,
+                            csl,
+                            webtex,
+                        )
+                        future_to_target[future] = path
+                    for future in as_completed(future_to_target):
+                        path = future_to_target[future]
+                        try:
+                            future.result()
+                        except BaseException:
+                            self.pandoc_failed(path)
+                            self.print_tree_status()
+                            raise
+                        self.pandoc_completed(path)
+                        self.print_tree_status()
+                        node = self.nodes[path]
+                        if node.phase == RenderPhase.STAGED:
+                            self.publish_ready_targets(
+                                node.required_display_targets,
+                                refresh_callback,
+                            )
+                        elif node.phase == RenderPhase.STAGING:
+                            self.preview_targets(
+                                node.required_display_targets,
+                                refresh_callback,
+                            )
+        except BaseException:
+            if notebook_executor:
+                notebook_executor.shutdown(wait=True, cancel_futures=True)
+            raise
+
+        if notebook_future:
+            try:
+                outputs, code_map = notebook_future.result()
+            except BaseException:
+                self.notebook_failed(build_files)
+                self.print_tree_status()
+                raise
+            finally:
+                notebook_executor.shutdown(wait=False)
+            self.record_notebook_outputs(outputs, code_map)
+            for (src, idx), html in outputs.items():
+                node = self.nodes.get(src)
+                if node is None:
+                    continue
+                for notebook in node.notebooks:
+                    if idx not in notebook["cell_indices"]:
+                        continue
+                    offset = notebook["cell_indices"].index(idx)
+                    if notebook["states"][offset] != COMPLETE_CELL:
+                        self.notebook_event(
+                            src,
+                            notebook["index"],
+                            idx,
+                            "complete",
+                            html=html,
+                            code=code_map[(src, idx)],
+                            refresh_callback=refresh_callback,
+                        )
+                    break
+
+        for path in build_files:
+            node = self.nodes[path]
+            if node.pandoc_finished and node.notebooks_complete:
+                self._substitute_available_outputs({path})
+                if node.phase not in {
+                    RenderPhase.STAGED,
+                    RenderPhase.COMPLETE,
+                }:
+                    self._mark_staged(path)
+                    self.print_tree_status()
+
+        self.publish_ready_targets(display_targets, refresh_callback)
+        incomplete = [
+            path
+            for path in build_files
+            if self.nodes[path].phase != RenderPhase.COMPLETE
+        ]
+        if incomplete:
+            raise RuntimeError(
+                "Build did not reach display completion for: "
+                + ", ".join(incomplete)
+            )
+        self.update_checksums(build_files)
+        save_checksums(self.checksums)
+        self.print_tree_status()
+        return self
 
 
 def load_checksums():
@@ -937,9 +1271,7 @@ def execute_code_blocks(
         src, group_idx, group, codes = job
         group_indices = [idx for idx, _, _ in group]
         group_codes = [code for _, code, _ in group]
-        nb_path = _notebook_cache_path(
-            src, [md5 for _, _, md5 in group]
-        )
+        nb_path = _notebook_cache_path(src, [md5 for _, _, md5 in group])
         group_outputs = {}
         group_code_map = {}
 
@@ -2006,261 +2338,6 @@ def highlighted_code_fragments(
     return [details]
 
 
-def build_all(
-    webtex: bool = False,
-    changed_paths=None,
-    refresh_callback=None,
-    code_display: str = CODE_DISPLAY_COLLAPSED,
-):
-    if code_display not in CODE_DISPLAY_MODES:
-        raise ValueError(f"unknown code display mode: {code_display}")
-    ensure_pandoc_available()
-    ensure_pandoc_crossref()
-    ensure_template_assets(PROJECT_ROOT)
-    BUILD_DIR.mkdir(parents=True, exist_ok=True)
-    DISPLAY_DIR.mkdir(parents=True, exist_ok=True)
-    ensure_pygments_css(DISPLAY_DIR)
-    if not webtex:
-        ensure_mathjax()
-        # copy MathJax into the display tree so browsers load assets from the
-        # served directory while the staging area remains limited to fragments.
-        shutil.copytree(
-            MATHJAX_DIR, DISPLAY_DIR / "mathjax", dirs_exist_ok=True
-        )
-    # copy project configuration without the render list so individual renders
-    # don't attempt to build the entire project
-    if yaml is not None:
-        cfg = yaml.safe_load(Path("_quarto.yml").read_text())
-        if "project" in cfg and "render" in cfg["project"]:
-            cfg["project"]["render"] = []
-        (BUILD_DIR / "_quarto.yml").write_text(yaml.safe_dump(cfg))
-    else:
-        # Without PyYAML, copy the config as-is so the builder can still
-        # produce placeholder outputs.
-        (BUILD_DIR / "_quarto.yml").write_text(Path("_quarto.yml").read_text())
-    if Path("_template/obs.lua").exists():
-        shutil.copy2("_template/obs.lua", BUILD_DIR / "obs.lua")
-
-    checksums = load_checksums()
-
-    render_files = load_rendered_files()
-    bibliography, csl = load_bibliography_csl()
-    tree, roots, include_map = analyze_includes(render_files)
-    graph = RenderNotebook(
-        render_files,
-        tree,
-        include_map,
-        code_display=code_display,
-    )
-    graph.mark_outdated(checksums)
-    graph.refresh_status_tags(checksums)
-    anchors = collect_anchors(render_files, include_map)
-
-    if changed_paths:
-        # Normalize changed paths, then compute staged and display targets.
-        normalized = set()
-        config_changed = False
-        for path in changed_paths:
-            candidate = Path(path)
-            try:
-                rel = candidate.resolve().relative_to(PROJECT_ROOT)
-            except ValueError:
-                continue
-            if rel.as_posix() == "_quarto.yml":
-                config_changed = True
-                continue
-            if not candidate.exists():
-                continue
-            if rel.suffix == ".qmd":
-                normalized.add(rel.as_posix())
-
-        if config_changed:
-            for rel in graph.all_paths():
-                if (PROJECT_ROOT / rel).exists():
-                    graph.nodes[rel]["needs_build"] = True
-        build_set = set(graph.stage_targets(normalized))
-        display_targets = collect_render_targets(
-            build_set, include_map, render_files
-        )
-        for rel in build_set:
-            if rel in render_files:
-                display_targets.add(rel)
-
-        # If no source is stale but display pages are impacted, force a render
-        # into _build for those pages.
-        if not build_set and display_targets:
-            print(
-                "No source files were marked stale for changed paths; "
-                "forcing render for impacted display targets.",
-                flush=True,
-            )
-            build_set.update(display_targets)
-
-        if not build_set and not display_targets:
-            return {
-                "render_files": render_files,
-                "tree": tree,
-                "include_map": include_map,
-            }
-    else:
-        build_set = set(graph.stage_targets(None))
-        display_targets = set(render_files)
-
-    if not build_set:
-        incomplete_stage = set(graph.stage_from_incomplete())
-    else:
-        incomplete_stage = set()
-    if not build_set and incomplete_stage:
-        # If prior runs left incomplete staged HTML behind, force those files
-        # back into the _build render queue so each node can reach complete.
-        print(
-            "No source files selected, but _build html is incomplete; "
-            "forcing render for incomplete targets.",
-            flush=True,
-        )
-        build_set.update(incomplete_stage)
-        display_targets.update(
-            collect_render_targets(build_set, include_map, render_files)
-        )
-        for rel in build_set:
-            if rel in render_files:
-                display_targets.add(rel)
-
-    # Always assemble every trunk page in _display. This keeps navigation
-    # template injection consistent across all render entries, not just pages
-    # touched by the current change set.
-    display_targets.update(render_files)
-
-    # build_files and display_targets now define everything to render/refresh.
-    build_files = sorted(build_set)
-    graph.print_tree_status(checksums)
-
-    # phase 1: rebuild the modified sources into the staging tree
-    code_blocks = mirror_and_modify(build_files, anchors, roots)
-
-    def affected_display_targets(src):
-        targets = collect_render_targets({src}, include_map, render_files)
-        if src in render_files:
-            targets.add(src)
-        return targets
-
-    def notebook_progress(
-        src,
-        notebook_index,
-        cell_index,
-        state,
-        *,
-        html=None,
-        code=None,
-        cached=False,
-    ):
-        graph.notebook_progress(
-            src,
-            notebook_index,
-            cell_index,
-            state,
-            cached=cached,
-        )
-        graph.record_notebook_cell(src, cell_index, html, code)
-        if state in {"complete", "cached"}:
-            graph.apply_notebook_outputs(
-                [src], affected_display_targets(src), refresh_callback
-            )
-        graph.print_tree_status()
-
-    # Start notebook execution immediately so it can run while pandoc renders.
-    notebook_executor = None
-    notebook_future = None
-    if code_blocks:
-        notebook_executor = ThreadPoolExecutor(max_workers=1)
-        notebook_future = notebook_executor.submit(
-            execute_code_blocks,
-            code_blocks,
-            bibliography=bibliography,
-            csl=csl,
-            webtex=webtex,
-            progress_callback=notebook_progress,
-        )
-
-    order = graph.render_order()
-    render_targets = [f for f in order if f in build_set]
-    # phase 2: ensure display pages exist right away with placeholders so
-    # browsers can load content while pandoc runs.
-    graph.update_display_targets(display_targets)
-    graph.refresh_navigation(display_targets)
-    graph.refresh_if_ready(refresh_callback)
-    try:
-        if render_targets:
-            for path in render_targets:
-                graph.set_node_status(path, "pandoc …")
-            graph.print_tree_status()
-            workers = max(1, min(len(render_targets), 4))
-            future_to_target = {}
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                for f in render_targets:
-                    fragment = f not in render_files
-                    future = pool.submit(
-                        render_file,
-                        Path(f),
-                        BUILD_DIR / f,
-                        fragment,
-                        bibliography,
-                        csl,
-                        webtex,
-                    )
-                    future_to_target[future] = f
-                for future in as_completed(future_to_target):
-                    path = future_to_target[future]
-                    # Always retrieve results: silently discarded Pandoc
-                    # failures leave permanent-looking notebook placeholders.
-                    try:
-                        future.result()
-                    except BaseException:
-                        graph.set_node_status(path, "pandoc failed")
-                        graph.print_tree_status()
-                        raise
-                    graph.mark_rendered(path)
-                    graph.apply_notebook_outputs(
-                        [path],
-                        affected_display_targets(path),
-                        refresh_callback,
-                    )
-                    graph.print_tree_status()
-    except BaseException:
-        if notebook_executor:
-            # A failed build must not leave an old callback writer that can
-            # overwrite pages produced by the next watch event.
-            notebook_executor.shutdown(wait=True, cancel_futures=True)
-            notebook_executor = None
-            notebook_future = None
-        raise
-
-    # Keep Pandoc and notebooks concurrent, but do not let one build leave
-    # orphan callbacks that can overwrite a later rebuild.
-    if notebook_future:
-        graph.handle_notebook_future(
-            notebook_future,
-            notebook_executor,
-            build_files,
-            display_targets,
-            refresh_callback,
-        )
-        notebook_executor = None
-        notebook_future = None
-
-    # Only commit source hashes after every producer completed successfully.
-    graph.update_checksums(checksums)
-    save_checksums(checksums)
-
-    graph.print_tree_status()
-
-    return {
-        "render_files": render_files,
-        "tree": tree,
-        "include_map": include_map,
-    }
-
-
 class BrowserReloader:
     def __init__(self, url: str):
         self.url = url
@@ -2294,9 +2371,8 @@ class BrowserReloader:
 
 
 class ChangeHandler(FileSystemEventHandler):
-    def __init__(self, build_func, refresher):
+    def __init__(self, build_func):
         self.build = build_func
-        self.refresher = refresher
 
     def handle(self, path, is_directory):
         source_path = Path(path)
@@ -2310,7 +2386,6 @@ class ChangeHandler(FileSystemEventHandler):
         ):
             print(f"Change detected: {path}")
             self.build(path)
-            self.refresher.refresh()
 
     def on_modified(self, event):
         self.handle(event.src_path, event.is_directory)
@@ -2320,6 +2395,9 @@ class ChangeHandler(FileSystemEventHandler):
 
     def on_moved(self, event):
         self.handle(event.dest_path, event.is_directory)
+
+    def on_deleted(self, event):
+        self.handle(event.src_path, event.is_directory)
 
 
 def _serve_forever(httpd: ThreadingHTTPServer):
@@ -2332,11 +2410,12 @@ def watch_and_serve(
     webtex: bool = False,
     code_display: str = CODE_DISPLAY_COLLAPSED,
 ):
+    machine = RenderNotebook.from_project(code_display=code_display)
     if no_browser:
         # In headless scenarios we only need the build artifacts and can exit
         # immediately instead of launching a server loop that waits for a
         # browser connection.
-        return build_all(webtex=webtex, code_display=code_display)
+        return machine.build(webtex=webtex)
     port = 8000
     render_files = load_rendered_files()
 
@@ -2366,7 +2445,7 @@ def watch_and_serve(
 
     def serialized_build(**kwargs):
         with build_lock:
-            return build_all(**kwargs)
+            return machine.build(**kwargs)
 
     # Launch the initial build asynchronously so the browser opens immediately.
     initial_executor = ThreadPoolExecutor(max_workers=1)
@@ -2374,7 +2453,6 @@ def watch_and_serve(
         serialized_build,
         webtex=webtex,
         refresh_callback=refresher.refresh,
-        code_display=code_display,
     )
     if Observer is None:
         raise ImportError(
@@ -2406,10 +2484,9 @@ def watch_and_serve(
             webtex=webtex,
             changed_paths=[path],
             refresh_callback=refresher.refresh,
-            code_display=code_display,
         )
 
-    handler = ChangeHandler(rebuild, refresher)
+    handler = ChangeHandler(rebuild)
     observer.schedule(handler, str(PROJECT_ROOT), recursive=True)
     observer.start()
     try:
