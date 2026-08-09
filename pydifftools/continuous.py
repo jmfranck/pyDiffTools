@@ -430,6 +430,10 @@ class Handler(FileSystemEventHandler):
         if os.path.normpath(
             os.path.abspath(event.src_path)
         ) == os.path.normpath(os.path.abspath(self.filename)):
+            # The watcher loop will shut down after a closed window is noticed.
+            # Do not rebuild or relaunch Chrome in the observer-thread race.
+            if not browser_window_is_alive(self.chrome):
+                return
             run_pandoc(
                 self.filename,
                 self.html_file,
@@ -444,8 +448,8 @@ class Handler(FileSystemEventHandler):
                     "I'm quitting!! You probably suspended the computer, which"
                     " seems to freak selenium out.  Just restart"
                 )
-                self.chrome.quit()
-                self.init_chrome()
+                close_browser_window(self.chrome)
+                self.chrome = None
 
     def append_autorefresh(self):
         with open(self.html_file, "r", encoding="utf-8") as fp:

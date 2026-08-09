@@ -13,9 +13,12 @@ from pydifftools.command_line import mfs
 from pydifftools.command_registry import _COMMAND_SPECS
 from pydifftools.git_gd import (
     DiffEntry,
+    IMAGE_DIFFTOOL_NAME,
     INSTALL_ALIAS_VALUE,
+    build_image_difftool_command,
     build_difftool_command,
     build_entries,
+    is_raster_image_entry,
 )
 
 
@@ -519,6 +522,51 @@ def test_gd_difftool_command_wraps_renames_for_merged_side():
         "--",
         "old.txt",
         "new.txt",
+    ]
+
+
+def test_gd_routes_common_raster_extensions_to_image_viewer():
+    for path in ("plot.png", "photo.JPG", "scan.tiff", "figure.webp"):
+        assert is_raster_image_entry(
+            DiffEntry(path=path, added=None, deleted=None)
+        )
+
+    assert not is_raster_image_entry(
+        DiffEntry(path="notes.txt", added=1, deleted=1)
+    )
+    assert not is_raster_image_entry(
+        DiffEntry(
+            path="notes.txt",
+            added=1,
+            deleted=1,
+            status="R050",
+            old_path="plot.png",
+            new_path="notes.txt",
+        )
+    )
+
+
+def test_gd_builds_private_image_difftool_command():
+    entry = DiffEntry(path="plot name.png", added=None, deleted=None)
+
+    cmd = build_image_difftool_command(["--cached"], entry)
+
+    assert cmd[:3] == [
+        "git",
+        "-c",
+        cmd[2],
+    ]
+    assert cmd[2].startswith(f"difftool.{IMAGE_DIFFTOOL_NAME}.cmd=")
+    assert "pydifftools.git_gd_image" in cmd[2]
+    assert '"$LOCAL" "$REMOTE"' in cmd[2]
+    assert cmd[3:] == [
+        "difftool",
+        f"--tool={IMAGE_DIFFTOOL_NAME}",
+        "--no-prompt",
+        "--find-renames",
+        "--cached",
+        "--",
+        "plot name.png",
     ]
 
 

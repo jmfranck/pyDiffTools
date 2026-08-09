@@ -1,8 +1,10 @@
 import base64
 import os
+import re
 import shutil
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from email.message import Message
 from pathlib import Path
 
@@ -14,19 +16,29 @@ import pydifftools.notebook.fast_build as fast_build
 
 @pytest.fixture
 def fb(tmp_path, monkeypatch):
+    path_names = (
+        "PROJECT_ROOT",
+        "BUILD_DIR",
+        "DISPLAY_DIR",
+        "BODY_TEMPLATE",
+        "PANDOC_TEMPLATE",
+        "NAV_TEMPLATE",
+        "MATHJAX_DIR",
+    )
+    original_paths = {
+        name: getattr(fast_build, name) for name in path_names
+    }
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PYDIFFTOOLS_FAKE_MATHJAX", "1")
     fast_build.qmdinit(tmp_path, force=True)
-    original_load_bibliography_csl = fast_build.load_bibliography_csl
-    fast_build.load_bibliography_csl = lambda: (None, None)
-    original_build = fast_build.BUILD_DIR
-    original_display = fast_build.DISPLAY_DIR
+    monkeypatch.setattr(
+        fast_build, "load_bibliography_csl", lambda: (None, None)
+    )
     try:
         yield fast_build
     finally:
-        fast_build.load_bibliography_csl = original_load_bibliography_csl
-        fast_build.BUILD_DIR = original_build
-        fast_build.DISPLAY_DIR = original_display
+        for name, value in original_paths.items():
+            setattr(fast_build, name, value)
 
 
 def test_load_bibliography_csl_reads_project_block(tmp_path, monkeypatch):
@@ -117,7 +129,17 @@ def test_missing_include_error(fb, tmp_path):
         fb.analyze_includes([src.as_posix()])
 
 
-def test_build_all_includes(fb):
+def test_build_all_includes(fb, monkeypatch):
+    def execute(blocks, **_kwargs):
+        outputs = {}
+        codes = {}
+        for src, cells in blocks.items():
+            for index, (code, *_rest) in enumerate(cells, start=1):
+                outputs[(src, index)] = "<pre>TEST_OUTPUT</pre>"
+                codes[(src, index)] = code
+        return outputs, codes
+
+    monkeypatch.setattr(fb, "execute_code_blocks", execute)
     shutil.rmtree("_build", ignore_errors=True)
     fb.build_all()
     assert Path("_build/project1/subproject1/tasks.html").exists()
@@ -382,15 +404,9 @@ def test_generated_markdown_output_renders_in_build(fb):
     fb.build_all()
 
     html_path = Path("_display/generated_markdown.html")
-    deadline = time.time() + 8
-    html = ""
-    while time.time() < deadline:
-        if html_path.exists():
-            html = html_path.read_text()
-            if "Running notebook" not in html and "Generated" in html:
-                break
-        time.sleep(0.2)
+    html = html_path.read_text()
 
+    assert "Running notebook" not in html
     assert "<IPython.core.display.Markdown object>" not in html
     assert '<h2 id="generated">Generated</h2>' in html
     assert "math inline" in html
@@ -506,22 +522,45 @@ def test_dev_server_handler_disables_conditional_cache(fb, monkeypatch):
     assert ("Expires", "0") in sent_headers
 
 
-def test_navigation_persists_after_notebook_updates(fb):
+def test_navigation_persists_after_notebook_updates(fb, monkeypatch):
+    qmd = Path("navigation_update.qmd")
+    qmd.write_text("# Navigation update\n\n```python\nprint('one')\n```\n")
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    config["project"]["render"] = [qmd.as_posix()]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    def execute(blocks, progress_callback=None, **_kwargs):
+        src = next(iter(blocks))
+        html = "<pre>INITIAL_OUTPUT</pre>"
+        code = "print('one')"
+        progress_callback(src, 1, 1, "running")
+        progress_callback(
+            src, 1, 1, "complete", html=html, code=code
+        )
+        return {(src, 1): html}, {(src, 1): code}
+
+    monkeypatch.setattr(fb, "execute_code_blocks", execute)
     fb.build_all()
     render_files = fb.load_rendered_files()
-    assert render_files
-    target = (Path("_display") / render_files[0]).with_suffix(".html")
+    target = Path("_display/navigation_update.html")
     assert "on-this-page" in target.read_text()
 
     tree, _, include_map = fb.analyze_includes(render_files)
     graph = fb.RenderNotebook(render_files, tree, include_map)
-    graph.record_notebook_outputs({}, {})
-    graph.apply_notebook_outputs([], set(render_files), None)
+    graph.mark_rendered(qmd.as_posix())
+    graph.record_notebook_cell(
+        qmd.as_posix(), 1, "<pre>UPDATED_OUTPUT</pre>", "print('two')"
+    )
+    graph.apply_notebook_outputs(
+        [qmd.as_posix()], {qmd.as_posix()}, None
+    )
 
-    assert "on-this-page" in target.read_text()
+    html = target.read_text()
+    assert "UPDATED_OUTPUT" in html
+    assert "on-this-page" in html
 
 
-def test_refresh_callback_never_sees_menu_less_page(fb):
+def test_refresh_callback_never_sees_menu_less_page(fb, monkeypatch):
     qmd = Path("menu_guard.qmd")
     qmd.write_text(
         "# Menu guard\n\n" "```{python}\n" "print('menu guard')\n" "```\n"
@@ -531,6 +570,18 @@ def test_refresh_callback_never_sees_menu_less_page(fb):
         config["project"] = {}
     config["project"]["render"] = ["menu_guard.qmd"]
     Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    def execute(blocks, progress_callback=None, **_kwargs):
+        src = next(iter(blocks))
+        html = "<pre>MENU_GUARD_OUTPUT</pre>"
+        code = "print('menu guard')"
+        progress_callback(src, 1, 1, "running")
+        progress_callback(
+            src, 1, 1, "complete", html=html, code=code
+        )
+        return {(src, 1): html}, {(src, 1): code}
+
+    monkeypatch.setattr(fb, "execute_code_blocks", execute)
 
     refresh_states = []
 
@@ -558,6 +609,87 @@ def test_all_render_targets_receive_navigation_template(fb):
     for page in ["first_page", "second_page"]:
         html = Path(f"_display/{page}.html").read_text()
         assert "on-this-page" in html
+
+
+def test_incremental_navigation_only_rewrites_affected_pages(fb, monkeypatch):
+    render_files = ["first.qmd", "second.qmd"]
+    for qmd in render_files:
+        Path(qmd).write_text(f"# {qmd}\n")
+        html = (fb.DISPLAY_DIR / qmd).with_suffix(".html")
+        html.parent.mkdir(parents=True, exist_ok=True)
+        html.write_text("<html><body></body></html>")
+
+    graph = fb.RenderNotebook(render_files, {}, {})
+    updated = []
+    monkeypatch.setattr(
+        fb,
+        "add_navigation",
+        lambda _html, _pages, current: updated.append(current),
+    )
+
+    graph.refresh_navigation({"first.qmd"})
+
+    assert updated == ["first.qmd"]
+
+
+def test_pandoc_failure_is_propagated(fb, monkeypatch):
+    Path("broken.qmd").write_text("# Broken\n")
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    config["project"]["render"] = ["broken.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+    monkeypatch.setattr(fb, "ensure_pandoc_available", lambda: None)
+    monkeypatch.setattr(fb, "ensure_pandoc_crossref", lambda: None)
+
+    def fail_render(*_args, **_kwargs):
+        raise RuntimeError("pandoc exploded")
+
+    monkeypatch.setattr(fb, "render_file", fail_render)
+
+    with pytest.raises(RuntimeError, match="pandoc exploded"):
+        fb.build_all()
+
+    checksums = Path("_build/checksums.json")
+    assert not checksums.exists() or "broken.qmd" not in checksums.read_text()
+
+
+def test_pandoc_failure_does_not_leave_notebook_writer(fb, monkeypatch):
+    Path("failed_with_notebook.qmd").write_text(
+        "# Broken\n\n```python\nprint('notebook')\n```\n"
+    )
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    config["project"]["render"] = ["failed_with_notebook.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+    notebook_started = threading.Event()
+    pandoc_failed = threading.Event()
+    release_notebook = threading.Event()
+
+    def execute(*_args, **_kwargs):
+        notebook_started.set()
+        assert release_notebook.wait(5)
+        return {}, {}
+
+    def fail_render(*_args, **_kwargs):
+        pandoc_failed.set()
+        raise RuntimeError("pandoc exploded")
+
+    monkeypatch.setattr(fb, "ensure_pandoc_available", lambda: None)
+    monkeypatch.setattr(fb, "ensure_pandoc_crossref", lambda: None)
+    monkeypatch.setattr(fb, "execute_code_blocks", execute)
+    monkeypatch.setattr(fb, "render_file", fail_render)
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    build_future = pool.submit(fb.build_all)
+    try:
+        assert notebook_started.wait(5)
+        assert pandoc_failed.wait(5)
+        assert not build_future.done()
+    finally:
+        release_notebook.set()
+    try:
+        with pytest.raises(RuntimeError, match="pandoc exploded"):
+            build_future.result(timeout=5)
+    finally:
+        pool.shutdown(wait=True)
 
 
 def test_quarto_config_change_rebuilds_every_graph_file(fb, monkeypatch):
@@ -649,9 +781,7 @@ def test_noexec_magic_marks_block_without_execution(fb, tmp_path, monkeypatch):
     assert "%noexec" in code_map[("doc.qmd", 1)]
 
 
-def test_notebook_progress_message_includes_notebook_index(
-    fb, capsys, monkeypatch
-):
+def test_notebook_progress_callback_and_kernel_environment(fb, monkeypatch):
     class DummyKernel:
         def kernel_info(self):
             return None
@@ -668,52 +798,58 @@ def test_notebook_progress_message_includes_notebook_index(
             return False
 
     monkeypatch.setattr(
-        fb.LoggingExecutePreprocessor,
+        fb.ProgressExecutePreprocessor,
         "reset_execution_trackers",
         lambda self: None,
     )
     monkeypatch.setattr(
-        fb.LoggingExecutePreprocessor,
+        fb.ProgressExecutePreprocessor,
         "_check_assign_resources",
         lambda self, resources: setattr(self, "resources", resources),
     )
+    def setup_kernel(preprocessor, **kwargs):
+        captured["env"] = kwargs["env"]
+        return DummySetupKernel(preprocessor)
+
     monkeypatch.setattr(
-        fb.LoggingExecutePreprocessor,
-        "setup_kernel",
-        lambda self: DummySetupKernel(self),
+        fb.ProgressExecutePreprocessor, "setup_kernel", setup_kernel
     )
     monkeypatch.setattr(
-        fb.LoggingExecutePreprocessor,
+        fb.ProgressExecutePreprocessor,
         "wait_for_reply",
         lambda self, reply: {"content": {"language_info": {}}},
     )
     monkeypatch.setattr(
-        fb.LoggingExecutePreprocessor,
+        fb.ProgressExecutePreprocessor,
         "preprocess_cell",
         lambda self, cell, resources, index: None,
     )
     monkeypatch.setattr(
-        fb.LoggingExecutePreprocessor,
+        fb.ProgressExecutePreprocessor,
         "set_widgets_metadata",
         lambda self: None,
     )
 
     nb = fb.nbformat.v4.new_notebook()
     nb.cells = [fb.nbformat.v4.new_code_cell("print('A')")]
-    ep = fb.LoggingExecutePreprocessor()
+    captured = {}
+    events = []
+    ep = fb.ProgressExecutePreprocessor()
+    ep.cell_callback = lambda state, index, _cell: events.append(
+        (state, index)
+    )
     ep.preprocess(
         nb,
         {
             "metadata": {
                 "source": "split_notebook.qmd",
                 "notebook_index": 1,
-                "notebook_total": 2,
             }
         },
     )
 
-    logs = capsys.readouterr().out
-    assert "of notebook 1/2 from split_notebook.qmd" in logs
+    assert events == [("running", 0), ("complete", 0)]
+    assert captured["env"]["PYDEVD_DISABLE_FILE_VALIDATION"] == "1"
 
 
 def test_execute_code_blocks_uses_project_root_cache_dir(
@@ -729,7 +865,7 @@ def test_execute_code_blocks_uses_project_root_cache_dir(
         return nb, resources
 
     monkeypatch.setattr(
-        fb.LoggingExecutePreprocessor,
+        fb.ProgressExecutePreprocessor,
         "preprocess",
         fake_preprocess,
     )
@@ -743,88 +879,169 @@ def test_execute_code_blocks_uses_project_root_cache_dir(
     assert not (other_cwd / "_nbcache").exists()
 
 
-def test_async_notebook_outputs_replace_placeholder(fb):
-    # Slow notebook execution in a controlled way so the test can reliably
-    # observe the red placeholder first and then the final output.
-    def delayed_execute_code_blocks(blocks):
-        time.sleep(2)
-        outputs = {}
-        code_map = {}
-        for src in blocks:
-            outputs[(src, 1)] = "<pre>NOTEBOOK_OUTPUT_MARKER</pre>"
-            code_map[(src, 1)] = "import time"
-        return outputs, code_map
+def test_reset_chunks_reuse_cache_independently(fb, monkeypatch):
+    events = []
 
-    fb.execute_code_blocks = delayed_execute_code_blocks
+    def fake_preprocess(self, nb, resources=None, km=None):
+        for index, cell in enumerate(nb.cells):
+            self.cell_callback("running", index, cell)
+            cell.outputs = [
+                fb.nbformat.v4.new_output(
+                    output_type="stream", name="stdout", text="done\n"
+                )
+            ]
+            self.cell_callback("complete", index, cell)
+        return nb, resources
 
-    qmd = Path("async_test.qmd")
+    monkeypatch.setattr(
+        fb.ProgressExecutePreprocessor, "preprocess", fake_preprocess
+    )
+    original = {
+        "split.qmd": [
+            ("print('first')", "first-hash", False),
+            ("%reset -f\nprint('second')", "second-hash", False),
+        ]
+    }
+    fb.execute_code_blocks(original)
+
+    changed = {
+        "split.qmd": [
+            ("print('first')", "first-hash", False),
+            ("%reset -f\nprint('changed')", "changed-hash", False),
+        ]
+    }
+    fb.execute_code_blocks(
+        changed,
+        progress_callback=(
+            lambda src, notebook, cell, state, **kwargs: events.append(
+                (src, notebook, cell, state)
+            )
+        ),
+    )
+
+    assert ("split.qmd", 1, 1, "cached") in events
+    assert ("split.qmd", 1, 1, "running") not in events
+    assert ("split.qmd", 2, 2, "running") in events
+    assert ("split.qmd", 2, 2, "complete") in events
+
+
+def test_tree_shows_notebook_cell_states_on_source_line(fb):
+    qmd = Path("tree_notebooks.qmd")
     qmd.write_text(
-        "# Async test\n\n"
-        "```{python}\n"
-        "import time\n"
-        "time.sleep(2)\n"
-        "print('async done')\n"
-        "```\n"
+        "```python\nprint('one')\n```\n"
+        "```python\nprint('two')\n```\n"
+        "```python\n%reset -f\nprint('three')\n```\n"
+    )
+    graph = fb.RenderNotebook(
+        [qmd.as_posix()], {qmd.as_posix(): []}, {}
+    )
+    graph.notebook_progress(qmd.as_posix(), 1, 1, "complete", cached=True)
+    graph.notebook_progress(qmd.as_posix(), 1, 2, "running")
+
+    tree = str(graph)
+    assert re.search(r"n\.b\. #1\(✓… \d{1,2}:\d{2}:\d{2}\.\d{2}\)", tree)
+    assert "n.b. #2(✗)" in tree
+    assert "\n    n.b." not in tree
+
+    graph.notebook_progress(qmd.as_posix(), 2, 3, "complete", cached=True)
+    assert "n.b. #2(✓ cached)" in str(graph)
+
+
+def test_tree_does_not_mark_changed_cell_complete_from_old_html(fb):
+    qmd = Path("changed_cell.qmd")
+    old_code = "print('old')\n"
+    qmd.write_text(f"```python\n{old_code}```\n")
+    old_hash = fb.hashlib.md5(old_code.encode()).hexdigest()
+    staged = Path("_build/changed_cell.html")
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_text(
+        '<div data-script="changed_cell.qmd" data-index="1" '
+        f'data-md5="{old_hash}" data-output-state="complete">old</div>'
+    )
+    qmd.write_text("```python\nprint('new')\n```\n")
+
+    graph = fb.RenderNotebook([qmd.as_posix()], {qmd.as_posix(): []}, {})
+
+    assert "n.b. #1(✗)" in str(graph)
+
+
+def test_notebook_cells_replace_placeholders_incrementally(
+    fb, monkeypatch
+):
+    first_complete = threading.Event()
+    finish_second = threading.Event()
+
+    def streaming_execute(blocks, progress_callback=None, **_kwargs):
+        outputs = {}
+        codes = {}
+        src = next(iter(blocks))
+        for index, marker in [(1, "FIRST_OUTPUT"), (2, "SECOND_OUTPUT")]:
+            progress_callback(src, 1, index, "running")
+            outputs[(src, index)] = f"<pre>{marker}</pre>"
+            codes[(src, index)] = f"print('{marker}')"
+            progress_callback(
+                src,
+                1,
+                index,
+                "complete",
+                html=outputs[(src, index)],
+                code=codes[(src, index)],
+            )
+            if index == 1:
+                first_complete.set()
+                assert finish_second.wait(5)
+        return outputs, codes
+
+    monkeypatch.setattr(fb, "execute_code_blocks", streaming_execute)
+    Path("incremental.qmd").write_text(
+        "# Incremental\n\n"
+        "```python\nprint('first')\n```\n\n"
+        "```python\nprint('second')\n```\n"
     )
     config = yaml.safe_load(Path("_quarto.yml").read_text())
-    if "project" not in config:
-        config["project"] = {}
-    # Keep this render list focused so the test validates a single async page.
-    config["project"]["render"] = ["async_test.qmd"]
+    config["project"]["render"] = ["incremental.qmd"]
     Path("_quarto.yml").write_text(yaml.safe_dump(config))
 
-    # Trigger the build in the background so we can observe the placeholder
-    # before notebook execution completes.
-    build_thread = threading.Thread(target=fb.build_all)
-    build_thread.start()
-
-    display_file = Path("_display/async_test.html")
-    # Poll the display output and require the expected sequence: placeholder
-    # first, then final notebook output.
-    placeholder_seen = False
-    found_output = False
-    deadline = time.time() + 4
-    while time.time() < deadline:
-        if display_file.exists():
-            html = display_file.read_text()
-            if "Running notebook" in html:
-                placeholder_seen = True
-            if placeholder_seen and "Running notebook" not in html:
-                if "NOTEBOOK_OUTPUT_MARKER" in html:
-                    found_output = True
+    pool = ThreadPoolExecutor(max_workers=1)
+    build_future = pool.submit(fb.build_all)
+    try:
+        assert first_complete.wait(5)
+        display = Path("_display/incremental.html")
+        deadline = time.time() + 5
+        partial = ""
+        while time.time() < deadline:
+            if display.exists():
+                partial = display.read_text()
+                if (
+                    "FIRST_OUTPUT" in partial
+                    and "Running notebook" in partial
+                ):
                     break
-        time.sleep(0.5)
+            time.sleep(0.1)
+        assert "FIRST_OUTPUT" in partial
+        assert "SECOND_OUTPUT" not in partial
+        assert "Running notebook" in partial
+    finally:
+        finish_second.set()
+    try:
+        build_future.result(timeout=5)
+    finally:
+        pool.shutdown(wait=True)
 
-    build_thread.join()
-
-    # The build thread may finish just before the callback writes refreshed
-    # output, so allow a short follow-up window to observe the final page.
-    output_deadline = time.time() + 4
-    while not found_output and time.time() < output_deadline:
-        if display_file.exists():
-            html = display_file.read_text()
-            if (
-                "NOTEBOOK_OUTPUT_MARKER" in html
-                and "Running notebook" not in html
-            ):
-                found_output = True
-                break
-        time.sleep(0.2)
-
-    assert placeholder_seen
-    assert found_output
+    final = display.read_text()
+    assert "FIRST_OUTPUT" in final
+    assert "SECOND_OUTPUT" in final
+    assert "Running notebook" not in final
 
 
 def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(
-    fb, capsys
+    fb, capsys, monkeypatch
 ):
     # Build once so checksums reflect a clean tree.
     qmd = Path("async_pending.qmd")
     qmd.write_text(
         "# Async pending test\n\n"
         "```{python}\n"
-        "import time\n"
-        "time.sleep(2)\n"
         "print('async pending done')\n"
         "```\n"
     )
@@ -833,6 +1050,27 @@ def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(
         config["project"] = {}
     config["project"]["render"] = ["async_pending.qmd"]
     Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    execution_count = 0
+
+    def execute(blocks, progress_callback=None, **_kwargs):
+        nonlocal execution_count
+        execution_count += 1
+        src = next(iter(blocks))
+        marker = (
+            "INITIAL_OUTPUT"
+            if execution_count == 1
+            else "PENDING_REBUILD_OUTPUT"
+        )
+        html = f"<pre>{marker}</pre>"
+        code = "print('async pending done')"
+        progress_callback(src, 1, 1, "running")
+        progress_callback(
+            src, 1, 1, "complete", html=html, code=code
+        )
+        return {(src, 1): html}, {(src, 1): code}
+
+    monkeypatch.setattr(fb, "execute_code_blocks", execute)
     fb.build_all()
 
     # Simulate the failing state: stale staged/display HTML still contains a
@@ -846,42 +1084,19 @@ def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(
     Path("_build/async_pending.html").write_text(pending_html)
     Path("_display/async_pending.html").write_text(pending_html)
 
-    def delayed_execute_code_blocks(blocks):
-        time.sleep(2)
-        outputs = {}
-        code_map = {}
-        for src in blocks:
-            outputs[(src, 1)] = "<pre>PENDING_REBUILD_OUTPUT</pre>"
-            code_map[(src, 1)] = "import time"
-        return outputs, code_map
-
-    fb.execute_code_blocks = delayed_execute_code_blocks
     fb.build_all()
 
     logs = capsys.readouterr().out
-    assert (
-        "Build plan: 1 source file(s) to render into _build, "
-        "1 display target(s) to assemble from _build." in logs
-    )
+    assert "Build tree:" in logs
+    assert "n.b. #1(" in logs
+    assert "Build plan:" not in logs
+    assert "Executing cell" not in logs
+    assert "Generating notebook" not in logs
 
-    build_html = ""
-    display_html = ""
-    deadline = time.time() + 4
-    while time.time() < deadline:
-        build_html = Path("_build/async_pending.html").read_text()
-        display_html = Path("_display/async_pending.html").read_text()
-        build_has_output = "PENDING_REBUILD_OUTPUT" in build_html
-        display_has_output = "PENDING_REBUILD_OUTPUT" in display_html
-        if (
-                build_has_output
-                and display_has_output
-                and "Running notebook" not in build_html
-                and "Running notebook" not in display_html
-                and "on-this-page" in display_html
-            ):
-                break
-        time.sleep(0.2)
+    build_html = Path("_build/async_pending.html").read_text()
+    display_html = Path("_display/async_pending.html").read_text()
 
+    assert execution_count == 2
     assert "PENDING_REBUILD_OUTPUT" in build_html
     assert "PENDING_REBUILD_OUTPUT" in display_html
     assert "Running notebook" not in build_html
@@ -889,7 +1104,7 @@ def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(
     assert "on-this-page" in display_html
 
 
-def test_render_notebook_status_tags_and_tree_output(fb):
+def test_render_notebook_status_tags_and_tree_output(fb, monkeypatch):
     # Build a one-page render target and then replace the staged html with
     # unresolved notebook placeholders and stale child html to exercise state
     # tagging.
@@ -907,6 +1122,18 @@ def test_render_notebook_status_tags_and_tree_output(fb):
         config["project"] = {}
     config["project"]["render"] = ["status_tags.qmd"]
     Path("_quarto.yml").write_text(yaml.safe_dump(config))
+
+    def execute(blocks, progress_callback=None, **_kwargs):
+        src = next(iter(blocks))
+        html = "<pre>STATUS_OUTPUT</pre>"
+        code = "print('hello')"
+        progress_callback(src, 1, 1, "running")
+        progress_callback(
+            src, 1, 1, "complete", html=html, code=code
+        )
+        return {(src, 1): html}, {(src, 1): code}
+
+    monkeypatch.setattr(fb, "execute_code_blocks", execute)
     fb.build_all()
 
     pending_html = (

@@ -6,3 +6,5 @@ dist/
 *.egg-info/
 pydifftools/tags
 data_files.csv
+.codex
+.vscode/

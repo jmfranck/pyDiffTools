@@ -19,7 +19,11 @@ from PySide6.QtWidgets import (
 if TYPE_CHECKING:
     from .git_gd import DiffEntry
 
-from .git_gd import build_difftool_command
+from .git_gd import (
+    build_difftool_command,
+    build_image_difftool_command,
+    is_raster_image_entry,
+)
 
 
 class DiffModel(QAbstractTableModel):
@@ -74,10 +78,7 @@ class DiffModel(QAbstractTableModel):
                     if entry.has_multiline_display_path
                     else Qt.AlignmentFlag.AlignVCenter
                 )
-                return int(
-                    Qt.AlignmentFlag.AlignHCenter
-                    | vertical_alignment
-                )
+                return int(Qt.AlignmentFlag.AlignHCenter | vertical_alignment)
             return int(
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
             )
@@ -221,9 +222,7 @@ class DiffTable(QTableView):
             QHeaderView.ResizeMode.Fixed
         )
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
@@ -311,7 +310,10 @@ class DiffWindow(QWidget):
         self.model.mark_seen(row)
         self._update_title()
 
-        cmd = build_difftool_command(self.diff_args, entry)
+        if is_raster_image_entry(entry):
+            cmd = build_image_difftool_command(self.diff_args, entry)
+        else:
+            cmd = build_difftool_command(self.diff_args, entry)
 
         try:
             subprocess.Popen(cmd)

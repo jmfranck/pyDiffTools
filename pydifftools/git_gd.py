@@ -15,6 +15,7 @@ This command shells out to ``git difftool --tool=mygvim``, so keep
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -26,6 +27,19 @@ from .command_registry import register_command
 INSTALL_ALIAS_VALUE = '!f() { pydifft gd "$@"; }; f'
 DIFFTOOL_NAME = "mygvim"
 RENAME_DIFFTOOL_NAME = "pydifft-gd-rename"
+IMAGE_DIFFTOOL_NAME = "pydifft-gd-image"
+RASTER_IMAGE_SUFFIXES = frozenset(
+    {
+        ".bmp",
+        ".gif",
+        ".jpeg",
+        ".jpg",
+        ".png",
+        ".tif",
+        ".tiff",
+        ".webp",
+    }
+)
 
 
 @dataclass
@@ -226,6 +240,44 @@ def configured_difftool_command(tool_name: str = DIFFTOOL_NAME) -> str | None:
     return tool_cmd.stdout.strip() or None
 
 
+def is_raster_image_entry(entry: DiffEntry) -> bool:
+    """Return whether every path represented by *entry* is a raster image."""
+
+    return all(
+        Path(path).suffix.lower() in RASTER_IMAGE_SUFFIXES
+        for path in entry.diff_paths
+    )
+
+
+def build_image_difftool_command(
+    diff_args: Sequence[str], entry: DiffEntry
+) -> list[str]:
+    """Build a Git difftool invocation for the private Qt image viewer."""
+
+    helper_cmd = " ".join(
+        [
+            shlex.quote(sys.executable),
+            "-m",
+            "pydifftools.git_gd_image",
+            shlex.quote(f"--title={entry.display_path}"),
+            '"$LOCAL"',
+            '"$REMOTE"',
+        ]
+    )
+    return [
+        "git",
+        "-c",
+        f"difftool.{IMAGE_DIFFTOOL_NAME}.cmd={helper_cmd}",
+        "difftool",
+        f"--tool={IMAGE_DIFFTOOL_NAME}",
+        "--no-prompt",
+        "--find-renames",
+        *diff_args,
+        "--",
+        *entry.diff_paths,
+    ]
+
+
 def build_difftool_command(
     diff_args: Sequence[str],
     entry: DiffEntry,
@@ -339,8 +391,10 @@ def main(argv: Sequence[str]) -> int:
     "This command shells out to git difftool --tool=mygvim, so keep\n"
     "difftool.mygvim.cmd configured in your git config.",
     help={
-        "install": "Install or update the global git alias so `git gd` "
-        "runs this subcommand.",
+        "install": (
+            "Install or update the global git alias so `git gd` "
+            "runs this subcommand."
+        ),
     },
 )
 def gd(arguments, install=False):
