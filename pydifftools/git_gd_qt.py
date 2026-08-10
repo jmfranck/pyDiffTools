@@ -4,7 +4,17 @@ import subprocess
 import sys
 from typing import TYPE_CHECKING, Sequence
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSize, Qt
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QModelIndex,
+    QObject,
+    QRunnable,
+    QSize,
+    Qt,
+    QThread,
+    QThreadPool,
+    Signal,
+)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter
 from PySide6.QtWidgets import (
     QApplication,
@@ -22,12 +32,50 @@ if TYPE_CHECKING:
 from .git_gd import (
     build_difftool_command,
     build_image_difftool_command,
+    diff_entry_sort_key,
     is_raster_image_entry,
+    run_image_score,
 )
 
 
+def _delta_text(entry: "DiffEntry") -> str:
+    if is_raster_image_entry(entry):
+        if entry.rgb_score is not None and entry.alpha_score is not None:
+            return f"rgb {entry.rgb_score:.1f} a {entry.alpha_score:.1f}"
+        if entry.image_score_error is not None:
+            return "rgb ? a ?"
+        return "rgb … a …"
+    if entry.added is None or entry.deleted is None:
+        return "binary"
+    return f"-{entry.deleted} / +{entry.added}"
+
+
+class ImageScoreSignals(QObject):
+    finished = Signal(object, object, object, object)
+
+
+class ImageScoreWorker(QRunnable):
+    def __init__(self, diff_args: Sequence[str], entry: "DiffEntry"):
+        super().__init__()
+        self.diff_args = list(diff_args)
+        self.entry = entry
+        self.signals = ImageScoreSignals()
+
+    def run(self):
+        try:
+            rgb_score, alpha_score = run_image_score(
+                self.diff_args, self.entry
+            )
+        except Exception as exc:
+            self.signals.finished.emit(self.entry, None, None, str(exc))
+            return
+        self.signals.finished.emit(
+            self.entry, rgb_score, alpha_score, None
+        )
+
+
 class DiffModel(QAbstractTableModel):
-    headers = ["Seen", "Δlines", "File"]
+    headers = ["Seen", "Δ", "File"]
 
     def __init__(self, entries: list["DiffEntry"]):
         super().__init__()
@@ -65,9 +113,7 @@ class DiffModel(QAbstractTableModel):
                     return "R100%"
                 return "✓" if entry.seen else "☐"
             if col == 1:
-                if entry.added is None or entry.deleted is None:
-                    return "binary"
-                return f"-{entry.deleted} / +{entry.added}"
+                return _delta_text(entry)
             if col == 2:
                 return entry.display_path
 
@@ -82,6 +128,9 @@ class DiffModel(QAbstractTableModel):
             return int(
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
             )
+
+        if role == Qt.ItemDataRole.ToolTipRole and col == 1:
+            return entry.image_score_error
 
         return None
 
@@ -126,6 +175,18 @@ class DeltaDelegate(QStyledItemDelegate):
         )
 
         rect = option.rect.adjusted(6, 0, -6, 0)
+        if is_raster_image_entry(entry):
+            painter.setPen(option.palette.color(option.palette.ColorRole.Text))
+            painter.drawText(
+                rect,
+                int(
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+                ),
+                _delta_text(entry),
+            )
+            painter.restore()
+            return
+
         if entry.added is None or entry.deleted is None:
             painter.setPen(option.palette.color(option.palette.ColorRole.Text))
             painter.drawText(
@@ -199,10 +260,7 @@ class DeltaDelegate(QStyledItemDelegate):
         size = super().sizeHint(option, index)
         entry = index.model().entries[index.row()]
         fm = QFontMetrics(self.font)
-        if entry.added is None or entry.deleted is None:
-            w = fm.horizontalAdvance("binary") + 16
-        else:
-            w = fm.horizontalAdvance(f"-{entry.deleted} / +{entry.added}") + 16
+        w = fm.horizontalAdvance(_delta_text(entry)) + 16
         h = max(size.height(), fm.height() + 6)
         return QSize(w, h)
 
@@ -239,11 +297,17 @@ class DiffWindow(QWidget):
         repo_name: str,
         diff_args: Sequence[str],
         entries: list["DiffEntry"],
+        *,
+        start_image_scores: bool = True,
     ):
         super().__init__()
         self.repo_name = repo_name
         self.diff_args = list(diff_args)
         self.model = DiffModel(entries)
+        self.score_pool = QThreadPool(self)
+        self.score_pool.setMaxThreadCount(
+            min(4, max(1, QThread.idealThreadCount()))
+        )
 
         self.table = DiffTable(self)
         self.table.setModel(self.model)
@@ -266,6 +330,14 @@ class DiffWindow(QWidget):
 
         if self.model.rowCount() > 0:
             self.table.selectRow(0)
+        if start_image_scores:
+            for entry in self.model.entries:
+                if is_raster_image_entry(entry):
+                    worker = ImageScoreWorker(self.diff_args, entry)
+                    worker.signals.finished.connect(
+                        self._image_score_finished
+                    )
+                    self.score_pool.start(worker)
 
     def _update_title(self):
         self.setWindowTitle(
@@ -297,6 +369,36 @@ class DiffWindow(QWidget):
     def _handle_click(self, index: QModelIndex):
         if index.isValid():
             self.open_row(index.row())
+
+    def _image_score_finished(
+        self,
+        entry: "DiffEntry",
+        rgb_score: float | None,
+        alpha_score: float | None,
+        error: str | None,
+    ):
+        current_index = self.table.currentIndex()
+        selected_entry = (
+            self.model.entries[current_index.row()]
+            if current_index.isValid()
+            else None
+        )
+
+        self.model.beginResetModel()
+        entry.rgb_score = rgb_score
+        entry.alpha_score = alpha_score
+        entry.image_score_error = error
+        self.model.entries.sort(key=diff_entry_sort_key)
+        self.model.endResetModel()
+
+        if selected_entry is not None:
+            for row, candidate in enumerate(self.model.entries):
+                if candidate is selected_entry:
+                    self.table.selectRow(row)
+                    break
+        self.table.resizeColumnToContents(1)
+        self.table.resizeRowsToContents()
+        self._adjust_geometry()
 
     def open_current_row(self):
         idx = self.table.currentIndex()

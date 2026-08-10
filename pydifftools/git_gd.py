@@ -14,6 +14,7 @@ This command shells out to ``git difftool --tool=mygvim``, so keep
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import subprocess
@@ -51,6 +52,9 @@ class DiffEntry:
     status: str = ""
     old_path: str | None = None
     new_path: str | None = None
+    rgb_score: float | None = None
+    alpha_score: float | None = None
+    image_score_error: str | None = None
 
     @property
     def total(self) -> int:
@@ -249,17 +253,15 @@ def is_raster_image_entry(entry: DiffEntry) -> bool:
     )
 
 
-def build_image_difftool_command(
-    diff_args: Sequence[str], entry: DiffEntry
+def _build_image_difftool_command(
+    diff_args: Sequence[str], entry: DiffEntry, helper_args: Sequence[str]
 ) -> list[str]:
-    """Build a Git difftool invocation for the private Qt image viewer."""
-
     helper_cmd = " ".join(
         [
             shlex.quote(sys.executable),
             "-m",
             "pydifftools.git_gd_image",
-            shlex.quote(f"--title={entry.display_path}"),
+            *[shlex.quote(arg) for arg in helper_args],
             '"$LOCAL"',
             '"$REMOTE"',
         ]
@@ -276,6 +278,40 @@ def build_image_difftool_command(
         "--",
         *entry.diff_paths,
     ]
+
+
+def build_image_difftool_command(
+    diff_args: Sequence[str], entry: DiffEntry
+) -> list[str]:
+    """Build a Git difftool invocation for the private Qt image viewer."""
+
+    return _build_image_difftool_command(
+        diff_args, entry, [f"--title={entry.display_path}"]
+    )
+
+
+def build_image_score_command(
+    diff_args: Sequence[str], entry: DiffEntry
+) -> list[str]:
+    """Build a Git command that prints aligned image difference scores."""
+
+    return _build_image_difftool_command(diff_args, entry, ["--score"])
+
+
+def run_image_score(
+    diff_args: Sequence[str], entry: DiffEntry
+) -> tuple[float, float]:
+    completed = subprocess.run(
+        build_image_score_command(diff_args, entry),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    output_lines = [line for line in completed.stdout.splitlines() if line]
+    if not output_lines:
+        raise ValueError("image score helper produced no output")
+    result = json.loads(output_lines[-1])
+    return float(result["rgb"]), float(result["alpha"])
 
 
 def build_difftool_command(
@@ -326,18 +362,31 @@ def build_entries(argv: Sequence[str]):
     diff_args, pathspec = split_diff_args(argv)
     entries = changed_entries(diff_args, pathspec)
     for entry in entries:
-        entry.added, entry.deleted = numstat_for_paths(
-            diff_args, entry.diff_paths
-        )
-    entries.sort(
-        key=lambda x: (
-            -((x.added or 0) + (x.deleted or 0)),
-            -(x.added or 0),
-            -(x.deleted or 0),
-            x.path,
-        )
-    )
+        if is_raster_image_entry(entry):
+            entry.added = entry.deleted = None
+        else:
+            entry.added, entry.deleted = numstat_for_paths(
+                diff_args, entry.diff_paths
+            )
+    entries.sort(key=diff_entry_sort_key)
     return diff_args, entries
+
+
+def diff_entry_sort_key(entry: DiffEntry):
+    """Keep text, image, and other binary entries in useful groups."""
+
+    if is_raster_image_entry(entry):
+        score = entry.rgb_score if entry.rgb_score is not None else -1.0
+        return (1, -score, entry.path)
+    if entry.added is not None and entry.deleted is not None:
+        return (
+            0,
+            -(entry.added + entry.deleted),
+            -entry.added,
+            -entry.deleted,
+            entry.path,
+        )
+    return (2, entry.path)
 
 
 def install_alias() -> None:

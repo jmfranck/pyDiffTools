@@ -15,9 +15,10 @@ from pydifftools.git_gd import (
     DiffEntry,
     IMAGE_DIFFTOOL_NAME,
     INSTALL_ALIAS_VALUE,
-    build_image_difftool_command,
     build_difftool_command,
     build_entries,
+    build_image_difftool_command,
+    build_image_score_command,
     is_raster_image_entry,
 )
 
@@ -565,6 +566,25 @@ def test_gd_builds_private_image_difftool_command():
         "--no-prompt",
         "--find-renames",
         "--cached",
+        "--",
+        "plot name.png",
+    ]
+
+
+def test_gd_builds_background_image_score_command():
+    entry = DiffEntry(path="plot name.png", added=None, deleted=None)
+
+    cmd = build_image_score_command(["HEAD~"], entry)
+
+    assert "pydifftools.git_gd_image" in cmd[2]
+    assert "--score" in cmd[2]
+    assert '"$LOCAL" "$REMOTE"' in cmd[2]
+    assert cmd[3:] == [
+        "difftool",
+        f"--tool={IMAGE_DIFFTOOL_NAME}",
+        "--no-prompt",
+        "--find-renames",
+        "HEAD~",
         "--",
         "plot name.png",
     ]

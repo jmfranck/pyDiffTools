@@ -59,9 +59,14 @@ included are (listed in order of fun/utility):
 - `pydifft gd [git diff args...]` shows the same Qt review table as the old
   ``git_gd_qt.py`` helper before launching ``git difftool`` for a selected
   file.
+  Image rows are scored in the background and displayed as normalized
+  ``rgb X.X a X.X`` RMS changes; RGB change orders the image rows as scores
+  arrive.
   Raster images open in a Qt viewer that aligns the old and new image,
   displays their RGB difference, and uses up/down controls to switch
-  among the original, difference, and aligned new image.
+  among the original, difference, and aligned new image. Images with an
+  alpha channel are displayed over a checkerboard; when transparency
+  changes, an additional red/blue alpha-difference view is included.
   Run ``pydifft gd --install`` to add the matching ``git gd`` alias to
   your global git config.
 - `pydifft qmdinit [directory]` scaffolds a new Quarto-style project using
