@@ -1230,6 +1230,57 @@ def test_no_comments_filter_restore_prompt_can_keep_filter(
     assert active_filter.read_text() == no_comments_text
 
 
+def test_no_comments_filter_prompt_only_appears_once_per_session(
+    tmp_path, monkeypatch
+):
+    package_dir = Path(continuous.__file__).resolve().parent
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    active_filter = project_dir / "comment_tags.lua"
+    active_filter.write_text(
+        (package_dir / "comment_tags_no_comments.lua").read_text()
+    )
+    prompt_calls = []
+
+    def keep_comments_hidden(active_mode):
+        prompt_calls.append(active_mode)
+        return False
+
+    monkeypatch.setattr(
+        continuous,
+        "_confirm_restore_comment_filter",
+        keep_comments_hidden,
+    )
+    comment_filter_session = {}
+
+    run_pandoc_with_stubbed_tools(
+        project_dir,
+        monkeypatch,
+        comment_filter_session=comment_filter_session,
+    )
+    run_pandoc_with_stubbed_tools(
+        project_dir,
+        monkeypatch,
+        comment_filter_session=comment_filter_session,
+    )
+
+    assert prompt_calls == ["none"]
+    assert comment_filter_session == {"show_comments": False}
+
+
+def test_comment_filter_prompt_uses_clear_button_labels(monkeypatch):
+    def fake_run(command, **_kwargs):
+        prompt_script = command[2]
+        assert prompt_script.index('"no comments"') < prompt_script.index(
+            '"show comments"'
+        )
+        return subprocess.CompletedProcess(command, 1)
+
+    monkeypatch.setattr(continuous.subprocess, "run", fake_run)
+
+    assert continuous._confirm_restore_comment_filter("none") is False
+
+
 def test_custom_filter_restore_prompt_can_keep_filter(tmp_path, monkeypatch):
     project_dir = tmp_path / "project"
     project_dir.mkdir()

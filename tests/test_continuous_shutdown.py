@@ -80,6 +80,7 @@ def test_cpb_refresh_failure_does_not_reopen_chrome(monkeypatch):
     handler.html_file = "notes.html"
     handler.comments_to_margin = False
     handler.no_comments = False
+    handler.comment_filter_session = {}
     handler.chrome = Browser()
     reopened = []
     closed = []

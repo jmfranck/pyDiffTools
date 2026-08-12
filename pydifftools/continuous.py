@@ -78,8 +78,7 @@ def _confirm_restore_comment_filter(active_mode):
             "but you ran without the --no-comments flag.\n\n"
             "Note that you have not locally edited the filter relative to "
             "the library default.\n\n"
-            "Do you want to keep the current filter, or restore the library "
-            "default that shows comments?"
+            "Do you want to show comments, or continue with no comments?"
         )
         default_choice = "restore"
     elif active_mode == "custom":
@@ -88,8 +87,8 @@ def _confirm_restore_comment_filter(active_mode):
             "default or the no-comments filter, but you ran without the "
             "--no-comments flag.\n\n"
             "Note that this looks like a locally edited filter.\n\n"
-            "Do you want to keep the current filter, or restore the library "
-            "default that shows comments?"
+            "Do you want to show comments using the library default, or "
+            "continue with no comments?"
         )
         default_choice = "keep"
     else:
@@ -107,10 +106,10 @@ box.setWindowTitle("pydifft cpb")
 box.setIcon(QMessageBox.Icon.Question)
 box.setText(sys.argv[1])
 keep_button = box.addButton(
-    "Keep current filter", QMessageBox.ButtonRole.RejectRole
+    "no comments", QMessageBox.ButtonRole.RejectRole
 )
 restore_button = box.addButton(
-    "Restore library default", QMessageBox.ButtonRole.AcceptRole
+    "show comments", QMessageBox.ButtonRole.AcceptRole
 )
 if sys.argv[2] == "restore":
     box.setDefaultButton(restore_button)
@@ -141,6 +140,7 @@ def run_pandoc(
     html_file,
     comments_to_margin=False,
     no_comments=False,
+    comment_filter_session=None,
 ):
     if comments_to_margin:
         comment_filter_mode = "margin"
@@ -201,22 +201,27 @@ def run_pandoc(
         if comment_filter_mode == "default":
             if active_mode == "default":
                 effective_filter_mode = "default"
-            elif active_mode == "none":
-                if _confirm_restore_comment_filter("none"):
+            elif active_mode in {"none", "custom"}:
+                if (
+                    comment_filter_session is not None
+                    and "show_comments" in comment_filter_session
+                ):
+                    show_comments = comment_filter_session["show_comments"]
+                else:
+                    show_comments = _confirm_restore_comment_filter(
+                        active_mode
+                    )
+                    if comment_filter_session is not None:
+                        comment_filter_session["show_comments"] = (
+                            show_comments
+                        )
+                if show_comments:
                     shutil.copy2(
                         packaged_filters["default"], active_filter
                     )
                     effective_filter_mode = "default"
                 else:
-                    effective_filter_mode = "none"
-            elif active_mode == "custom":
-                if _confirm_restore_comment_filter("custom"):
-                    shutil.copy2(
-                        packaged_filters["default"], active_filter
-                    )
-                    effective_filter_mode = "default"
-                else:
-                    effective_filter_mode = "custom"
+                    effective_filter_mode = active_mode
             elif active_mode == "margin":
                 if inactive_mode in {"default", "custom"}:
                     temp_filter = active_filter + ".swap_tmp"
@@ -404,6 +409,7 @@ class Handler(FileSystemEventHandler):
         self.filename = filename
         self.comments_to_margin = comments_to_margin
         self.no_comments = no_comments
+        self.comment_filter_session = {}
         self.html_file = filename.rsplit(".", 1)[0] + ".html"
         self.init_chrome()
 
@@ -418,6 +424,7 @@ class Handler(FileSystemEventHandler):
             self.html_file,
             comments_to_margin=self.comments_to_margin,
             no_comments=self.no_comments,
+            comment_filter_session=self.comment_filter_session,
         )
         if not os.path.exists(self.html_file):
             print("html doesn't exist")
@@ -439,6 +446,7 @@ class Handler(FileSystemEventHandler):
                 self.html_file,
                 comments_to_margin=self.comments_to_margin,
                 no_comments=self.no_comments,
+                comment_filter_session=self.comment_filter_session,
             )
             self.append_autorefresh()
             try:
