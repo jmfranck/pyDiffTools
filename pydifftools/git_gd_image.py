@@ -533,21 +533,21 @@ class ImageDiffWindow(QWidget):
     def __init__(self, title: str, comparison: ComparisonImages):
         super().__init__()
         self.file_title = title
-        self.current_state = 1
         if comparison.alpha_difference is None:
-            self.states = ("Original", "Difference", "New")
+            self.states = ("orig", "Δ rgb", "new")
             images = (
                 comparison.original,
                 comparison.difference,
                 comparison.new,
             )
             self.alpha_state = None
+            self.current_state = 1
         else:
             self.states = (
-                "Original",
-                "Difference",
-                "Change in alpha",
-                "New",
+                "orig",
+                "Δ rgb",
+                "Δ α",
+                "new",
             )
             images = (
                 comparison.original,
@@ -556,6 +556,12 @@ class ImageDiffWindow(QWidget):
                 comparison.new,
             )
             self.alpha_state = 2
+            # Keep the page order stable while opening on the dominant change.
+            self.current_state = (
+                self.alpha_state
+                if comparison.alpha_score > comparison.rgb_score
+                else 1
+            )
         self.size_message = comparison.size_message
 
         self.image_label = QLabel(self)
@@ -575,6 +581,24 @@ class ImageDiffWindow(QWidget):
         controls.setContentsMargins(2, 0, 0, 0)
         controls.setSpacing(2)
         controls.addStretch(1)
+        # These compact controls provide direct access to every page while the
+        # arrows continue to show the page order and support keyboard paging.
+        self.state_buttons = []
+        button_names = (
+            ("old", "Δ", "new")
+            if self.alpha_state is None
+            else ("old", "Δ", "Δα", "new")
+        )
+        for state_index, button_name in enumerate(button_names):
+            button = QToolButton(self)
+            button.setText(button_name)
+            button.setToolTip(f"Show {self.states[state_index]}")
+            button.setCheckable(True)
+            button.clicked.connect(
+                lambda checked=False, index=state_index: self.show_state(index)
+            )
+            self.state_buttons.append(button)
+            controls.addWidget(button)
         controls.addWidget(self.up_button)
         controls.addWidget(self.down_button)
         controls.addStretch(1)
@@ -596,7 +620,11 @@ class ImageDiffWindow(QWidget):
         layout.addLayout(image_layout)
 
         screen = QApplication.primaryScreen().availableGeometry()
-        control_width = self.up_button.sizeHint().width() + 2
+        control_width = max(
+            button.sizeHint().width()
+            for button in self.state_buttons
+            + [self.up_button, self.down_button]
+        ) + 2
         max_image_width = max(
             1, min(MAX_VIEW_WIDTH, screen.width()) - control_width
         )
@@ -628,19 +656,36 @@ class ImageDiffWindow(QWidget):
         self.image_label.setPixmap(self.pixmaps[self.current_state])
         self.up_button.setEnabled(self.current_state > 0)
         self.down_button.setEnabled(self.current_state < len(self.states) - 1)
+        for state_index, button in enumerate(self.state_buttons):
+            button.setChecked(state_index == self.current_state)
         state = self.states[self.current_state]
         messages = []
         if self.size_message is not None:
             messages.append(self.size_message)
         if self.current_state == self.alpha_state:
             messages.append(ALPHA_MESSAGE)
-        self.message_label.setText("\n".join(messages))
+        # Identify every page, with supporting information alongside it in a
+        # smaller font so resizing details do not obscure the page identity.
+        secondary_message = " · ".join(messages)
+        self.message_label.setText(
+            f"<span style='font-size: 14pt'>{state}</span>"
+            + (
+                "&nbsp;&nbsp;"
+                f"<span style='font-size: 9pt'>{secondary_message}</span>"
+                if secondary_message
+                else ""
+            )
+        )
         self.setWindowTitle(f"git gd image — {state} — {self.file_title}")
 
     def show_previous(self):
         if self.current_state > 0:
             self.current_state -= 1
             self._show_current()
+
+    def show_state(self, state_index):
+        self.current_state = state_index
+        self._show_current()
 
     def show_next(self):
         if self.current_state < len(self.states) - 1:

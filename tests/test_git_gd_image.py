@@ -6,6 +6,7 @@ import pytest
 from PIL import Image
 
 from pydifftools.git_gd_image import (
+    ALPHA_MESSAGE,
     MESSAGE_HEIGHT,
     _transform_image,
     find_alignment,
@@ -233,8 +234,8 @@ def test_image_window_starts_on_diff_and_navigates(monkeypatch):
     window = ImageDiffWindow("plot.png", comparison)
 
     assert window.current_state == 1
-    assert "Difference" in window.windowTitle()
-    assert window.message_label.text() == ""
+    assert "Δ rgb" in window.windowTitle()
+    assert "Δ rgb" in window.message_label.text()
     window.show_previous()
     assert window.current_state == 0
     assert not window.up_button.isEnabled()
@@ -250,30 +251,54 @@ def test_image_window_starts_on_diff_and_navigates(monkeypatch):
     alpha_window = ImageDiffWindow("transparent.png", alpha_comparison)
 
     assert alpha_window.states == (
-        "Original",
-        "Difference",
-        "Change in alpha",
-        "New",
+        "orig",
+        "Δ rgb",
+        "Δ α",
+        "new",
     )
-    assert alpha_window.current_state == 1
-    assert alpha_window.message_label.text() == ""
+    assert alpha_window.current_state == 2
+    assert "Δ α" in alpha_window.message_label.text()
     assert alpha_window.message_label.height() == MESSAGE_HEIGHT
+    assert [button.text() for button in alpha_window.state_buttons] == [
+        "old",
+        "Δ",
+        "Δα",
+        "new",
+    ]
+    alpha_window.state_buttons[0].click()
+    assert alpha_window.current_state == 0
+    assert alpha_window.state_buttons[0].isChecked()
+    alpha_window.state_buttons[3].click()
+    assert alpha_window.current_state == 3
+    assert alpha_window.state_buttons[3].isChecked()
+    alpha_window.state_buttons[2].click()
+    assert alpha_window.current_state == 2
     initial_size = alpha_window.size()
     initial_up_position = alpha_window.up_button.pos()
     initial_down_position = alpha_window.down_button.pos()
-    alpha_window.show_next()
-    assert alpha_window.current_state == 2
-    assert "Change in alpha" in alpha_window.windowTitle()
-    assert alpha_window.message_label.text() == (
-        "Change in alpha — blue = increased alpha; red = decreased alpha."
-    )
+    alpha_window.show_previous()
+    assert alpha_window.current_state == 1
+    assert "Δ rgb" in alpha_window.windowTitle()
     assert alpha_window.size() == initial_size
     assert alpha_window.up_button.pos() == initial_up_position
     assert alpha_window.down_button.pos() == initial_down_position
     alpha_window.show_next()
+    assert ALPHA_MESSAGE in alpha_window.message_label.text()
+    alpha_window.show_next()
     assert alpha_window.current_state == 3
     assert not alpha_window.down_button.isEnabled()
     alpha_window.close()
+
+    rgb_dominant_window = ImageDiffWindow(
+        "rgb-dominant.png",
+        prepare_comparison(
+            Image.new("RGBA", (16, 16), (0, 0, 0, 255)),
+            Image.new("RGBA", (16, 16), (255, 255, 255, 254)),
+        ),
+    )
+    assert rgb_dominant_window.current_state == 1
+    assert "Δ rgb" in rgb_dominant_window.message_label.text()
+    rgb_dominant_window.close()
 
     combined_window = ImageDiffWindow(
         "resized-transparent.png",
@@ -282,10 +307,10 @@ def test_image_window_starts_on_diff_and_navigates(monkeypatch):
             size_message="Pixel dimensions changed: 32 × 16 px → 64 × 32 px.",
         ),
     )
-    combined_window.show_next()
-    assert combined_window.message_label.text() == (
-        "Pixel dimensions changed: 32 × 16 px → 64 × 32 px.\n"
-        "Change in alpha — blue = increased alpha; red = decreased alpha."
+    assert "Δ α" in combined_window.message_label.text()
+    assert "font-size: 9pt" in combined_window.message_label.text()
+    assert "Pixel dimensions changed: 32 × 16 px → 64 × 32 px." in (
+        combined_window.message_label.text()
     )
     combined_window.close()
     assert app is not None

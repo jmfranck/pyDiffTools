@@ -301,12 +301,14 @@ def build_image_score_command(
 def run_image_score(
     diff_args: Sequence[str], entry: DiffEntry
 ) -> tuple[float, float]:
+    command = build_image_score_command(diff_args, entry)
     completed = subprocess.run(
-        build_image_score_command(diff_args, entry),
-        check=True,
+        command,
         capture_output=True,
         text=True,
     )
+    if completed.returncode != 0:
+        completed.check_returncode()
     output_lines = [line for line in completed.stdout.splitlines() if line]
     if not output_lines:
         raise ValueError("image score helper produced no output")
@@ -321,7 +323,26 @@ def build_difftool_command(
 ) -> list[str]:
     tool_name = DIFFTOOL_NAME
     prefix = ["git"]
-    if entry.is_rename:
+    if entry.status == "A":
+        if tool_cmd is None:
+            tool_cmd = configured_difftool_command()
+        if tool_cmd is not None:
+            # {{{ turn the configured gvim diff invocation into a file open
+            # Added files have no meaningful left side.  Retain wrapper and
+            # foreground options, but remove diff mode and Git's side variables.
+            command = []
+            for argument in shlex.split(tool_cmd):
+                if argument == "-d" or any(
+                    variable in argument
+                    for variable in ("$LOCAL", "$REMOTE", "$MERGED")
+                ):
+                    continue
+                command.append(argument)
+            if command:
+                command[0] = os.path.expanduser(command[0])
+                return [*command, entry.path]
+            # }}}
+    elif entry.is_rename:
         if tool_cmd is None:
             tool_cmd = configured_difftool_command()
         if tool_cmd is not None:
@@ -364,10 +385,10 @@ def build_entries(argv: Sequence[str]):
     for entry in entries:
         if is_raster_image_entry(entry):
             entry.added = entry.deleted = None
-        else:
-            entry.added, entry.deleted = numstat_for_paths(
-                diff_args, entry.diff_paths
-            )
+        elif entry.status not in ("A", "D"):
+            # -1 marks text statistics that will be filled by the Qt worker.
+            # Real binary results use None, so the table can distinguish them.
+            entry.added = entry.deleted = -1
     entries.sort(key=diff_entry_sort_key)
     return diff_args, entries
 
@@ -375,18 +396,24 @@ def build_entries(argv: Sequence[str]):
 def diff_entry_sort_key(entry: DiffEntry):
     """Keep text, image, and other binary entries in useful groups."""
 
+    group = 1 if is_raster_image_entry(entry) else 0
+    if entry.status in ("A", "D"):
+        return (group, 0, entry.path)
     if is_raster_image_entry(entry):
         score = entry.rgb_score if entry.rgb_score is not None else -1.0
-        return (1, -score, entry.path)
+        return (group, 1, -score, entry.path)
+    if entry.added == -1 and entry.deleted == -1:
+        return (group, 1, 0, 0, 0, entry.path)
     if entry.added is not None and entry.deleted is not None:
         return (
-            0,
+            group,
+            1,
             -(entry.added + entry.deleted),
             -entry.added,
             -entry.deleted,
             entry.path,
         )
-    return (2, entry.path)
+    return (group, 2, entry.path)
 
 
 def install_alias() -> None:
