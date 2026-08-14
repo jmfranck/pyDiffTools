@@ -14,7 +14,9 @@ This command shells out to ``git difftool --tool=mygvim``, so keep
 
 from __future__ import annotations
 
+import json
 import os
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -26,6 +28,19 @@ from .command_registry import register_command
 INSTALL_ALIAS_VALUE = '!f() { pydifft gd "$@"; }; f'
 DIFFTOOL_NAME = "mygvim"
 RENAME_DIFFTOOL_NAME = "pydifft-gd-rename"
+IMAGE_DIFFTOOL_NAME = "pydifft-gd-image"
+RASTER_IMAGE_SUFFIXES = frozenset(
+    {
+        ".bmp",
+        ".gif",
+        ".jpeg",
+        ".jpg",
+        ".png",
+        ".tif",
+        ".tiff",
+        ".webp",
+    }
+)
 
 
 @dataclass
@@ -37,6 +52,9 @@ class DiffEntry:
     status: str = ""
     old_path: str | None = None
     new_path: str | None = None
+    rgb_score: float | None = None
+    alpha_score: float | None = None
+    image_score_error: str | None = None
 
     @property
     def total(self) -> int:
@@ -226,6 +244,78 @@ def configured_difftool_command(tool_name: str = DIFFTOOL_NAME) -> str | None:
     return tool_cmd.stdout.strip() or None
 
 
+def is_raster_image_entry(entry: DiffEntry) -> bool:
+    """Return whether every path represented by *entry* is a raster image."""
+
+    return all(
+        Path(path).suffix.lower() in RASTER_IMAGE_SUFFIXES
+        for path in entry.diff_paths
+    )
+
+
+def _build_image_difftool_command(
+    diff_args: Sequence[str], entry: DiffEntry, helper_args: Sequence[str]
+) -> list[str]:
+    helper_cmd = " ".join(
+        [
+            shlex.quote(sys.executable),
+            "-m",
+            "pydifftools.git_gd_image",
+            *[shlex.quote(arg) for arg in helper_args],
+            '"$LOCAL"',
+            '"$REMOTE"',
+        ]
+    )
+    return [
+        "git",
+        "-c",
+        f"difftool.{IMAGE_DIFFTOOL_NAME}.cmd={helper_cmd}",
+        "difftool",
+        f"--tool={IMAGE_DIFFTOOL_NAME}",
+        "--no-prompt",
+        "--find-renames",
+        *diff_args,
+        "--",
+        *entry.diff_paths,
+    ]
+
+
+def build_image_difftool_command(
+    diff_args: Sequence[str], entry: DiffEntry
+) -> list[str]:
+    """Build a Git difftool invocation for the private Qt image viewer."""
+
+    return _build_image_difftool_command(
+        diff_args, entry, [f"--title={entry.display_path}"]
+    )
+
+
+def build_image_score_command(
+    diff_args: Sequence[str], entry: DiffEntry
+) -> list[str]:
+    """Build a Git command that prints aligned image difference scores."""
+
+    return _build_image_difftool_command(diff_args, entry, ["--score"])
+
+
+def run_image_score(
+    diff_args: Sequence[str], entry: DiffEntry
+) -> tuple[float, float]:
+    command = build_image_score_command(diff_args, entry)
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        completed.check_returncode()
+    output_lines = [line for line in completed.stdout.splitlines() if line]
+    if not output_lines:
+        raise ValueError("image score helper produced no output")
+    result = json.loads(output_lines[-1])
+    return float(result["rgb"]), float(result["alpha"])
+
+
 def build_difftool_command(
     diff_args: Sequence[str],
     entry: DiffEntry,
@@ -233,7 +323,26 @@ def build_difftool_command(
 ) -> list[str]:
     tool_name = DIFFTOOL_NAME
     prefix = ["git"]
-    if entry.is_rename:
+    if entry.status == "A":
+        if tool_cmd is None:
+            tool_cmd = configured_difftool_command()
+        if tool_cmd is not None:
+            # {{{ turn the configured gvim diff invocation into a file open
+            # Added files have no meaningful left side.  Retain wrapper and
+            # foreground options, but remove diff mode and Git's side variables.
+            command = []
+            for argument in shlex.split(tool_cmd):
+                if argument == "-d" or any(
+                    variable in argument
+                    for variable in ("$LOCAL", "$REMOTE", "$MERGED")
+                ):
+                    continue
+                command.append(argument)
+            if command:
+                command[0] = os.path.expanduser(command[0])
+                return [*command, entry.path]
+            # }}}
+    elif entry.is_rename:
         if tool_cmd is None:
             tool_cmd = configured_difftool_command()
         if tool_cmd is not None:
@@ -274,18 +383,37 @@ def build_entries(argv: Sequence[str]):
     diff_args, pathspec = split_diff_args(argv)
     entries = changed_entries(diff_args, pathspec)
     for entry in entries:
-        entry.added, entry.deleted = numstat_for_paths(
-            diff_args, entry.diff_paths
-        )
-    entries.sort(
-        key=lambda x: (
-            -((x.added or 0) + (x.deleted or 0)),
-            -(x.added or 0),
-            -(x.deleted or 0),
-            x.path,
-        )
-    )
+        if is_raster_image_entry(entry):
+            entry.added = entry.deleted = None
+        elif entry.status not in ("A", "D"):
+            # -1 marks text statistics that will be filled by the Qt worker.
+            # Real binary results use None, so the table can distinguish them.
+            entry.added = entry.deleted = -1
+    entries.sort(key=diff_entry_sort_key)
     return diff_args, entries
+
+
+def diff_entry_sort_key(entry: DiffEntry):
+    """Keep text, image, and other binary entries in useful groups."""
+
+    group = 1 if is_raster_image_entry(entry) else 0
+    if entry.status in ("A", "D"):
+        return (group, 0, entry.path)
+    if is_raster_image_entry(entry):
+        score = entry.rgb_score if entry.rgb_score is not None else -1.0
+        return (group, 1, -score, entry.path)
+    if entry.added == -1 and entry.deleted == -1:
+        return (group, 1, 0, 0, 0, entry.path)
+    if entry.added is not None and entry.deleted is not None:
+        return (
+            group,
+            1,
+            -(entry.added + entry.deleted),
+            -entry.added,
+            -entry.deleted,
+            entry.path,
+        )
+    return (group, 2, entry.path)
 
 
 def install_alias() -> None:
@@ -339,8 +467,10 @@ def main(argv: Sequence[str]) -> int:
     "This command shells out to git difftool --tool=mygvim, so keep\n"
     "difftool.mygvim.cmd configured in your git config.",
     help={
-        "install": "Install or update the global git alias so `git gd` "
-        "runs this subcommand.",
+        "install": (
+            "Install or update the global git alias so `git gd` "
+            "runs this subcommand."
+        ),
     },
 )
 def gd(arguments, install=False):

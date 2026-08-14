@@ -1,4 +1,5 @@
 from pydifftools import continuous
+from selenium.common.exceptions import WebDriverException
 
 
 class FakeObserver:
@@ -62,3 +63,51 @@ def test_cpb_exits_when_browser_window_closed(monkeypatch):
     continuous.cpb("notes.md")
 
     assert len(close_calls) == 1
+
+
+def test_cpb_refresh_failure_does_not_reopen_chrome(monkeypatch):
+    class Browser:
+        window_handles = ["main"]
+
+        def refresh(self):
+            raise WebDriverException("window closed")
+
+    class Event:
+        src_path = "notes.md"
+
+    handler = continuous.Handler.__new__(continuous.Handler)
+    handler.filename = "notes.md"
+    handler.html_file = "notes.html"
+    handler.comments_to_margin = False
+    handler.no_comments = False
+    handler.comment_filter_session = {}
+    handler.chrome = Browser()
+    reopened = []
+    closed = []
+    handler.init_chrome = lambda: reopened.append(True)
+    handler.append_autorefresh = lambda: None
+    monkeypatch.setattr(continuous, "run_pandoc", lambda *args, **kwargs: None)
+    monkeypatch.setattr(continuous, "close_browser_window", closed.append)
+
+    handler.on_modified(Event())
+
+    assert len(closed) == 1
+    assert handler.chrome is None
+    assert not reopened
+
+
+def test_cpb_ignores_file_event_after_browser_closed(monkeypatch):
+    class Event:
+        src_path = "notes.md"
+
+    handler = continuous.Handler.__new__(continuous.Handler)
+    handler.filename = "notes.md"
+    handler.chrome = None
+    builds = []
+    monkeypatch.setattr(
+        continuous, "run_pandoc", lambda *args, **kwargs: builds.append(True)
+    )
+
+    handler.on_modified(Event())
+
+    assert not builds

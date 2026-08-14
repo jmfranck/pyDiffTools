@@ -13,9 +13,13 @@ from pydifftools.command_line import mfs
 from pydifftools.command_registry import _COMMAND_SPECS
 from pydifftools.git_gd import (
     DiffEntry,
+    IMAGE_DIFFTOOL_NAME,
     INSTALL_ALIAS_VALUE,
     build_difftool_command,
     build_entries,
+    build_image_difftool_command,
+    build_image_score_command,
+    is_raster_image_entry,
 )
 
 
@@ -387,22 +391,39 @@ def test_gd_build_entries_sorts_by_change_count(monkeypatch):
         ],
     )
 
-    def fake_numstat(diff_args, paths):
-        values = {
-            "alpha.txt": (3, 4),
-            "binary.bin": (None, None),
-            "beta.txt": (10, 1),
-        }
-        return values[paths[0]]
-
-    monkeypatch.setattr("pydifftools.git_gd.numstat_for_paths", fake_numstat)
-
     diff_args, entries = build_entries(["HEAD~1", "--", "docs"])
     assert diff_args == ["HEAD~1"]
     assert [entry.path for entry in entries] == [
-        "beta.txt",
         "alpha.txt",
+        "beta.txt",
         "binary.bin",
+    ]
+    assert all(entry.added == -1 for entry in entries)
+    assert all(entry.deleted == -1 for entry in entries)
+
+
+def test_gd_sorts_adds_and_deletes_first_within_file_kind(monkeypatch):
+    monkeypatch.setattr(
+        "pydifftools.git_gd.changed_entries",
+        lambda diff_args, pathspec: [
+            DiffEntry(path="zeta.txt", added=0, deleted=0, status="M"),
+            DiffEntry(path="bravo.txt", added=0, deleted=0, status="D"),
+            DiffEntry(path="alpha.txt", added=0, deleted=0, status="A"),
+            DiffEntry(path="zeta.png", added=0, deleted=0, status="M"),
+            DiffEntry(path="delta.png", added=0, deleted=0, status="D"),
+            DiffEntry(path="charlie.png", added=0, deleted=0, status="A"),
+        ],
+    )
+
+    _diff_args, entries = build_entries(["HEAD"])
+
+    assert [entry.path for entry in entries] == [
+        "alpha.txt",
+        "bravo.txt",
+        "zeta.txt",
+        "charlie.png",
+        "delta.png",
+        "zeta.png",
     ]
 
 
@@ -432,8 +453,8 @@ def test_gd_build_entries_tracks_renamed_file(tmp_path):
     assert entry.old_path == "old.txt"
     assert entry.new_path == "new.txt"
     assert entry.path == "new.txt"
-    assert entry.added == 1
-    assert entry.deleted == 1
+    assert entry.added == -1
+    assert entry.deleted == -1
     assert entry.diff_paths == ["old.txt", "new.txt"]
     assert entry.display_path == "old.txt\n  → new.txt"
 
@@ -519,6 +540,84 @@ def test_gd_difftool_command_wraps_renames_for_merged_side():
         "--",
         "old.txt",
         "new.txt",
+    ]
+
+
+def test_gd_opens_added_text_file_without_diff_mode():
+    entry = DiffEntry(
+        path="new file.txt", added=12, deleted=0, status="A"
+    )
+
+    cmd = build_difftool_command(
+        ["HEAD"],
+        entry,
+        tool_cmd='/tmp/gvim.sh -f -d -- "$LOCAL" "$MERGED"',
+    )
+
+    assert cmd == ["/tmp/gvim.sh", "-f", "--", "new file.txt"]
+
+
+def test_gd_routes_common_raster_extensions_to_image_viewer():
+    for path in ("plot.png", "photo.JPG", "scan.tiff", "figure.webp"):
+        assert is_raster_image_entry(
+            DiffEntry(path=path, added=None, deleted=None)
+        )
+
+    assert not is_raster_image_entry(
+        DiffEntry(path="notes.txt", added=1, deleted=1)
+    )
+    assert not is_raster_image_entry(
+        DiffEntry(
+            path="notes.txt",
+            added=1,
+            deleted=1,
+            status="R050",
+            old_path="plot.png",
+            new_path="notes.txt",
+        )
+    )
+
+
+def test_gd_builds_private_image_difftool_command():
+    entry = DiffEntry(path="plot name.png", added=None, deleted=None)
+
+    cmd = build_image_difftool_command(["--cached"], entry)
+
+    assert cmd[:3] == [
+        "git",
+        "-c",
+        cmd[2],
+    ]
+    assert cmd[2].startswith(f"difftool.{IMAGE_DIFFTOOL_NAME}.cmd=")
+    assert "pydifftools.git_gd_image" in cmd[2]
+    assert '"$LOCAL" "$REMOTE"' in cmd[2]
+    assert cmd[3:] == [
+        "difftool",
+        f"--tool={IMAGE_DIFFTOOL_NAME}",
+        "--no-prompt",
+        "--find-renames",
+        "--cached",
+        "--",
+        "plot name.png",
+    ]
+
+
+def test_gd_builds_background_image_score_command():
+    entry = DiffEntry(path="plot name.png", added=None, deleted=None)
+
+    cmd = build_image_score_command(["HEAD~"], entry)
+
+    assert "pydifftools.git_gd_image" in cmd[2]
+    assert "--score" in cmd[2]
+    assert '"$LOCAL" "$REMOTE"' in cmd[2]
+    assert cmd[3:] == [
+        "difftool",
+        f"--tool={IMAGE_DIFFTOOL_NAME}",
+        "--no-prompt",
+        "--find-renames",
+        "HEAD~",
+        "--",
+        "plot name.png",
     ]
 
 
@@ -1160,6 +1259,57 @@ def test_no_comments_filter_restore_prompt_can_keep_filter(
     run_pandoc_with_stubbed_tools(project_dir, monkeypatch)
 
     assert active_filter.read_text() == no_comments_text
+
+
+def test_no_comments_filter_prompt_only_appears_once_per_session(
+    tmp_path, monkeypatch
+):
+    package_dir = Path(continuous.__file__).resolve().parent
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    active_filter = project_dir / "comment_tags.lua"
+    active_filter.write_text(
+        (package_dir / "comment_tags_no_comments.lua").read_text()
+    )
+    prompt_calls = []
+
+    def keep_comments_hidden(active_mode):
+        prompt_calls.append(active_mode)
+        return False
+
+    monkeypatch.setattr(
+        continuous,
+        "_confirm_restore_comment_filter",
+        keep_comments_hidden,
+    )
+    comment_filter_session = {}
+
+    run_pandoc_with_stubbed_tools(
+        project_dir,
+        monkeypatch,
+        comment_filter_session=comment_filter_session,
+    )
+    run_pandoc_with_stubbed_tools(
+        project_dir,
+        monkeypatch,
+        comment_filter_session=comment_filter_session,
+    )
+
+    assert prompt_calls == ["none"]
+    assert comment_filter_session == {"show_comments": False}
+
+
+def test_comment_filter_prompt_uses_clear_button_labels(monkeypatch):
+    def fake_run(command, **_kwargs):
+        prompt_script = command[2]
+        assert prompt_script.index('"no comments"') < prompt_script.index(
+            '"show comments"'
+        )
+        return subprocess.CompletedProcess(command, 1)
+
+    monkeypatch.setattr(continuous.subprocess, "run", fake_run)
+
+    assert continuous._confirm_restore_comment_filter("none") is False
 
 
 def test_custom_filter_restore_prompt_can_keep_filter(tmp_path, monkeypatch):

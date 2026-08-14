@@ -4,7 +4,18 @@ import subprocess
 import sys
 from typing import TYPE_CHECKING, Sequence
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSize, Qt
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QModelIndex,
+    QObject,
+    QRunnable,
+    QSize,
+    Qt,
+    QThread,
+    QThreadPool,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter
 from PySide6.QtWidgets import (
     QApplication,
@@ -19,11 +30,87 @@ from PySide6.QtWidgets import (
 if TYPE_CHECKING:
     from .git_gd import DiffEntry
 
-from .git_gd import build_difftool_command
+from .git_gd import (
+    build_difftool_command,
+    build_image_difftool_command,
+    diff_entry_sort_key,
+    is_raster_image_entry,
+    numstat_for_paths,
+    run_image_score,
+)
+
+
+def _delta_text(entry: "DiffEntry") -> str:
+    if entry.status in ("A", "D"):
+        return entry.status
+    if is_raster_image_entry(entry):
+        if entry.rgb_score is not None and entry.alpha_score is not None:
+            return f"rgb {entry.rgb_score:.1f} a {entry.alpha_score:.1f}"
+        if entry.image_score_error is not None:
+            return "rgb … a …"
+        return "rgb … a …"
+    if entry.added == -1 and entry.deleted == -1:
+        return "…"
+    if entry.added is None or entry.deleted is None:
+        return "binary"
+    return f"-{entry.deleted} / +{entry.added}"
+
+
+class ScoreSignals(QObject):
+    finished = Signal(object, object, object, object)
+
+
+class ImageScoreWorker(QRunnable):
+    def __init__(self, diff_args: Sequence[str], entry: "DiffEntry"):
+        super().__init__()
+        self.diff_args = list(diff_args)
+        self.entry = entry
+        self.signals = ScoreSignals()
+
+    def run(self):
+        try:
+            rgb_score, alpha_score = run_image_score(
+                self.diff_args, self.entry
+            )
+        except Exception as exc:
+            self.signals.finished.emit(self.entry, None, None, str(exc))
+            return
+        self.signals.finished.emit(
+            self.entry, rgb_score, alpha_score, None
+        )
+
+
+class TextStatsWorker(QRunnable):
+    def __init__(self, diff_args, entries):
+        super().__init__()
+        self.diff_args = list(diff_args)
+        self.entries = list(entries)
+        self.signals = ScoreSignals()
+
+    def run(self):
+        for entry in self.entries:
+            try:
+                added, deleted = numstat_for_paths(
+                    self.diff_args, entry.diff_paths
+                )
+                self.signals.finished.emit(
+                    (entry, added, deleted, None),
+                    None,
+                    None,
+                    "text update",
+                )
+            except Exception as exc:
+                self.signals.finished.emit(
+                    (entry, None, None, str(exc)),
+                    None,
+                    None,
+                    "text update",
+                )
+        self.signals.finished.emit(None, None, None, "text complete")
 
 
 class DiffModel(QAbstractTableModel):
-    headers = ["Seen", "Δlines", "File"]
+    headers = ["Seen", "Δ", "File"]
 
     def __init__(self, entries: list["DiffEntry"]):
         super().__init__()
@@ -61,9 +148,7 @@ class DiffModel(QAbstractTableModel):
                     return "R100%"
                 return "✓" if entry.seen else "☐"
             if col == 1:
-                if entry.added is None or entry.deleted is None:
-                    return "binary"
-                return f"-{entry.deleted} / +{entry.added}"
+                return _delta_text(entry)
             if col == 2:
                 return entry.display_path
 
@@ -74,13 +159,13 @@ class DiffModel(QAbstractTableModel):
                     if entry.has_multiline_display_path
                     else Qt.AlignmentFlag.AlignVCenter
                 )
-                return int(
-                    Qt.AlignmentFlag.AlignHCenter
-                    | vertical_alignment
-                )
+                return int(Qt.AlignmentFlag.AlignHCenter | vertical_alignment)
             return int(
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
             )
+
+        if role == Qt.ItemDataRole.ToolTipRole and col == 1:
+            return entry.image_score_error
 
         return None
 
@@ -125,6 +210,41 @@ class DeltaDelegate(QStyledItemDelegate):
         )
 
         rect = option.rect.adjusted(6, 0, -6, 0)
+        if entry.status in ("A", "D"):
+            if option.state & QStyle.StateFlag.State_Selected:
+                painter.setPen(
+                    option.palette.color(
+                        option.palette.ColorRole.HighlightedText
+                    )
+                )
+            else:
+                painter.setPen(
+                    QColor("#228b22")
+                    if entry.status == "A"
+                    else QColor("#b22222")
+                )
+            painter.drawText(
+                rect,
+                int(
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+                ),
+                entry.status,
+            )
+            painter.restore()
+            return
+
+        if is_raster_image_entry(entry):
+            painter.setPen(option.palette.color(option.palette.ColorRole.Text))
+            painter.drawText(
+                rect,
+                int(
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+                ),
+                _delta_text(entry),
+            )
+            painter.restore()
+            return
+
         if entry.added is None or entry.deleted is None:
             painter.setPen(option.palette.color(option.palette.ColorRole.Text))
             painter.drawText(
@@ -198,10 +318,7 @@ class DeltaDelegate(QStyledItemDelegate):
         size = super().sizeHint(option, index)
         entry = index.model().entries[index.row()]
         fm = QFontMetrics(self.font)
-        if entry.added is None or entry.deleted is None:
-            w = fm.horizontalAdvance("binary") + 16
-        else:
-            w = fm.horizontalAdvance(f"-{entry.deleted} / +{entry.added}") + 16
+        w = fm.horizontalAdvance(_delta_text(entry)) + 16
         h = max(size.height(), fm.height() + 6)
         return QSize(w, h)
 
@@ -221,9 +338,7 @@ class DiffTable(QTableView):
             QHeaderView.ResizeMode.Fixed
         )
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
@@ -233,6 +348,20 @@ class DiffTable(QTableView):
                 return
         super().keyPressEvent(event)
 
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        # Keep the two file kinds visually distinct after either result batch
+        # resorts its group.  Drawing on the viewport spans every table column.
+        for row, entry in enumerate(self.model().entries):
+            if is_raster_image_entry(entry):
+                line_y = self.visualRect(self.model().index(row, 0)).top()
+                if line_y >= 0:
+                    painter = QPainter(self.viewport())
+                    painter.setPen(QColor("#808080"))
+                    painter.drawLine(0, line_y, self.viewport().width(), line_y)
+                    painter.end()
+                break
+
 
 class DiffWindow(QWidget):
     def __init__(
@@ -240,11 +369,21 @@ class DiffWindow(QWidget):
         repo_name: str,
         diff_args: Sequence[str],
         entries: list["DiffEntry"],
+        *,
+        start_image_scores: bool = True,
     ):
         super().__init__()
         self.repo_name = repo_name
         self.diff_args = list(diff_args)
         self.model = DiffModel(entries)
+        self.score_pool = QThreadPool(self)
+        self.score_pool.setMaxThreadCount(
+            min(4, max(1, QThread.idealThreadCount()))
+        )
+        self.remaining_image_scores = 0
+        # Retain Python ownership while Qt's thread pool runs the QRunnables.
+        # Some PySide versions otherwise collect workers before their signals.
+        self.workers = []
 
         self.table = DiffTable(self)
         self.table.setModel(self.model)
@@ -252,12 +391,27 @@ class DiffWindow(QWidget):
         self.table.clicked.connect(self._handle_click)
 
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
 
-        self.table.resizeColumnsToContents()
-        self.table.resizeRowsToContents()
+        # {{{ establish the initial table size without Qt measuring every cell
+        normal_font = QFontMetrics(self.table.font())
+        delta_font = QFontMetrics(self.table.itemDelegateForColumn(1).font)
+        self.table.setColumnWidth(
+            0, normal_font.horizontalAdvance(self.model.headers[0]) + 18
+        )
+        self.table.setColumnWidth(
+            1, delta_font.horizontalAdvance("rgb 100.0 a 100.0") + 16
+        )
+        path_width = normal_font.horizontalAdvance(self.model.headers[2]) + 18
+        for row, entry in enumerate(self.model.entries):
+            for line in entry.display_path.splitlines():
+                path_width = max(
+                    path_width, normal_font.horizontalAdvance(line) + 18
+                )
+            if entry.has_multiline_display_path:
+                self.table.setRowHeight(row, 2 * normal_font.height() + 8)
+        self.table.setColumnWidth(2, path_width)
+        # }}}
         self.table.verticalHeader().setDefaultSectionSize(
             max(22, self.table.verticalHeader().defaultSectionSize())
         )
@@ -267,6 +421,34 @@ class DiffWindow(QWidget):
 
         if self.model.rowCount() > 0:
             self.table.selectRow(0)
+        if start_image_scores:
+            QTimer.singleShot(0, self.start_score_workers)
+
+    def start_score_workers(self):
+        # Let the initial window paint before Git and image subprocesses begin.
+        text_entries = [
+            entry
+            for entry in self.model.entries
+            if entry.added == -1 and entry.deleted == -1
+        ]
+        if text_entries:
+            worker = TextStatsWorker(self.diff_args, text_entries)
+            worker.signals.finished.connect(self.results_finished)
+            self.workers.append(worker)
+            self.score_pool.start(worker)
+
+        image_entries = [
+            entry
+            for entry in self.model.entries
+            if is_raster_image_entry(entry)
+            and entry.status not in ("A", "D")
+        ]
+        self.remaining_image_scores = len(image_entries)
+        for entry in image_entries:
+            worker = ImageScoreWorker(self.diff_args, entry)
+            worker.signals.finished.connect(self.results_finished)
+            self.workers.append(worker)
+            self.score_pool.start(worker)
 
     def _update_title(self):
         self.setWindowTitle(
@@ -299,6 +481,81 @@ class DiffWindow(QWidget):
         if index.isValid():
             self.open_row(index.row())
 
+    def results_finished(self, result, second, third, category):
+        current_index = self.table.currentIndex()
+        selected_entry = (
+            self.model.entries[current_index.row()]
+            if current_index.isValid()
+            else None
+        )
+
+        vertical_scroll = self.table.verticalScrollBar().value()
+        horizontal_scroll = self.table.horizontalScrollBar().value()
+
+        # Both worker types report through this callback so result application,
+        # stable sorting, selection, and viewport preservation stay consistent.
+        if category == "text update":
+            entry, added, deleted, error = result
+            entry.added = added
+            entry.deleted = deleted
+            entry.image_score_error = error
+            for row, candidate in enumerate(self.model.entries):
+                if candidate is entry:
+                    index = self.model.index(row, 1)
+                    self.model.dataChanged.emit(
+                        index,
+                        index,
+                        [
+                            Qt.ItemDataRole.DisplayRole,
+                            Qt.ItemDataRole.ToolTipRole,
+                        ],
+                    )
+                    break
+            return
+        if category == "text complete":
+            should_sort = True
+        else:
+            result.rgb_score = second
+            result.alpha_score = third
+            result.image_score_error = category
+            self.remaining_image_scores -= 1
+            should_sort = self.remaining_image_scores == 0
+
+        if not should_sort:
+            for row, candidate in enumerate(self.model.entries):
+                if candidate is result:
+                    index = self.model.index(row, 1)
+                    self.model.dataChanged.emit(
+                        index,
+                        index,
+                        [
+                            Qt.ItemDataRole.DisplayRole,
+                            Qt.ItemDataRole.ToolTipRole,
+                        ],
+                    )
+                    break
+            return
+
+        self.model.layoutAboutToBeChanged.emit()
+        self.model.entries.sort(key=diff_entry_sort_key)
+        self.model.layoutChanged.emit()
+
+        if selected_entry is not None:
+            for row, candidate in enumerate(self.model.entries):
+                if candidate is selected_entry:
+                    self.table.selectRow(row)
+                    break
+        self.table.resizeColumnToContents(1)
+        self.table.verticalScrollBar().setValue(vertical_scroll)
+        self.table.horizontalScrollBar().setValue(horizontal_scroll)
+        QTimer.singleShot(
+            0,
+            lambda: (
+                self.table.verticalScrollBar().setValue(vertical_scroll),
+                self.table.horizontalScrollBar().setValue(horizontal_scroll),
+            ),
+        )
+
     def open_current_row(self):
         idx = self.table.currentIndex()
         if idx.isValid():
@@ -311,7 +568,10 @@ class DiffWindow(QWidget):
         self.model.mark_seen(row)
         self._update_title()
 
-        cmd = build_difftool_command(self.diff_args, entry)
+        if is_raster_image_entry(entry):
+            cmd = build_image_difftool_command(self.diff_args, entry)
+        else:
+            cmd = build_difftool_command(self.diff_args, entry)
 
         try:
             subprocess.Popen(cmd)
@@ -321,9 +581,7 @@ class DiffWindow(QWidget):
             )
 
 
-def launch_review(
-    repo_name: str, diff_args: Sequence[str], entries: list["DiffEntry"]
-) -> int:
+def launch_review(repo_name, diff_args, entries):
     app = QApplication(sys.argv)
     if not entries:
         QMessageBox.information(None, "git gd review", "No changed files.")
