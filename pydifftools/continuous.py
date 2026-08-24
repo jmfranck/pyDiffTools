@@ -4,52 +4,37 @@ import time
 import subprocess
 import sys
 import os
+import errno
 import re
 import shutil
-import socket
 import threading
 import queue
+import traceback
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
+from watchdog.observers.polling import PollingObserver
 from .command_registry import register_command
 from .browser_lifecycle import (
     browser_window_is_alive,
     close_browser_window,
     forward_search_in_browser,
 )
+from .forward_search import (
+    CPB_FORWARD_SEARCH_PORT,
+    FORWARD_SEARCH_HOST,
+    bind_forward_search_server,
+    drain_forward_search_queue,
+    serve_forward_search,
+)
 
-FORWARD_SEARCH_HOST = "127.0.0.1"
-FORWARD_SEARCH_PORT = 51235
+FORWARD_SEARCH_PORT = CPB_FORWARD_SEARCH_PORT
+POLL_INTERVAL_SECONDS = 0.1
+SOURCE_SETTLE_SECONDS = 0.25
+MAIN_LOOP_INTERVAL_SECONDS = 0.05
 MARGIN_COMMENTS_FILTER_MARKER = "-- PYDIFFTOOLS_SPECIAL_MARGIN_COMMENTS_FILTER"
 NO_COMMENTS_FILTER_MARKER = (
     "-- PYDIFFTOOLS_SPECIAL_NO_COMMENTS_FILTER"
 )
-
-
-def forward_search_listener(stop_event, search_queue):
-    # Listen for markdown forward-search requests and queue them for cpb.
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind((FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT))
-    server.listen(5)
-    server.settimeout(1.0)
-    while not stop_event.is_set():
-        try:
-            connection, _ = server.accept()
-        except socket.timeout:
-            continue
-        except OSError:
-            break
-        with connection:
-            payload = b""
-            while True:
-                chunk = connection.recv(4096)
-                if not chunk:
-                    break
-                payload += chunk
-        if payload:
-            search_queue.put(payload.decode("utf-8"))
-    server.close()
 
 
 def _comment_filter_mode(path, packaged_filters=None):
@@ -397,74 +382,12 @@ def run_pandoc(
     return
 
 
-class Handler(FileSystemEventHandler):
-    def __init__(
-        self,
-        filename,
-        observer,
-        comments_to_margin=False,
-        no_comments=False,
-    ):
-        self.observer = observer
-        self.filename = filename
-        self.comments_to_margin = comments_to_margin
-        self.no_comments = no_comments
-        self.comment_filter_session = {}
-        self.html_file = filename.rsplit(".", 1)[0] + ".html"
-        self.init_chrome()
-
-    def init_chrome(self):
-        # apparently, selenium breaks stdin/out for tests, so it must be
-        # imported here
-        from selenium import webdriver
-
-        self.chrome = webdriver.Chrome()
-        run_pandoc(
-            self.filename,
-            self.html_file,
-            comments_to_margin=self.comments_to_margin,
-            no_comments=self.no_comments,
-            comment_filter_session=self.comment_filter_session,
-        )
-        if not os.path.exists(self.html_file):
-            print("html doesn't exist")
-        self.append_autorefresh()
-        self.chrome.get("file://" + os.path.abspath(self.html_file))
-
-    def on_modified(self, event):
-        from selenium.common.exceptions import WebDriverException
-
-        if os.path.normpath(
-            os.path.abspath(event.src_path)
-        ) == os.path.normpath(os.path.abspath(self.filename)):
-            # The watcher loop will shut down after a closed window is noticed.
-            # Do not rebuild or relaunch Chrome in the observer-thread race.
-            if not browser_window_is_alive(self.chrome):
-                return
-            run_pandoc(
-                self.filename,
-                self.html_file,
-                comments_to_margin=self.comments_to_margin,
-                no_comments=self.no_comments,
-                comment_filter_session=self.comment_filter_session,
-            )
-            self.append_autorefresh()
-            try:
-                self.chrome.refresh()
-            except WebDriverException:
-                print(
-                    "I'm quitting!! You probably suspended the computer, which"
-                    " seems to freak selenium out.  Just restart"
-                )
-                close_browser_window(self.chrome)
-                self.chrome = None
-
-    def append_autorefresh(self):
-        with open(self.html_file, "r", encoding="utf-8") as fp:
-            all_data = fp.read()
-        all_data = all_data.replace(
-            "</head>",
-            """
+def append_autorefresh(html_file):
+    with open(html_file, "r", encoding="utf-8") as fp:
+        all_data = fp.read()
+    all_data = all_data.replace(
+        "</head>",
+        """
     <script id="MathJax-script" async src="MathJax-3.1.2/es5/tex-mml-chtml.js"\
 ></script>
     <script>
@@ -523,15 +446,41 @@ position
     </script>
 </head>
     """,
-        )
-        with open(self.html_file, "w", encoding="utf-8") as fp:
-            fp.write(all_data)
+    )
+    with open(html_file, "w", encoding="utf-8") as fp:
+        fp.write(all_data)
 
-    def forward_search(self, search_text):
-        # Reuse shared browser search behavior so cpb and qmdb stay in sync.
-        if not search_text:
+
+class Handler(FileSystemEventHandler):
+    """Queue source changes without doing build or browser work."""
+
+    def __init__(self, filename, change_queue):
+        self.filename = os.path.normpath(os.path.abspath(filename))
+        self.change_queue = change_queue
+
+    def _queue_if_source_changed(self, *paths):
+        if self.filename not in {
+            os.path.normpath(os.path.abspath(path)) for path in paths if path
+        }:
             return
-        forward_search_in_browser(self.chrome, search_text)
+        self.change_queue.put_nowait(None)
+
+    def on_modified(self, event):
+        if not event.is_directory:
+            self._queue_if_source_changed(event.src_path)
+
+    def on_created(self, event):
+        if not event.is_directory:
+            self._queue_if_source_changed(event.src_path)
+
+    def on_deleted(self, event):
+        if not event.is_directory:
+            self._queue_if_source_changed(event.src_path)
+
+    def on_moved(self, event):
+        if not event.is_directory:
+            self._queue_if_source_changed(event.src_path, event.dest_path)
+
 
 @register_command(
     "continuous pandoc build.  Like latexmk, but for markdown!",
@@ -548,43 +497,233 @@ position
     filename_extensions={"filename": ".md"},
 )
 def cpb(filename, comments_to_margin=False, no_comments=False):
-    observer = Observer()
-    event_handler = Handler(
-        filename,
-        observer,
-        comments_to_margin=comments_to_margin,
-        no_comments=no_comments,
-    )
+    source_path = os.path.normpath(os.path.abspath(filename))
+    source_dir = os.path.dirname(source_path)
+    html_file = filename.rsplit(".", 1)[0] + ".html"
+    comment_filter_session = {}
     search_queue = queue.Queue()
     stop_event = threading.Event()
+    forward_search_server = bind_forward_search_server(
+        (FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT), "cpb"
+    )
     socket_thread = threading.Thread(
-        target=forward_search_listener,
-        args=(stop_event, search_queue),
+        target=serve_forward_search,
+        args=(forward_search_server, stop_event, search_queue),
         daemon=True,
     )
-    socket_thread.start()
-    observer.schedule(event_handler, path=".", recursive=False)
-    observer.start()
+    chrome = None
+    observer = None
+    observer_started = False
+    socket_thread_started = False
 
     try:
+        # Bind and serve before any build or browser work. This makes the fixed
+        # port authoritative even while a slow initial build is in progress.
+        socket_thread.start()
+        socket_thread_started = True
+
+        # Build before opening Chrome so a failed initial build cannot leave an
+        # orphaned browser session. Remember the source version from before
+        # the build so an edit during a slow Pandoc run remains pending.
+        source_missing = object()
+        initial_source_stat = os.stat(source_path)
+        handled_signature = (
+            initial_source_stat.st_ino,
+            initial_source_stat.st_size,
+            initial_source_stat.st_mtime_ns,
+        )
+        run_pandoc(
+            filename,
+            html_file,
+            comments_to_margin=comments_to_margin,
+            no_comments=no_comments,
+            comment_filter_session=comment_filter_session,
+        )
+        append_autorefresh(html_file)
+
+        # Selenium is deliberately initialized once, after the first
+        # successful build. Nothing in recovery constructs a browser.
+        from selenium import webdriver
+        from selenium.common.exceptions import WebDriverException
+
+        chrome = webdriver.Chrome()
+        observer = Observer()
+        change_queue = queue.Queue()
+        event_handler = Handler(filename, change_queue)
+        # {{{ fall back when the system cannot allocate an inotify watcher
+        observer.schedule(event_handler, path=source_dir, recursive=False)
+        try:
+            observer.start()
+        except OSError as exc:
+            if exc.errno not in {errno.EMFILE, errno.ENOSPC}:
+                raise
+            observer.stop()
+            print(
+                "pydifft cpb: inotify resources are exhausted; falling "
+                "back to polling for file changes.",
+                file=sys.stderr,
+            )
+            observer = PollingObserver(timeout=POLL_INTERVAL_SECONDS)
+            observer.schedule(event_handler, path=source_dir, recursive=False)
+            observer.start()
+            # PollingObserver.start() does not wait for its emitter's initial
+            # directory snapshot. Do that before exposing Chrome, otherwise
+            # the first user save can become the baseline and emit no event.
+            snapshot_deadline = time.monotonic() + 1.0
+            while any(
+                getattr(emitter, "_snapshot", None) is None
+                for emitter in observer.emitters
+            ):
+                if not observer.is_alive():
+                    raise RuntimeError(
+                        "The polling file watcher stopped before its initial "
+                        "snapshot completed."
+                    )
+                if time.monotonic() >= snapshot_deadline:
+                    raise RuntimeError(
+                        "The polling file watcher did not establish its "
+                        "initial snapshot."
+                    )
+                time.sleep(MAIN_LOOP_INTERVAL_SECONDS)
+        observer_started = True
+        # }}}
+        # Do not expose the preview until watching is active. Otherwise a save
+        # immediately after Chrome loads can become polling's initial snapshot
+        # and never be reported as a change.
+        chrome.get("file://" + os.path.abspath(html_file))
+        rebuild_pending = False
+        stable_signature = None
+        stable_since = None
         while True:
-            # Exit when the browser window is closed so cpb does not leave a
-            # background process running after the user closes Chrome.
-            if not browser_window_is_alive(event_handler.chrome):
+            if not socket_thread.is_alive():
+                raise RuntimeError(
+                    "The cpb forward-search listener stopped unexpectedly; "
+                    "closing the preview instead of leaving an "
+                    "undiscoverable session."
+                )
+            # Chrome closure is terminal. Source-file and build failures do
+            # not affect browser ownership or observer lifetime.
+            if not browser_window_is_alive(chrome):
                 break
-            time.sleep(1)
-            while not search_queue.empty():
-                search_text = search_queue.get().strip()
+
+            for queued_search in drain_forward_search_queue(search_queue):
+                search_text = queued_search.strip()
                 if search_text:
-                    event_handler.forward_search(search_text)
+                    forward_search_in_browser(chrome, search_text)
+
+            saw_source_event = False
+            while not change_queue.empty():
+                change_queue.get_nowait()
+                saw_source_event = True
+            if saw_source_event:
+                rebuild_pending = True
+                stable_signature = None
+                stable_since = None
+
+            # PollingEmitter establishes its first snapshot asynchronously.
+            # Compare against the last handled source signature as a backstop
+            # so an edit in that narrow startup window cannot disappear into
+            # the initial snapshot without generating an event.
+            if not rebuild_pending:
+                try:
+                    current_source_stat = os.stat(source_path)
+                except FileNotFoundError:
+                    current_source_signature = source_missing
+                else:
+                    current_source_signature = (
+                        current_source_stat.st_ino,
+                        current_source_stat.st_size,
+                        current_source_stat.st_mtime_ns,
+                    )
+                if current_source_signature != handled_signature:
+                    rebuild_pending = True
+                    stable_signature = None
+                    stable_since = None
+
+            # {{{ wait for an editor save to restore and settle the source
+            if rebuild_pending:
+                now = time.monotonic()
+                try:
+                    source_stat = os.stat(source_path)
+                except FileNotFoundError:
+                    stable_signature = None
+                    stable_since = None
+                else:
+                    current_signature = (
+                        source_stat.st_ino,
+                        source_stat.st_size,
+                        source_stat.st_mtime_ns,
+                    )
+                    if current_signature != stable_signature:
+                        stable_signature = current_signature
+                        stable_since = now
+                    elif now - stable_since >= SOURCE_SETTLE_SECONDS:
+                        attempted_signature = stable_signature
+                        rebuild_pending = False
+                        stable_signature = None
+                        stable_since = None
+                        if not browser_window_is_alive(chrome):
+                            break
+                        try:
+                            run_pandoc(
+                                filename,
+                                html_file,
+                                comments_to_margin=comments_to_margin,
+                                no_comments=no_comments,
+                                comment_filter_session=comment_filter_session,
+                            )
+                            append_autorefresh(html_file)
+                        except Exception as exc:
+                            exception_filename = getattr(exc, "filename", None)
+                            missing_source = isinstance(
+                                exc, FileNotFoundError
+                            ) and (
+                                not os.path.exists(source_path)
+                                or (
+                                    exception_filename
+                                    and os.path.normpath(
+                                        os.path.abspath(exception_filename)
+                                    )
+                                    == source_path
+                                )
+                            )
+                            if missing_source:
+                                rebuild_pending = True
+                            else:
+                                handled_signature = attempted_signature
+                                print(
+                                    "pydifft cpb: rebuild failed; keeping "
+                                    "the current preview open.",
+                                    file=sys.stderr,
+                                )
+                                traceback.print_exc()
+                        else:
+                            handled_signature = attempted_signature
+                            if not browser_window_is_alive(chrome):
+                                break
+                            try:
+                                chrome.refresh()
+                            except WebDriverException:
+                                print(
+                                    "pydifft cpb: Chrome is no longer "
+                                    "available; stopping without reopening "
+                                    "it.",
+                                    file=sys.stderr,
+                                )
+                                break
+            # }}}
+            time.sleep(MAIN_LOOP_INTERVAL_SECONDS)
     except KeyboardInterrupt:
         pass
     finally:
         stop_event.set()
-        observer.stop()
-        observer.join()
-        socket_thread.join()
-        close_browser_window(event_handler.chrome)
+        forward_search_server.close()
+        if observer_started:
+            observer.stop()
+            observer.join()
+        if socket_thread_started:
+            socket_thread.join()
+        close_browser_window(chrome)
 
 
 if __name__ == "__main__":

@@ -10,7 +10,6 @@ import re
 import nbformat
 import difflib
 import shutil
-import socket
 import importlib.util
 from pathlib import Path
 from . import (
@@ -20,6 +19,11 @@ from . import (
     update_check,
 )
 from .continuous import cpb, FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT
+from .forward_search import (
+    ForwardSearchProtocolError,
+    ForwardSearchUnavailable,
+    send_forward_search,
+)
 from .wrap_sentences import wr as wrap_sentences_wr  # registers wrap command
 from .separate_comments import tex_sepcomments
 from .unseparate_comments import tex_unsepcomments
@@ -540,16 +544,27 @@ def mfs(text):
         (FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT),
         (QMDB_FORWARD_SEARCH_HOST, QMDB_FORWARD_SEARCH_PORT),
     ]
-    client = None
-    for address in socket_addresses:
-        candidate = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            candidate.connect(address)
-            client = candidate
-            break
-        except OSError:
-            candidate.close()
-    if client is None:
+
+    def try_existing_listener():
+        protocol_errors = []
+        for address in socket_addresses:
+            try:
+                send_forward_search(address, search_text)
+            except ForwardSearchUnavailable:
+                continue
+            except ForwardSearchProtocolError as exc:
+                protocol_errors.append(str(exc))
+                continue
+            return True
+        if protocol_errors:
+            raise RuntimeError(
+                "A forward-search port accepted the connection but did not "
+                "acknowledge the pydifft protocol. Refusing to open another "
+                "browser window.\n" + "\n".join(protocol_errors)
+            )
+        return False
+
+    if not try_existing_listener():
         # If no listener is running yet, choose a markdown file in this
         # directory that contains the requested search text and start cpb for
         # it.
@@ -581,24 +596,14 @@ def mfs(text):
         # Wait up to 20 seconds so the child can bring up the listener,
         # then resend the forward-search text.
         for _ in range(80):
-            for address in socket_addresses:
-                candidate = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                try:
-                    candidate.connect(address)
-                    client = candidate
-                    break
-                except OSError:
-                    candidate.close()
-            if client is not None:
-                break
+            if try_existing_listener():
+                return
             time.sleep(0.25)
         else:
             raise RuntimeError(
-                "Started cpb automatically, but the forward search socket "
-                "did not come up within 20 seconds."
+                "Started cpb automatically, but no acknowledged forward "
+                "search endpoint came up within 20 seconds."
             )
-    client.sendall(search_text.encode("utf-8"))
-    client.close()
 
 
 @register_command("Convert xml to xlsx")

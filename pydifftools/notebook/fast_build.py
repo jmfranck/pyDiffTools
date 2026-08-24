@@ -17,13 +17,20 @@ from pathlib import Path
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 import threading
 import shutil
-import socket
+import queue
 import yaml
 from pydifftools.command_registry import register_command
 from pydifftools.browser_lifecycle import (
     browser_window_is_alive,
     close_browser_window,
     forward_search_in_browser,
+)
+from pydifftools.forward_search import (
+    FORWARD_SEARCH_HOST,
+    QMDB_FORWARD_SEARCH_PORT as SHARED_QMDB_FORWARD_SEARCH_PORT,
+    bind_forward_search_server,
+    drain_forward_search_queue,
+    serve_forward_search,
 )
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers.polling import PollingObserver as Observer
@@ -1503,8 +1510,8 @@ PANDOC_TEMPLATE = Path("_template/pandoc_template.html").resolve()
 NAV_TEMPLATE = Path("_template/nav_template.html").resolve()
 MATHJAX_DIR = Path("_template/mathjax").resolve()
 PROJECT_ROOT = Path(".").resolve()
-QMDB_FORWARD_SEARCH_HOST = "127.0.0.1"
-QMDB_FORWARD_SEARCH_PORT = 51236
+QMDB_FORWARD_SEARCH_HOST = FORWARD_SEARCH_HOST
+QMDB_FORWARD_SEARCH_PORT = SHARED_QMDB_FORWARD_SEARCH_PORT
 
 
 class NoCacheHTTPRequestHandler(SimpleHTTPRequestHandler):
@@ -2437,106 +2444,114 @@ def watch_and_serve(
     except OSError as exc:  # pragma: no cover - depends on local environment
         print(f"Could not start server on port {port}: {exc}")
         return
-    print(f"Serving {DISPLAY_DIR} at http://localhost:{port}")
-    Path(DISPLAY_DIR).mkdir(parents=True, exist_ok=True)
-    threading.Thread(target=_serve_forever, args=(httpd,), daemon=True).start()
-    refresher = BrowserReloader(url)
-    build_lock = threading.Lock()
-
-    def serialized_build(**kwargs):
-        with build_lock:
-            return machine.build(**kwargs)
-
-    # Launch the initial build asynchronously so the browser opens immediately.
-    initial_executor = ThreadPoolExecutor(max_workers=1)
-    initial_future = initial_executor.submit(
-        serialized_build,
-        webtex=webtex,
-        refresh_callback=refresher.refresh,
-    )
-    if Observer is None:
-        raise ImportError(
-            "File watching requires the optional 'watchdog' package."
-        )
-
-    observer = Observer()
-
-    # Listen on a dedicated qmdb socket so mfs can route searches to whichever
-    # browser session (cpb or qmdb) is already running.
-    forward_search_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    forward_search_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    forward_search_server.settimeout(0.25)
     try:
-        forward_search_server.bind(
-            (QMDB_FORWARD_SEARCH_HOST, QMDB_FORWARD_SEARCH_PORT)
+        forward_search_server = bind_forward_search_server(
+            (QMDB_FORWARD_SEARCH_HOST, QMDB_FORWARD_SEARCH_PORT), "qmdb"
         )
-        forward_search_server.listen(5)
-    except OSError as exc:
-        print(
-            "Could not start qmdb forward search socket "
-            f"on {QMDB_FORWARD_SEARCH_HOST}:{QMDB_FORWARD_SEARCH_PORT}: {exc}"
-        )
-        forward_search_server.close()
-        forward_search_server = None
+    except Exception:
+        httpd.server_close()
+        raise
+    forward_search_stop = threading.Event()
+    forward_search_queue = queue.Queue()
+    forward_search_thread = threading.Thread(
+        target=serve_forward_search,
+        args=(
+            forward_search_server,
+            forward_search_stop,
+            forward_search_queue,
+        ),
+        daemon=True,
+    )
+    refresher = None
+    initial_executor = None
+    initial_future = None
+    observer = None
+    observer_started = False
+    forward_search_thread_started = False
 
-    def rebuild(path):
-        serialized_build(
+    try:
+        # The endpoint is live before BrowserReloader constructs Chrome.
+        forward_search_thread.start()
+        forward_search_thread_started = True
+        print(f"Serving {DISPLAY_DIR} at http://localhost:{port}")
+        Path(DISPLAY_DIR).mkdir(parents=True, exist_ok=True)
+        threading.Thread(
+            target=_serve_forever, args=(httpd,), daemon=True
+        ).start()
+        refresher = BrowserReloader(url)
+        build_lock = threading.Lock()
+
+        def serialized_build(**kwargs):
+            with build_lock:
+                return machine.build(**kwargs)
+
+        # Launch the initial build asynchronously so Chrome opens immediately.
+        initial_executor = ThreadPoolExecutor(max_workers=1)
+        initial_future = initial_executor.submit(
+            serialized_build,
             webtex=webtex,
-            changed_paths=[path],
             refresh_callback=refresher.refresh,
         )
+        if Observer is None:
+            raise ImportError(
+                "File watching requires the optional 'watchdog' package."
+            )
 
-    handler = ChangeHandler(rebuild)
-    observer.schedule(handler, str(PROJECT_ROOT), recursive=True)
-    observer.start()
-    try:
+        observer = Observer()
+
+        def rebuild(path):
+            serialized_build(
+                webtex=webtex,
+                changed_paths=[path],
+                refresh_callback=refresher.refresh,
+            )
+
+        handler = ChangeHandler(rebuild)
+        observer.schedule(handler, str(PROJECT_ROOT), recursive=True)
+        observer.start()
+        observer_started = True
         while True:
+            if not forward_search_thread.is_alive():
+                raise RuntimeError(
+                    "The qmdb forward-search listener stopped unexpectedly; "
+                    "closing the preview instead of leaving an "
+                    "undiscoverable session."
+                )
             if initial_future and initial_future.done():
                 initial_future.result()
                 initial_executor.shutdown(wait=False)
                 initial_future = None
-            if forward_search_server is not None:
+                initial_executor = None
+            for search_text in drain_forward_search_queue(
+                forward_search_queue
+            ):
+                # Reuse cpb forward-search behavior for qmdb browser windows.
                 try:
-                    connection, _ = forward_search_server.accept()
-                except socket.timeout:
-                    connection = None
-                except OSError:
-                    connection = None
-                if connection is not None:
-                    with connection:
-                        payload = b""
-                        while True:
-                            chunk = connection.recv(4096)
-                            if not chunk:
-                                break
-                            payload += chunk
-                    if payload:
-                        # Reuse cpb forward-search behavior for qmdb browser
-                        # windows.
-                        try:
-                            forward_search_in_browser(
-                                refresher.browser, payload.decode("utf-8")
-                            )
-                        except WebDriverException:
-                            close_browser_window(refresher.browser)
-                            refresher.browser = None
+                    forward_search_in_browser(
+                        refresher.browser, search_text
+                    )
+                except WebDriverException:
+                    close_browser_window(refresher.browser)
+                    refresher.browser = None
             if not no_browser and not refresher.is_alive():
                 break
             time.sleep(1)
     except KeyboardInterrupt:
         pass
     finally:
-        if initial_future:
-            initial_future.result()
-            initial_executor.shutdown(wait=False)
-        observer.stop()
-        observer.join()
-        if forward_search_server is not None:
-            forward_search_server.close()
+        forward_search_stop.set()
+        forward_search_server.close()
+        if observer_started:
+            observer.stop()
+            observer.join()
+        if initial_executor is not None:
+            initial_executor.shutdown(wait=True)
         httpd.shutdown()
         httpd.server_close()
-        if not no_browser and getattr(refresher, "browser", None):
+        if refresher is not None and getattr(refresher, "browser", None):
             close_browser_window(refresher.browser)
+        if forward_search_thread_started:
+            forward_search_thread.join()
 
 
 if __name__ == "__main__":

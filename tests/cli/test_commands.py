@@ -11,6 +11,7 @@ from pydifftools import continuous
 from pydifftools.continuous import run_pandoc
 from pydifftools.command_line import mfs
 from pydifftools.command_registry import _COMMAND_SPECS
+from pydifftools.forward_search import ForwardSearchUnavailable
 from pydifftools.git_gd import (
     DiffEntry,
     IMAGE_DIFFTOOL_NAME,
@@ -652,35 +653,22 @@ def test_mfs_starts_cpb_when_socket_missing(tmp_path):
     (tmp_path / "notes.md").write_text("alpha\nneedle\nomega\n")
     (tmp_path / "other.md").write_text("does not match\n")
 
-    calls = {
-        "connect": 0,
-        "sendall": [],
-    }
+    calls = []
 
-    class FakeSocket:
-        def __init__(self, *args, **kwargs):
-            return
-
-        def connect(self, _address):
-            calls["connect"] += 1
-            if calls["connect"] == 1:
-                raise OSError("socket not ready")
-
-        def sendall(self, payload):
-            calls["sendall"].append(payload)
-
-        def close(self):
-            return
+    def fake_send(address, search_text):
+        calls.append((address, search_text))
+        if len(calls) <= 2:
+            raise ForwardSearchUnavailable("socket not ready")
 
     cwd = os.getcwd()
     os.chdir(tmp_path)
     try:
-        with patch("pydifftools.command_line.socket.socket", FakeSocket):
+        with patch("pydifftools.command_line.send_forward_search", fake_send):
             with patch("pydifftools.command_line.os.fork", return_value=123):
                 with patch("pydifftools.command_line.time.sleep"):
                     mfs("needle")
-        assert calls["connect"] >= 2
-        assert calls["sendall"] == [b"needle"]
+        assert len(calls) == 3
+        assert [search_text for _, search_text in calls] == ["needle"] * 3
     finally:
         os.chdir(cwd)
 
@@ -688,24 +676,11 @@ def test_mfs_starts_cpb_when_socket_missing(tmp_path):
 def test_mfs_waits_up_to_20_seconds_for_socket(tmp_path):
     (tmp_path / "notes.md").write_text("alpha\nneedle\nomega\n")
 
-    calls = {
-        "connect": 0,
-        "sleep": 0,
-    }
+    calls = {"send": 0, "sleep": 0}
 
-    class FakeSocket:
-        def __init__(self, *args, **kwargs):
-            return
-
-        def connect(self, _address):
-            calls["connect"] += 1
-            raise OSError("socket not ready")
-
-        def sendall(self, _payload):
-            return
-
-        def close(self):
-            return
+    def fake_send(_address, _search_text):
+        calls["send"] += 1
+        raise ForwardSearchUnavailable("socket not ready")
 
     def fake_sleep(_seconds):
         calls["sleep"] += 1
@@ -713,7 +688,7 @@ def test_mfs_waits_up_to_20_seconds_for_socket(tmp_path):
     cwd = os.getcwd()
     os.chdir(tmp_path)
     try:
-        with patch("pydifftools.command_line.socket.socket", FakeSocket):
+        with patch("pydifftools.command_line.send_forward_search", fake_send):
             with patch("pydifftools.command_line.os.fork", return_value=123):
                 with patch("pydifftools.command_line.time.sleep", fake_sleep):
                     try:
@@ -723,34 +698,19 @@ def test_mfs_waits_up_to_20_seconds_for_socket(tmp_path):
                         assert "within 20 seconds" in str(exc)
         # We try cpb and qmdb sockets each time: one initial pass plus
         # 80 retry passes gives 162 connection attempts total.
-        assert calls["connect"] == 162
+        assert calls["send"] == 162
         assert calls["sleep"] == 80
     finally:
         os.chdir(cwd)
 
 
 def test_mfs_uses_qmdb_socket_when_cpb_socket_missing(tmp_path):
-    calls = {
-        "connect": [],
-        "sendall": [],
-        "fork": 0,
-    }
+    calls = {"send": [], "fork": 0}
 
-    class FakeSocket:
-        def __init__(self, *args, **kwargs):
-            return
-
-        def connect(self, address):
-            calls["connect"].append(address)
-            # First (cpb) socket fails, second (qmdb) socket succeeds.
-            if len(calls["connect"]) == 1:
-                raise OSError("cpb socket missing")
-
-        def sendall(self, payload):
-            calls["sendall"].append(payload)
-
-        def close(self):
-            return
+    def fake_send(address, search_text):
+        calls["send"].append((address, search_text))
+        if len(calls["send"]) == 1:
+            raise ForwardSearchUnavailable("cpb socket missing")
 
     def fake_fork():
         calls["fork"] += 1
@@ -759,68 +719,47 @@ def test_mfs_uses_qmdb_socket_when_cpb_socket_missing(tmp_path):
     cwd = os.getcwd()
     os.chdir(tmp_path)
     try:
-        with patch("pydifftools.command_line.socket.socket", FakeSocket):
+        with patch("pydifftools.command_line.send_forward_search", fake_send):
             with patch("pydifftools.command_line.os.fork", fake_fork):
                 mfs("needle")
         assert calls["fork"] == 0
-        assert len(calls["connect"]) == 2
-        assert calls["sendall"] == [b"needle"]
+        assert len(calls["send"]) == 2
+        assert [search_text for _, search_text in calls["send"]] == [
+            "needle",
+            "needle",
+        ]
     finally:
         os.chdir(cwd)
 
 
 def test_mfs_strips_markdown_markup_before_search(tmp_path):
-    calls = {
-        "sendall": [],
-    }
+    calls = []
 
-    class FakeSocket:
-        def __init__(self, *args, **kwargs):
-            return
-
-        def connect(self, _address):
-            return
-
-        def sendall(self, payload):
-            calls["sendall"].append(payload)
-
-        def close(self):
-            return
+    def fake_send(_address, search_text):
+        calls.append(search_text)
 
     cwd = os.getcwd()
     os.chdir(tmp_path)
     try:
-        with patch("pydifftools.command_line.socket.socket", FakeSocket):
+        with patch("pydifftools.command_line.send_forward_search", fake_send):
             mfs("**Result** near @fig:overview [@smith2024]")
-        assert calls["sendall"] == [b"Result near"]
+        assert calls == ["Result near"]
     finally:
         os.chdir(cwd)
 
 
 def test_mfs_marker_regex_is_case_insensitive(tmp_path):
-    calls = {
-        "sendall": [],
-    }
+    calls = []
 
-    class FakeSocket:
-        def __init__(self, *args, **kwargs):
-            return
-
-        def connect(self, _address):
-            return
-
-        def sendall(self, payload):
-            calls["sendall"].append(payload)
-
-        def close(self):
-            return
+    def fake_send(_address, search_text):
+        calls.append(search_text)
 
     cwd = os.getcwd()
     os.chdir(tmp_path)
     try:
-        with patch("pydifftools.command_line.socket.socket", FakeSocket):
+        with patch("pydifftools.command_line.send_forward_search", fake_send):
             mfs("Result before @FIG:overview should truncate")
-        assert calls["sendall"] == [b"Result before"]
+        assert calls == ["Result before"]
     finally:
         os.chdir(cwd)
 
@@ -1136,8 +1075,7 @@ def test_append_autorefresh_persists_comment_hidden_state(tmp_path):
     html_file = tmp_path / "notes.html"
     html_file.write_text("<html><head></head><body>ok</body></html>")
 
-    fake_handler = type("FakeHandler", (), {"html_file": str(html_file)})()
-    continuous.Handler.append_autorefresh(fake_handler)
+    continuous.append_autorefresh(str(html_file))
 
     html_content = html_file.read_text()
     assert "commentHiddenBubbleIndexes" in html_content
@@ -1648,23 +1586,13 @@ def test_comment_css_arrow_geometry_constants(tmp_path):
 def test_mfs_errors_when_no_matching_markdown(tmp_path):
     (tmp_path / "notes.md").write_text("alpha\nbeta\n")
 
-    class FakeSocket:
-        def __init__(self, *args, **kwargs):
-            return
-
-        def connect(self, _address):
-            raise OSError("socket not ready")
-
-        def sendall(self, _payload):
-            return
-
-        def close(self):
-            return
+    def fake_send(_address, _search_text):
+        raise ForwardSearchUnavailable("socket not ready")
 
     cwd = os.getcwd()
     os.chdir(tmp_path)
     try:
-        with patch("pydifftools.command_line.socket.socket", FakeSocket):
+        with patch("pydifftools.command_line.send_forward_search", fake_send):
             try:
                 mfs("needle")
                 assert False, "Expected mfs to raise RuntimeError"
