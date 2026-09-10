@@ -79,11 +79,19 @@ included are (listed in order of fun/utility):
   wrapping, ideal for when you are
   working on manuscripts that you
   are version tracking with git.
+  Headers, fenced code blocks, and Pandoc tables retain their formatting.
+  Display-math delimiters get their own lines while equation contents retain
+  their wrapping; inline-math boundaries are preferred places to wrap prose.
 - `pydifft wmatch` ("whitespace match"): a script that matches whitespace between two text files.
 
     * pandoc can convert between markdown/latex/word, but doing this messes with your whitespace and gvimdiff comparisons.
 
     * this allows you to use an original file with good whitespace formatting as a "template" that you can match other (e.g. pandoc converted file) onto another
+
+    * changed prose lines exceeding 1.5 times the nearby reference width are
+      wrapped using the same sentence and punctuation rules as ``wr``.
+      Existing surrounding line breaks are retained; the fallback width is
+      80 columns when the reference provides too little prose.
 
 - `pydifft wd` ("word diff"): generate "track changes" word files starting from pandoc markdown in a git history.  Assuming that you have copied diff-doc.js (copied + licensed from elsewhere) into your home directory, this will use pandoc to convert the markdown files to MS Word, then use the MS Word comparison tool to generate a document where all relevant changes are shown with "track changes."
 

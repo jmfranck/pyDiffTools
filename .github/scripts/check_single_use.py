@@ -51,6 +51,13 @@ class ModuleAnalyzer(ast.NodeVisitor):
         self.top_level_function_definitions = defaultdict(list)
         self.direct_function_calls = defaultdict(list)
         self.main_guard_direct_calls = defaultdict(list)
+        self.imported_function_names = {}
+
+    def visit_ImportFrom(self, node: ast.ImportFrom):
+        for alias in node.names:
+            if alias.name != "*":
+                self.imported_function_names[alias.asname or alias.name] = alias.name
+        self.generic_visit(node)
 
     def _record_target(
         self,
@@ -215,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
     fold_end = re.compile(r"^\s*#\s*\}\}\}")
     violations = []
     parse_failures = []
+    analyzed = []
 
     for raw_path in parser.parse_args(argv).paths:
         path = Path(raw_path)
@@ -279,7 +287,18 @@ def main(argv: list[str] | None = None) -> int:
 
         analyzer = ModuleAnalyzer()
         analyzer.visit(tree)
+        analyzed.append((path, analyzer, allowed_blocks))
 
+    external_calls = defaultdict(list)
+    for path, analyzer, _ in analyzed:
+        for local_name, call_lines in analyzer.direct_function_calls.items():
+            original_name = analyzer.imported_function_names.get(local_name)
+            if original_name is not None:
+                external_calls[original_name].extend(
+                    (str(path), line) for line in call_lines
+                )
+
+    for path, analyzer, allowed_blocks in analyzed:
         for (
             name,
             definition_lines,
@@ -323,7 +342,9 @@ def main(argv: list[str] | None = None) -> int:
             definition_lines,
         ) in analyzer.top_level_function_definitions.items():
             call_lines = analyzer.direct_function_calls.get(name, [])
-            if len(definition_lines) != 1 or len(call_lines) != 1:
+            external = external_calls.get(name, [])
+            call_count = len(call_lines) + len(external)
+            if len(definition_lines) != 1 or call_count != 1:
                 continue
             if (
                 name == "main"
@@ -339,7 +360,7 @@ def main(argv: list[str] | None = None) -> int:
                     name=name,
                     kind="top-level function",
                     definition_line=definition_line,
-                    use_line=call_lines[0],
+                    use_line=call_lines[0] if call_lines else external[0][1],
                 )
             )
 

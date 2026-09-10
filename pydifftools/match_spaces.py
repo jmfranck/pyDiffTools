@@ -1,5 +1,7 @@
 from difflib import SequenceMatcher
-
+from bisect import bisect_right
+import math
+from .wrap_sentences import classify_lines, wrap_prose
 
 def run(arguments):
     with open(arguments[0], encoding="utf-8") as fp:
@@ -73,6 +75,7 @@ def run(arguments):
                 retval_words.append(input_tokens[j])
                 retval_whitespace.append("")
                 retval_isdoublenewline.append(False)
+                j += 1
             else:  # it's a word
                 retval_words.append(input_tokens[j])
                 if input_iswhitespace[j + 1]:
@@ -108,7 +111,31 @@ def run(arguments):
     final_text = ""
     newline_debt = 0
     last_indent = ""
+    # {{{ locate reference prose and protected target text
+    filetype = "markdown" if arguments[1].endswith((".md", ".qmd")) else "latex"
+    reference_lines = classify_lines(text1, filetype)
+    reference_starts = []
+    position = 0
+    for _, line in reference_lines:
+        reference_starts.append(position)
+        position += len(line)
+    word_starts = [0]
+    for word, whitespace in zip(text1_words, text1_whitespace):
+        word_starts.append(word_starts[-1] + len(word) + len(whitespace))
+    target_protected = []
+    position = 0
+    for allowed, line in classify_lines(text2, filetype):
+        if not allowed:
+            target_protected.append((position, position + len(line)))
+        position += len(line)
+    target_word_starts = [0]
+    for word, whitespace in zip(text2_words, text2_whitespace):
+        target_word_starts.append(target_word_starts[-1] + len(word) + len(whitespace))
+    edits = []
+    protected_output = []
+    # }}}
     for j in diffs:
+        output_start = len(final_text)
         if j[0] == "equal":
             temp_addition = text1_words[j[1] : j[2]]
             whitespace = text1_whitespace[j[1] : j[2]]
@@ -230,6 +257,59 @@ def run(arguments):
                     last_indent = whitespace[k][idx + 1 :]
         else:
             raise ValueError("unknown opcode" + j[0])
+        if j[0] != "equal":
+            reference_line = max(0, bisect_right(reference_starts, word_starts[j[1]]) - 1)
+            edits.append((output_start, len(final_text), reference_line))
+        if j[0] != "delete":
+            position = output_start
+            for k, (word, space) in enumerate(zip(temp_addition, whitespace)):
+                target = j[3] + k
+                if any(
+                    start < target_word_starts[target + 1]
+                    and stop > target_word_starts[target]
+                    for start, stop in target_protected
+                ):
+                    protected_output.append((position, position + len(word) + len(space)))
+                position += len(word) + len(space)
+    # {{{ wrap only changed prose lines that clearly exceed the local width
+    output = []
+    position = 0
+    for allowed, line in classify_lines(final_text, filetype):
+        stop = position + len(line)
+        nearby_edits = [
+            reference for start, end, reference in edits
+            if start < stop and end >= position
+        ]
+        protected = any(start < stop and end > position for start, end in protected_output)
+        if allowed and line.strip() and nearby_edits and not protected:
+            reference = nearby_edits[0]
+            nearby = sorted(
+                (
+                    idx for idx, (can_wrap, source) in enumerate(reference_lines)
+                    if can_wrap and source.strip()
+                ),
+                key=lambda idx: (abs(idx - reference), idx),
+            )[:10]
+            widths = sorted(len(reference_lines[idx][1].rstrip("\n")) for idx in nearby)
+            width = widths[math.ceil(0.75 * len(widths)) - 1] if len(widths) >= 2 else 80
+            if len(line.rstrip("\n")) > 1.5 * width:
+                indentation = ""
+                for idx in nearby:
+                    source = reference_lines[idx][1]
+                    prefix = source[:len(source) - len(source.lstrip(" \t"))]
+                    if prefix:
+                        indentation = prefix
+                        break
+                prefix = line[:len(line) - len(line.lstrip(" \t"))]
+                wrapped = wrap_prose(
+                    line[len(prefix):], width, filetype=filetype,
+                    indent_amount=len(indentation.expandtabs()),
+                )
+                line = prefix + wrapped
+        output.append(line)
+        position = stop
+    final_text = "".join(output)
+    # }}}
     fp = open(arguments[1], "w", encoding="utf-8")
     fp.write(final_text)
     fp.close()

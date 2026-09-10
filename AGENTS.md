@@ -1,6 +1,7 @@
 # Agent Instructions
 
 - Always run the full test suite.  Generally, it should not be necessary to install any dependenencies that are not listed in the toml file.
+	- Every change must also pass all applicable checks under `.github`, including Flake8 and the single-use definitions checker.
 	- If you allege other dependencies, you are doing something wrong!! See the recommended flow below.
 - Recommended flow for test INSIDE WEB/CLOUD CONTAINER:
   1. source /root/conda/etc/profile.d/conda.sh && conda activate base && python -m pip install -e . --no-build-isolation

@@ -4,6 +4,7 @@ import itertools
 
 from .command_registry import register_command
 
+DISPLAY_MATH = re.compile(r"(?<!\\)(?:\\\\)*(\$\$)")
 
 def match_paren(thistext, pos, opener="{"):
     closerdict = {
@@ -43,6 +44,372 @@ def match_paren(thistext, pos, opener="{"):
             "here is the offending text!:\n" + ("=" * 30) + thistext
         )
     return pos
+
+
+def classify_lines(text, filetype="markdown", normalize_math=False):
+    """Return (wrappable, line) pairs, retaining line endings and block text."""
+    lines = text.splitlines(keepends=True)
+    wrappable = [True] * len(lines)
+    # {{{ exclude structural blocks before considering paragraphs or math
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        end = idx
+        opener = None
+        match = None
+        if filetype == "markdown":
+            fence = re.match(r"^[ \t]*(\x60{3,}|~{3,})", line)
+            if fence:
+                delimiter = fence[1]
+                end = idx + 1
+                while end < len(lines):
+                    if re.fullmatch(
+                        r"[ \t]*"
+                        + re.escape(delimiter[0])
+                        + "{"
+                        + str(len(delimiter))
+                        + r",}[ \t]*\n?",
+                        lines[end],
+                    ):
+                        break
+                    end += 1
+            elif idx == 0 and line.strip() in ("---", "..."):
+                end = idx + 1
+                while end < len(lines) and lines[end].strip() not in (
+                    "---",
+                    "...",
+                ):
+                    end += 1
+                if end == len(lines):
+                    idx += 1
+                    continue
+            elif re.match(r"^[ ]{0,3}#{1,6}(?:\s|$)", line):
+                pass
+            else:
+                idx += 1
+                continue
+        else:
+            match = re.match(
+                r"\\(?:section|subsection|subsubsection|paragraph|"
+                r"newcommand|input)\*?{",
+                line,
+            )
+            if match:
+                opener = "{"
+            else:
+                environment = re.search(r"\\begin{(equation|align)\*?}", line)
+                if not environment:
+                    idx += 1
+                    continue
+                closing = environment[0].replace(r"\begin", r"\end")
+                while end < len(lines) and closing not in lines[end]:
+                    end += 1
+                if end == len(lines):
+                    raise RuntimeError(
+                        "didn't find closing line for environment"
+                    )
+        if opener:
+            remaining = "".join(lines[idx:])
+            pos = match.start() if opener.startswith("<") else match.end() - 1
+            stop = match_paren(remaining, pos, opener)
+            end = idx + remaining[:stop].count("\n")
+        end = min(end + 1, len(lines))
+        wrappable[idx:end] = [False] * (end - idx)
+        idx = end
+    # }}}
+    if filetype == "markdown":
+        # {{{ recognize table separators and preserve complete table spans
+        columns = re.compile(r"^[ \t]*-+(?:[ \t]+-+)+[ \t]*$")
+        rule = re.compile(r"^[ \t]*-+[ \t]*$")
+        pipe = re.compile(
+            r"^[ \t]*\|?[ \t]*:?-+:?[ \t]*"
+            r"(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$"
+        )
+        grid = re.compile(r"^[ \t]*\+(?:[-=:]+\+)+[ \t]*$")
+        idx = 0
+        while idx < len(lines):
+            if not wrappable[idx]:
+                idx += 1
+                continue
+            line = lines[idx].rstrip("\n")
+            start = idx
+            end = idx + 1
+            if "|" in line and pipe.fullmatch(line):
+                if idx and wrappable[idx - 1] and "|" in lines[idx - 1]:
+                    start -= 1
+                while (
+                    end < len(lines) and wrappable[end] and "|" in lines[end]
+                ):
+                    end += 1
+            elif grid.fullmatch(line):
+                while (
+                    end < len(lines)
+                    and wrappable[end]
+                    and (
+                        lines[end].lstrip().startswith("|")
+                        or grid.fullmatch(lines[end].rstrip("\n"))
+                    )
+                ):
+                    end += 1
+            elif columns.fullmatch(line):
+                # A header may occupy several lines after a full-width rule.
+                before = idx - 1
+                while (
+                    before >= 0 and wrappable[before] and lines[before].strip()
+                ):
+                    if rule.fullmatch(lines[before].rstrip("\n")):
+                        start = before
+                        break
+                    before -= 1
+                else:
+                    if idx and wrappable[idx - 1] and lines[idx - 1].strip():
+                        start = idx - 1
+                # A closing rule permits blank lines between multiline rows.
+                closing = end
+                while closing < len(lines) and wrappable[closing]:
+                    candidate = lines[closing].rstrip("\n")
+                    if candidate.strip() == line.strip() or (
+                        start < idx
+                        and rule.fullmatch(lines[start].rstrip("\n"))
+                        and rule.fullmatch(candidate)
+                    ):
+                        end = closing + 1
+                        break
+                    if re.match(r"^[ \t]*(?:[Tt]able:|:)\s", candidate):
+                        break
+                    if (
+                        closing > idx + 1
+                        and not lines[closing - 1].strip()
+                        and candidate.strip()
+                        and not re.search(r" {2,}|\t", candidate)
+                    ):
+                        break
+                    closing += 1
+                if end == idx + 1:
+                    while (
+                        end < len(lines)
+                        and wrappable[end]
+                        and lines[end].strip()
+                    ):
+                        end += 1
+            else:
+                idx += 1
+                continue
+            if end == idx + 1 and start == idx:
+                idx += 1
+                continue
+            # Include an adjacent caption paragraph on either side.
+            for direction in (-1, 1):
+                pos = start - 1 if direction == -1 else end
+                while 0 <= pos < len(lines) and not lines[pos].strip():
+                    pos += direction
+                if direction == -1:
+                    first = pos
+                    while (
+                        first > 0
+                        and lines[first - 1].strip()
+                        and wrappable[first - 1]
+                    ):
+                        first -= 1
+                    if first >= 0 and re.match(
+                        r"^[ \t]*(?:[Tt]able:|:)\s", lines[first]
+                    ):
+                        start = first
+                elif pos < len(lines) and re.match(
+                    r"^[ \t]*(?:[Tt]able:|:)\s", lines[pos]
+                ):
+                    while (
+                        pos < len(lines)
+                        and wrappable[pos]
+                        and lines[pos].strip()
+                    ):
+                        pos += 1
+                    end = pos
+            wrappable[start:end] = [False] * (end - start)
+            idx = end
+        for idx in range(len(lines) - 1):
+            if wrappable[idx] and wrappable[idx + 1] and lines[idx].strip():
+                if re.fullmatch(r" {0,3}(?:=+|-+)[ \t]*\n?", lines[idx + 1]):
+                    wrappable[idx : idx + 2] = [False, False]
+        # }}}
+        # {{{ preserve figures and HTML, without interpreting table or math contents
+        idx = 0
+        in_math = False
+        while idx < len(lines):
+            if not wrappable[idx] and not in_math:
+                idx += 1
+                continue
+            line = lines[idx]
+            dollars = list(DISPLAY_MATH.finditer(line))
+            match = re.search(r"!\[.*?\]\(|<(\w+)(?:\s[^>]*)?>", line)
+            if in_math or (
+                dollars and (not match or dollars[0].start() < match.start())
+            ):
+                wrappable[idx] = True
+                if len(dollars) % 2:
+                    in_math = not in_math
+            elif match:
+                opener = "<" + match[1] if match[1] else "("
+                pos = match.start() if match[1] else match.end() - 1
+                remaining = "".join(lines[idx:])
+                stop = match_paren(remaining, pos, opener)
+                end = idx + remaining[:stop].count("\n") + 1
+                wrappable[idx:end] = [False] * (end - idx)
+                idx = end
+                continue
+            idx += 1
+        # }}}
+    # {{{ isolate display math only in otherwise wrappable content
+    result = []
+    for allowed, group in itertools.groupby(
+        zip(wrappable, lines), lambda x: x[0]
+    ):
+        content = "".join(line for _, line in group)
+        if not allowed:
+            result.extend(
+                (False, line) for line in content.splitlines(keepends=True)
+            )
+            continue
+        delimiters = list(DISPLAY_MATH.finditer(content))
+        offset = 0
+        for number in range(0, len(delimiters), 2):
+            opening = delimiters[number]
+            closing = (
+                delimiters[number + 1]
+                if number + 1 < len(delimiters)
+                else None
+            )
+            start = opening.start(1)
+            stop = closing.end() if closing else len(content)
+            if stop <= offset:
+                continue
+            if normalize_math:
+                prefix = content[offset:start]
+                if prefix and not prefix.endswith("\n"):
+                    prefix += "\n"
+                result.extend(
+                    (True, line) for line in prefix.splitlines(keepends=True)
+                )
+                body = content[
+                    opening.end() : closing.start(1) if closing else stop
+                ]
+                equation = "$$"
+                if not body.startswith("\n"):
+                    equation += "\n"
+                equation += body
+                if closing:
+                    if not equation.endswith("\n"):
+                        equation += "\n"
+                    equation += "$$"
+                if stop < len(content):
+                    equation += "\n"
+                    if content[stop] == "\n":
+                        stop += 1
+                result.extend(
+                    (False, line)
+                    for line in equation.splitlines(keepends=True)
+                )
+            else:
+                start = max(offset, content.rfind("\n", 0, start) + 1)
+                newline = content.find("\n", stop)
+                stop = len(content) if newline == -1 else newline + 1
+                result.extend(
+                    (True, line)
+                    for line in content[offset:start].splitlines(keepends=True)
+                )
+                result.extend(
+                    (False, line)
+                    for line in content[start:stop].splitlines(keepends=True)
+                )
+            offset = stop
+        result.extend(
+            (True, line) for line in content[offset:].splitlines(keepends=True)
+        )
+    return result
+    # }}}
+
+
+def wrap_prose(
+    text,
+    wrapnumber=45,
+    punctuation_slop=20,
+    filetype="markdown",
+    indent_amount=0,
+):
+    """Wrap prose with the sentence and punctuation rules used by both commands."""
+    output = []
+    # Keep paragraph separators and the boundary newlines next to exclusions.
+    for paragraph in re.split(r"(\n(?:[ \t]*\n)+)", text):
+        if not paragraph.strip():
+            output.append(paragraph)
+            continue
+        leading = "\n" if paragraph.startswith("\n") else ""
+        trailing = "\n" if paragraph.endswith("\n") else ""
+        parts = re.split(r"([^\.!?]{3}[\.!?])[ \n]", paragraph.strip("\n"))
+        sentences = [
+            parts[j] + (parts[j + 1] if j + 1 < len(parts) else "")
+            for j in range(0, len(parts), 2)
+        ]
+        sentences = [
+            part
+            for sentence in sentences
+            for part in re.split(
+                r"(\\(?:begin|end|usepackage|newcommand|section"
+                r"|subsection|subsubsection|paragraph|input){[^}]*})",
+                sentence,
+            )
+        ]
+        lines = []
+        indentation = 0
+        for sentence in sentences:
+            words = [word for word in re.split("[ \n]+", sentence) if word]
+            # Mark existing whitespace at the two boundaries of paired math.
+            boundaries = set()
+            in_math = False
+            opening_word = None
+            for j, word in enumerate(words):
+                for dollar in re.finditer(r"(?<!\$)\$(?!\$)", word):
+                    pos = dollar.start()
+                    if (len(word[:pos]) - len(word[:pos].rstrip("\\"))) % 2:
+                        continue
+                    if not in_math:
+                        opening_word = j if pos == 0 else None
+                    else:
+                        if opening_word is not None and opening_word > 0:
+                            boundaries.add(opening_word - 1)
+                        if pos == len(word) - 1:
+                            boundaries.add(j)
+                    in_math = not in_math
+            if filetype == "latex":
+                indentation = 0
+            offset = 0
+            while words:
+                counts = list(
+                    itertools.accumulate(len(word) + 1 for word in words)
+                )
+                upto = min(
+                    range(len(counts)),
+                    key=lambda j: abs(counts[j] - wrapnumber),
+                )
+                candidates = [
+                    j
+                    for j, word in enumerate(words)
+                    if (len(word) > 1 and word[-1] in ",;:)-")
+                    or offset + j in boundaries
+                ]
+                if candidates:
+                    punct = min(
+                        candidates, key=lambda j: abs(counts[j] - wrapnumber)
+                    )
+                    if punct < upto and upto - punct < punctuation_slop:
+                        upto = punct
+                lines.append(" " * indentation + " ".join(words[: upto + 1]))
+                words = words[upto + 1 :]
+                offset += upto + 1
+                if indentation == 0:
+                    indentation = indent_amount
+        output.append(leading + "\n".join(lines) + trailing)
+    return "".join(output)
 
 
 @register_command(
@@ -129,373 +496,20 @@ def wr(filename, wrapnumber=45, punctuation_slop=20, cleanoo=False, i=-1):
             m = re.search(r"\\mathit{", alltext)
         # }}}
     # }}}
-    alltext = alltext.split("\n\n")  # split paragraphs
-    # interleave with blank strings that get turned into double newlines
-    alltext = [k for l_inner in [[j, ""] for j in alltext] for k in l_inner]
-    exclusion_idx = []
-    for para_idx in range(len(alltext)):
-        thispara_split = alltext[para_idx].split("\n")
-        if filetype == "latex":
-            line_idx = 0
-            while line_idx < len(thispara_split):
-                # {{{ exclude section headers and environments
-                thisline = thispara_split[line_idx]
-                m = re.match(
-                    r"\\(?:section|subsection|subsubsection|paragraph|"
-                    + "newcommand|input){",
-                    thisline,
-                )
-                if m:
-                    starting_line = thisline
-                    remaining_in_para = "\n".join(thispara_split[line_idx:])
-                    pos = match_paren(remaining_in_para, m.span()[-1], "{")
-                    # to find the closing line, I need to find the line number
-                    # inside alltext[para_idx] that corresponds to the
-                    # character position pos.  Do this by counting the number
-                    # of newlines between the character len(m.group()) and pos
-                    closing_line = (
-                        remaining_in_para[m.span()[-1] : pos].count("\n")
-                        + line_idx
-                    )
-                    exclusion_idx.append(
-                        (para_idx, starting_line, closing_line)
-                    )
-                    line_idx = closing_line
-                    # print("*" * 30, "excluding", "*" * 30)
-                    # print(thispara_split[starting_line:closing_line])
-                    # print("*" * 69)
-                else:
-                    m = re.search(r"\\begin{(equation|align)}", thisline)
-                    if m:
-                        # exclude everything until the end of the environment
-                        # to do this, I need to make a new string that gives
-                        # everything from here until the end of
-                        # alltext[para_idx]
-                        notfound = True
-                        for closing_idx, closing_line in enumerate(
-                            thispara_split[line_idx:]
-                        ):
-                            m_close = re.search(
-                                r"\\end{" + m.group(1) + "}", closing_line
-                            )
-                            if m_close:
-                                notfound = False
-                                break
-                        if notfound:
-                            raise RuntimeError(
-                                "didn't find closing line for environment"
-                            )
-                        exclusion_idx.append(
-                            (para_idx, line_idx, line_idx + closing_idx)
-                        )
-                        # print("*" * 30, "excluding env", "*" * 30)
-                        # print(thispara_split[line_idx:closing_idx])
-                        # print("*" * 73)
-                        line_idx = line_idx + closing_idx
-                line_idx += 1
-                # }}}
-        elif filetype == "markdown":
-            line_idx = 0
-            if para_idx == 0 and line_idx == 0:
-                # watch out for yaml header
-                # print("first line is", thispara_split[line_idx])
-                if thispara_split[line_idx].startswith(
-                    "---"
-                ) or thispara_split[line_idx].startswith("..."):
-                    starting_line = line_idx
-                    j = 1
-                    while j < len(thispara_split):
-                        if (
-                            thispara_split[j].strip() == "---"
-                            or thispara_split[j].strip() == "..."
-                        ):
-                            closing_line = j
-                            exclusion_idx.append(
-                                (para_idx, starting_line, closing_line)
-                            )
-                            break
-                        j += 1
-            while line_idx < len(thispara_split):
-                thisline = thispara_split[line_idx]
-                # {{{ do the same thing for markdown, where I exclude (1)
-                #     headers (2) figures and (3) tables (4) font
-                m = re.match(r"#+\s.*", thisline)  # exclude headers
-                if m:
-                    exclusion_idx.append((para_idx, line_idx, line_idx))
-                    # print("*" * 30, "excluding header", "*" * 30)
-                    # print(thispara_split[line_idx])
-                    # print("*" * 73)
-                else:
-                    m = re.search(r"!\[.*\]\(", thisline)  # exclude figures
-                    if m:
-                        # {{{ find the closing ), as we did for latex commands
-                        #     above
-                        remaining_in_para = "\n".join(
-                            thispara_split[line_idx:]
-                        )
-                        pos = match_paren(
-                            remaining_in_para, m.span()[-1] - 1, "("
-                        )
-                        closing_line = (
-                            remaining_in_para[m.span()[-1] : pos].count("\n")
-                            + line_idx
-                        )
-                        exclusion_idx.append(
-                            (para_idx, line_idx, closing_line)
-                        )
-                        line_idx = closing_line
-                        # }}}
-                    else:
-                        m = re.search(
-                            r"(\|.*\||=\+==|-\+--)", thisline
-                        )  # exclude tables
-                        if m:
-                            starting_line = line_idx
-                            m2 = re.search(
-                                r"(\|.*\||=\+==|-\+--)",
-                                thispara_split[line_idx + 1],
-                            )  # need at least 2 lines
-                            if m2:
-                                while True:
-                                    line_idx += 1
-                                    if line_idx > len(thispara_split) - 1:
-                                        line_idx -= 1
-                                        break
-                                    thisline = thispara_split[line_idx]
-                                    m = re.search(
-                                        r"(\|.*\||=\+==|-\+--)", thisline
-                                    )
-                                    if not m:
-                                        line_idx -= 1
-                                        break
-                                exclusion_idx.append(
-                                    (para_idx, starting_line, line_idx)
-                                )
-                                # print("*" * 30, "excluding table", "*" * 30)
-                                # print(
-                                #    thispara_split[
-                                #        starting_line : line_idx + 1
-                                #    ]
-                                # )
-                                # print("*" * 73)
-                        else:
-                            m = re.search(
-                                r"\$\$", thisline
-                            )  # exclude equations
-                            if m:
-                                starting_line = line_idx
-                                # {{{ find the closing $$, as we did for latex
-                                #     commands above
-                                remaining_in_para = "\n".join(
-                                    thispara_split[line_idx:]
-                                )
-                                pos = match_paren(
-                                    remaining_in_para, m.span()[-1] - 2, "$$"
-                                )
-                                closing_line = (
-                                    remaining_in_para[
-                                        m.span()[-1] : pos
-                                    ].count("\n")
-                                    + line_idx
-                                )
-                                exclusion_idx.append(
-                                    (para_idx, line_idx, closing_line)
-                                )
-                                line_idx = closing_line
-                                # }}}
-                            else:
-                                m = re.search(
-                                    r"^~~~", thisline
-                                )  # exclude equations
-                                if m:
-                                    starting_line = line_idx
-                                    # {{{ find the closing $$, as we did for
-                                    #     latex commands above
-                                    remaining_in_para = "\n".join(
-                                        thispara_split[line_idx:]
-                                    )
-                                    pos = match_paren(
-                                        remaining_in_para, m.span()[0], "~~~"
-                                    )
-                                    closing_line = (
-                                        remaining_in_para[
-                                            m.span()[-1] : pos
-                                        ].count("\n")
-                                        + line_idx
-                                    )
-                                    exclusion_idx.append(
-                                        (para_idx, line_idx, closing_line)
-                                    )
-                                    line_idx = closing_line
-                                    # }}}
-                                else:
-                                    m = re.search(
-                                        r"<(\w+) ?.*>", thisline
-                                    )  # exclude things enclosed in tags
-                                    if m:
-                                        starting_line = line_idx
-                                        # {{{ find the closing $$, as we did
-                                        #     for latex commands above
-                                        remaining_in_para = "\n".join(
-                                            thispara_split[line_idx:]
-                                        )
-                                        pos = match_paren(
-                                            remaining_in_para,
-                                            m.span()[0],
-                                            "<" + m.groups()[0],
-                                        )
-                                        closing_line = (
-                                            remaining_in_para[
-                                                m.span()[-1] : pos
-                                            ].count("\n")
-                                            + line_idx
-                                        )
-                                        exclusion_idx.append(
-                                            (para_idx, line_idx, closing_line)
-                                        )
-                                        line_idx = closing_line
-                                        # }}}
-                line_idx += 1
-                # }}}
-    # print("all exclusions:", exclusion_idx)
-    all_text_procd = []
-    for para_idx in range(len(alltext)):  # split paragraphs into sentences
-        para_lines = alltext[para_idx].split("\n")
-        # list comprehension to grab excluded lines for this paragraph
-        excluded_lines = [j[1:] for j in exclusion_idx if j[0] == para_idx]
-        # chunk para_lines into a list of tuples, where each tuple is a boolean
-        # (False if excluded) and the line itself
-        para_lines = [(True, j) for j in para_lines]
-        for start_excl, stop_excl in excluded_lines:
-            para_lines[start_excl : stop_excl + 1] = [
-                (False, j[1]) for j in para_lines[start_excl : stop_excl + 1]
-            ]
-        # use join inside a list comprehension to gather contiguous chunks of
-        # True and False together
-        para_lines = [
-            (key, "\n".join([j[1] for j in group]))
-            for key, group in itertools.groupby(para_lines, lambda x: x[0])
-        ]
-        # print("here are the grouped para lines!----------------", para_lines)
-        for notexcl, thiscontent in para_lines:
-            if notexcl:
-                # {{{ here I need a trick to prevent including short
-                #     abbreviations, etc
-                tempsent = re.split(r"([^\.!?]{3}[\.!?])[ \n]", thiscontent)
-                # for j in tempsent:
-                #    #rint("--", j)
-                # {{{ put the "separators together with the preceding
-                temp_paragraph = []
-                for tempsent_num in range(0, len(tempsent), 2):
-                    if tempsent_num + 1 < len(tempsent):
-                        temp_paragraph.append(
-                            tempsent[tempsent_num] + tempsent[tempsent_num + 1]
-                        )
-                    else:
-                        temp_paragraph.append(tempsent[tempsent_num])
-                # print("-------------------")
-                thiscontent = []
-                for this_sent in temp_paragraph:
-                    thiscontent.extend(
-                        re.split(
-                            r"(\\(?:begin|end|usepackage|newcommand|section"
-                            + "|subsection|subsubsection|paragraph"
-                            + "|input){[^}]*})",
-                            this_sent,
-                        )
-                    )
-                # for this_sent in thiscontent:
-                #    #rint("--sentence: ", this_sent)
-                # }}}
-                # }}}
-                for sent_idx in range(
-                    len(thiscontent)
-                ):  # sentences into words
-                    thiscontent[sent_idx] = [
-                        word
-                        for word in re.split("[ \n]+", thiscontent[sent_idx])
-                        if len(word) > 0
-                    ]
-                if len(thiscontent) == 1 and len(thiscontent[0]) == 0:
-                    all_text_procd += [(True, [[""]])]
-                else:
-                    all_text_procd += [(True, thiscontent)]
-            else:
-                all_text_procd += [(False, thiscontent)]
-    alltext = all_text_procd
-    # print("*" * 50 + "\n" + "parsed alltext" + "*" * 50)
-    # print(alltext)
-    # print("\n\n")
-    # {{{ now that it's organized into paragraphs, sentences, and
-    #    words, wrap the sentences
+    classified = classify_lines(alltext, filetype, normalize_math=True)
     lines = []
-    indentation = 0
-    for para_idx in range(len(alltext)):  # paragraph number
-        notexcl, para_content = alltext[para_idx]
-        if notexcl:
-            for residual_sentence in para_content:
-                if residual_sentence == [""]:
-                    indentation = 0
-                    lines.append("")
-                    continue
-                if filetype == "latex":
-                    indentation = 0
-                while len(residual_sentence) > 0:
-                    # Compute cumulative character counts without relying on
-                    # numpy.
-                    numchars = [len(word) + 1 for word in residual_sentence]
-                    cumsum_num = []
-                    running_total = 0
-                    for num in numchars:
-                        running_total += num
-                        cumsum_num.append(running_total)
-                    nextline_upto = min(
-                        range(len(cumsum_num)),
-                        key=lambda j: abs(cumsum_num[j] - wrapnumber),
-                    )
-                    nextline_punct_upto = []
-                    for j, word in enumerate(residual_sentence):
-                        if (
-                            word[-1] in [",", ";", ":", ")", "-"]
-                            and len(word) > 1
-                        ):
-                            nextline_punct_upto.append(cumsum_num[j])
-                        else:
-                            nextline_punct_upto.append(10000)
-                    if any(value < 10000 for value in nextline_punct_upto):
-                        nextline_punct_upto = min(
-                            range(len(nextline_punct_upto)),
-                            key=lambda j: abs(
-                                nextline_punct_upto[j] - wrapnumber
-                            ),
-                        )
-                        if nextline_punct_upto < nextline_upto:
-                            if (
-                                nextline_upto - nextline_punct_upto
-                                < punctuation_slop
-                            ):
-                                nextline_upto = nextline_punct_upto
-                    # print(
-                    #    "-" * 10 + " here is the residual sentence:\n\t",
-                    #    residual_sentence,
-                    # )
-                    lines.append(
-                        " " * indentation
-                        + " ".join(residual_sentence[: nextline_upto + 1])
-                    )
-                    residual_sentence = residual_sentence[nextline_upto + 1 :]
-                    if indentation == 0:
-                        indentation = indent_amount
-        else:
-            lines += [para_content]
-        indentation = (
-            0  # if excluded or new sentence, indentation goes back to zero
+    for wrappable, group in itertools.groupby(classified, key=lambda x: x[0]):
+        content = "".join(line for _, line in group)
+        lines.append(
+            wrap_prose(
+                content, wrapnumber, punctuation_slop, filetype, indent_amount
+            )
+            if wrappable
+            else content
         )
-    # print("here are lines!!\n\n\n\n", lines)
-    # }}}
+    result = "".join(lines)
     if filename is None:
-        print("\n".join(lines))
+        sys.stdout.write(result)
     else:
-        fp = open(filename, "w", encoding="utf-8")
-        fp.write("\n".join(lines))
-        fp.close()
+        with open(filename, "w", encoding="utf-8") as fp:
+            fp.write(result)
