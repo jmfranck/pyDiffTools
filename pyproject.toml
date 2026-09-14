@@ -26,6 +26,7 @@ dependencies = [
     "pygments",
     "ansi2html",
     "lxml",
+    "PySide6",
 ]
 
 [project.scripts]
