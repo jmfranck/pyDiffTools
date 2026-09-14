@@ -1,10 +1,266 @@
 import re
 import sys
 import itertools
+from dataclasses import dataclass, field
 
 from .command_registry import register_command
 
 DISPLAY_MATH = re.compile(r"(?<!\\)(?:\\\\)*(\$\$)")
+
+
+@dataclass
+class MarkdownBlock:
+    """A source span with optional children stripped of an outer marker."""
+
+    text: str
+    kind: str = "prose"
+    prefix: str = ""
+    continuation: str = ""
+    children: list = field(default_factory=list)
+
+    @property
+    def margin(self):
+        return max(
+            len(self.prefix.expandtabs(4)),
+            len(self.continuation.expandtabs(4)),
+        )
+
+    def restore(self, body):
+        output = []
+        paragraph_start = True
+        classified = classify_lines(body)
+        for idx, (allowed, line) in enumerate(classified):
+            prefix = self.prefix if idx == 0 else self.continuation
+            if self.kind == "lazy_quote":
+                if (
+                    paragraph_start
+                    or not allowed
+                    or not line.strip()
+                    or line.startswith(("    ", "\t"))
+                    or re.match(r" {0,3}(?:>|[-+*] |[0-9]+[.)] )", line)
+                ):
+                    prefix = self.prefix
+            if not line.strip():
+                prefix = prefix.rstrip() if ">" in prefix else ""
+            output.append(prefix + line)
+            paragraph_start = not line.strip()
+        return "".join(output)
+
+
+def markdown_blocks(text):
+    """Split Markdown containers recursively, keeping original source spans."""
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        return []
+    allowed = [flag for flag, _ in classify_lines(text, strict=False)]
+    marker = re.compile(
+        r"^( {0,3})(>|:|[-+*]|[0-9]+[.)])([ \t]+|(?<=>)|(?=\n?$))"
+    )
+    blocks = []
+    idx = 0
+    plain_start = 0
+    while idx < len(lines):
+        match = marker.match(lines[idx])
+        if match and match[2] == ":" and not allowed[idx]:
+            before = idx - 1
+            while before >= 0 and not lines[before].strip():
+                before -= 1
+            if before < 0 or not allowed[before]:
+                match = None
+        if not match:
+            if (
+                (idx == 0 or not lines[idx - 1].strip())
+                and lines[idx].startswith(("    ", "\t"))
+                and lines[idx].strip()
+            ):
+                if idx > plain_start:
+                    blocks.append(
+                        MarkdownBlock("".join(lines[plain_start:idx]))
+                    )
+                start = idx
+                while idx < len(lines) and (
+                    not lines[idx].strip()
+                    or lines[idx].startswith(("    ", "\t"))
+                ):
+                    idx += 1
+                blocks.append(MarkdownBlock("".join(lines[start:idx]), "raw"))
+                plain_start = idx
+                continue
+            if not allowed[idx]:
+                # Skip an outer protected span before inspecting its contents.
+                idx += 1
+                while idx < len(lines) and not allowed[idx]:
+                    idx += 1
+                continue
+            idx += 1
+            continue
+        token = match[2]
+        # A horizontal rule is not a list item; a colon needs a term.
+        if re.fullmatch(r" {0,3}(?:[-*][ \t]*){3,}\n?", lines[idx]) or (
+            token == ":" and not any(line.strip() for line in lines[:idx])
+        ):
+            idx += 1
+            continue
+        start = idx
+        if token == ":":
+            term_end = start
+            while term_end > plain_start and not lines[term_end - 1].strip():
+                term_end -= 1
+            if term_end > plain_start:
+                term_start = term_end - 1
+                if term_start > plain_start:
+                    blocks.append(
+                        MarkdownBlock("".join(lines[plain_start:term_start]))
+                    )
+                blocks.append(
+                    MarkdownBlock("".join(lines[term_start:start]), "raw")
+                )
+                plain_start = start
+        if start > plain_start:
+            blocks.append(MarkdownBlock("".join(lines[plain_start:start])))
+        prefix = match[0]
+        margin = len(prefix.expandtabs(4))
+        continuation = " " * (max(4, margin) if token == ":" else margin)
+        body = [lines[start][match.end() :]]
+        quote = token == ">"
+        explicit = True
+        quote_lines = 1
+        lazy_indent = None
+        idx += 1
+        # {{{ collect the container body, retaining indentation inside it
+        while idx < len(lines):
+            line = lines[idx]
+            next_marker = marker.match(line)
+            if quote and next_marker and next_marker[2] == ">":
+                quote_lines += 1
+                # Only one optional space belongs to the quote marker.
+                cut = len(next_marker[1]) + 1
+                if line[cut : cut + 1] == " ":
+                    cut += 1
+                body.append(line[cut:])
+                idx += 1
+                continue
+            if not line.strip():
+                following = idx + 1
+                while following < len(lines) and not lines[following].strip():
+                    following += 1
+                if following == len(lines):
+                    break
+                future = lines[following]
+                if quote:
+                    future_marker = marker.match(future)
+                    continues = future_marker and future_marker[2] == ">"
+                else:
+                    continues = future.startswith(
+                        continuation
+                    ) or future.startswith("\t")
+                if not continues:
+                    break
+                body.extend(lines[idx:following])
+                idx = following
+                continue
+            if not quote and (
+                line.startswith(continuation) or line.startswith("\t")
+            ):
+                cut = 1 if line.startswith("\t") else len(continuation)
+                body.append(line[cut:])
+            elif next_marker or not allowed[idx] or not body[-1].strip():
+                break
+            else:
+                body.append(line)
+                if quote:
+                    explicit = False
+                    indentation = line[: len(line) - len(line.lstrip(" \t"))]
+                    if lazy_indent is None:
+                        lazy_indent = indentation
+                    elif not indentation.startswith(lazy_indent):
+                        lazy_indent = ""
+            idx += 1
+        # }}}
+        if quote:
+            # Preserve relative indentation (code, lists, nested quotations).
+            prefix = match[1] + ">" + (" " if match[3].startswith(" ") else "")
+            body[0] = lines[start][len(prefix) :]
+            indentation = min(
+                (
+                    len(line) - len(line.lstrip(" "))
+                    for line in body
+                    if line.strip()
+                ),
+                default=0,
+            )
+            # Up to three common spaces are presentation indentation;
+            # four spaces introduce an indented code block in Pandoc.
+            if 0 < indentation < 4:
+                prefix += " " * indentation
+                body = [
+                    line[indentation:] if line.strip() else line
+                    for line in body
+                ]
+            explicit = explicit and quote_lines > 1
+            continuation = prefix if explicit else lazy_indent or ""
+            if continuation and not explicit:
+                body = [body[0]] + [
+                    (
+                        line[len(continuation) :]
+                        if line.startswith(continuation)
+                        else line
+                    )
+                    for line in body[1:]
+                ]
+            kind = "quote" if explicit else "lazy_quote"
+        else:
+            kind = "definition" if token == ":" else "list"
+        blocks.append(
+            MarkdownBlock(
+                "".join(lines[start:idx]),
+                kind,
+                prefix,
+                continuation,
+                markdown_blocks("".join(body)),
+            )
+        )
+        plain_start = idx
+    if plain_start < len(lines):
+        blocks.append(MarkdownBlock("".join(lines[plain_start:])))
+    return blocks
+
+
+def wrap_blocks(blocks, wrapnumber, punctuation_slop=20, indent_amount=0):
+    """Wrap container bodies with the available width, then restore markers."""
+    output = []
+    for block in blocks:
+        if block.kind == "raw":
+            output.append(block.text)
+        elif block.children:
+            output.append(
+                block.restore(
+                    wrap_blocks(
+                        block.children,
+                        max(1, wrapnumber - block.margin),
+                        punctuation_slop,
+                        indent_amount,
+                    )
+                )
+            )
+        else:
+            classified = classify_lines(block.text, normalize_math=True)
+            for allowed, group in itertools.groupby(
+                classified, key=lambda x: x[0]
+            ):
+                content = "".join(line for _, line in group)
+                output.append(
+                    wrap_prose(
+                        content,
+                        wrapnumber,
+                        punctuation_slop,
+                        indent_amount=indent_amount,
+                    )
+                    if allowed
+                    else content
+                )
+    return "".join(output)
+
 
 def match_paren(thistext, pos, opener="{"):
     closerdict = {
@@ -46,8 +302,13 @@ def match_paren(thistext, pos, opener="{"):
     return pos
 
 
-def classify_lines(text, filetype="markdown", normalize_math=False):
-    """Return (wrappable, line) pairs, retaining line endings and block text."""
+def classify_lines(
+    text,
+    filetype="markdown",
+    normalize_math=False,
+    strict=True,
+):
+    """Return (wrappable, line) pairs with original line endings and text."""
     lines = text.splitlines(keepends=True)
     wrappable = [True] * len(lines)
     # {{{ exclude structural blocks before considering paragraphs or math
@@ -232,7 +493,7 @@ def classify_lines(text, filetype="markdown", normalize_math=False):
                 if re.fullmatch(r" {0,3}(?:=+|-+)[ \t]*\n?", lines[idx + 1]):
                     wrappable[idx : idx + 2] = [False, False]
         # }}}
-        # {{{ preserve figures and HTML, without interpreting table or math contents
+        # {{{ preserve figures and HTML outside tables and math
         idx = 0
         in_math = False
         while idx < len(lines):
@@ -252,7 +513,15 @@ def classify_lines(text, filetype="markdown", normalize_math=False):
                 opener = "<" + match[1] if match[1] else "("
                 pos = match.start() if match[1] else match.end() - 1
                 remaining = "".join(lines[idx:])
-                stop = match_paren(remaining, pos, opener)
+                try:
+                    stop = match_paren(remaining, pos, opener)
+                except RuntimeError:
+                    if strict:
+                        raise
+                    # Container prefixes can hide a fence around literal HTML.
+                    # Validate after removing those prefixes instead.
+                    idx += 1
+                    continue
                 end = idx + remaining[:stop].count("\n") + 1
                 wrappable[idx:end] = [False] * (end - idx)
                 idx = end
@@ -336,7 +605,7 @@ def wrap_prose(
     filetype="markdown",
     indent_amount=0,
 ):
-    """Wrap prose with the sentence and punctuation rules used by both commands."""
+    """Wrap prose with sentence and punctuation rules for both commands."""
     output = []
     # Keep paragraph separators and the boundary newlines next to exclusions.
     for paragraph in re.split(r"(\n(?:[ \t]*\n)+)", text):
@@ -496,18 +765,32 @@ def wr(filename, wrapnumber=45, punctuation_slop=20, cleanoo=False, i=-1):
             m = re.search(r"\\mathit{", alltext)
         # }}}
     # }}}
-    classified = classify_lines(alltext, filetype, normalize_math=True)
-    lines = []
-    for wrappable, group in itertools.groupby(classified, key=lambda x: x[0]):
-        content = "".join(line for _, line in group)
-        lines.append(
-            wrap_prose(
-                content, wrapnumber, punctuation_slop, filetype, indent_amount
-            )
-            if wrappable
-            else content
+    if filetype == "markdown":
+        result = wrap_blocks(
+            markdown_blocks(alltext),
+            wrapnumber,
+            punctuation_slop,
+            indent_amount,
         )
-    result = "".join(lines)
+    else:
+        classified = classify_lines(alltext, filetype, normalize_math=True)
+        lines = []
+        for wrappable, group in itertools.groupby(
+            classified, key=lambda x: x[0]
+        ):
+            content = "".join(line for _, line in group)
+            lines.append(
+                wrap_prose(
+                    content,
+                    wrapnumber,
+                    punctuation_slop,
+                    filetype,
+                    indent_amount,
+                )
+                if wrappable
+                else content
+            )
+        result = "".join(lines)
     if filename is None:
         sys.stdout.write(result)
     else:

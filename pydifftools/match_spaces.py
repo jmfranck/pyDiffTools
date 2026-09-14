@@ -1,7 +1,13 @@
 from difflib import SequenceMatcher
 from bisect import bisect_right
 import math
-from .wrap_sentences import classify_lines, wrap_prose
+from .wrap_sentences import (
+    classify_lines,
+    markdown_blocks,
+    wrap_blocks,
+    wrap_prose,
+)
+
 
 def run(arguments):
     with open(arguments[0], encoding="utf-8") as fp:
@@ -10,6 +16,51 @@ def run(arguments):
     fp = open(arguments[1], encoding="utf-8")
     text2 = fp.read()
     fp.close()
+    filetype = (
+        "markdown" if arguments[1].endswith((".md", ".qmd")) else "latex"
+    )
+    if filetype == "markdown":
+        result = match_blocks(markdown_blocks(text1), markdown_blocks(text2))
+    else:
+        result = match_text(text1, text2, filetype)
+    with open(arguments[1], "w", encoding="utf-8") as fp:
+        fp.write(result)
+
+
+def match_blocks(old, new, width=80):
+    """Match container bodies without treating markers as words."""
+    output = []
+    matcher = SequenceMatcher(
+        None, [b.kind for b in old], [b.kind for b in new]
+    )
+    for operation, a, b, c, d in matcher.get_opcodes():
+        if operation == "equal":
+            for reference, target in zip(old[a:b], new[c:d]):
+                if target.kind == "raw" or reference.text == target.text:
+                    output.append(target.text)
+                elif target.children:
+                    output.append(
+                        target.restore(
+                            match_blocks(
+                                reference.children,
+                                target.children,
+                                max(1, width - target.margin),
+                            )
+                        )
+                    )
+                else:
+                    output.append(
+                        match_text(
+                            reference.text, target.text, "markdown", width
+                        )
+                    )
+        else:
+            output.append(wrap_blocks(new[c:d], width))
+    return "".join(output)
+
+
+def match_text(text1, text2, filetype, fallback_width=80):
+    """Reuse reference whitespace and wrap overflowing edits in plain text."""
     # text2 = text2.decode('utf-8')
     utf_char = "\u00a0"  # unicode no break space
     text2 = text2.replace(utf_char, " ")  # replace it
@@ -82,8 +133,7 @@ def run(arguments):
                     retval_whitespace.append(input_tokens[j + 1])
                     j += 2
                 else:
-                    # this can happen if it's a newline combo or followed by a newline combo
-                    # print repr(input_tokens[j]),'is not followed by whitespace but by',repr(input_tokens[j+1])
+                    # Either token can contain a newline combination.
                     retval_whitespace.append("")
                     j += 1
                 if retval_words[-1].count("\n") > 1:  # double newline
@@ -112,7 +162,6 @@ def run(arguments):
     newline_debt = 0
     last_indent = ""
     # {{{ locate reference prose and protected target text
-    filetype = "markdown" if arguments[1].endswith((".md", ".qmd")) else "latex"
     reference_lines = classify_lines(text1, filetype)
     reference_starts = []
     position = 0
@@ -130,7 +179,9 @@ def run(arguments):
         position += len(line)
     target_word_starts = [0]
     for word, whitespace in zip(text2_words, text2_whitespace):
-        target_word_starts.append(target_word_starts[-1] + len(word) + len(whitespace))
+        target_word_starts.append(
+            target_word_starts[-1] + len(word) + len(whitespace)
+        )
     edits = []
     protected_output = []
     # }}}
@@ -188,7 +239,7 @@ def run(arguments):
             )
             print("   newline debt", newline_debt)
             temp_addition = text2_words[j[3] : j[4]]
-            # {{{ check to see if I am adding any double newlines -- if I am use the original version
+            # {{{ reuse original double newlines
             temp_isdoublenewline = text2_isdoublenewline[j[3] : j[4]]
             tstdbl_i = 0
             tstdbl_j = 0
@@ -220,7 +271,7 @@ def run(arguments):
                         )  # shouldn't be more than one but doesn't hurt
                         if newline_debt < 1:
                             break
-                # if I can't make up for the whitespace with the new text, but it where it went in the old text
+                # Otherwise, reuse newline positions from the old text.
                 for k in range(min(len(oldver_whitespace), len(whitespace))):
                     if oldver_whitespace[k].count("\n") > 0:
                         whitespace[k] = oldver_whitespace[k]
@@ -258,7 +309,9 @@ def run(arguments):
         else:
             raise ValueError("unknown opcode" + j[0])
         if j[0] != "equal":
-            reference_line = max(0, bisect_right(reference_starts, word_starts[j[1]]) - 1)
+            reference_line = max(
+                0, bisect_right(reference_starts, word_starts[j[1]]) - 1
+            )
             edits.append((output_start, len(final_text), reference_line))
         if j[0] != "delete":
             position = output_start
@@ -269,7 +322,9 @@ def run(arguments):
                     and stop > target_word_starts[target]
                     for start, stop in target_protected
                 ):
-                    protected_output.append((position, position + len(word) + len(space)))
+                    protected_output.append(
+                        (position, position + len(word) + len(space))
+                    )
                 position += len(word) + len(space)
     # {{{ wrap only changed prose lines that clearly exceed the local width
     output = []
@@ -277,32 +332,44 @@ def run(arguments):
     for allowed, line in classify_lines(final_text, filetype):
         stop = position + len(line)
         nearby_edits = [
-            reference for start, end, reference in edits
+            reference
+            for start, end, reference in edits
             if start < stop and end >= position
         ]
-        protected = any(start < stop and end > position for start, end in protected_output)
+        protected = any(
+            start < stop and end > position for start, end in protected_output
+        )
         if allowed and line.strip() and nearby_edits and not protected:
             reference = nearby_edits[0]
             nearby = sorted(
                 (
-                    idx for idx, (can_wrap, source) in enumerate(reference_lines)
+                    idx
+                    for idx, (can_wrap, source) in enumerate(reference_lines)
                     if can_wrap and source.strip()
                 ),
                 key=lambda idx: (abs(idx - reference), idx),
             )[:10]
-            widths = sorted(len(reference_lines[idx][1].rstrip("\n")) for idx in nearby)
-            width = widths[math.ceil(0.75 * len(widths)) - 1] if len(widths) >= 2 else 80
+            widths = sorted(
+                len(reference_lines[idx][1].rstrip("\n")) for idx in nearby
+            )
+            width = (
+                widths[math.ceil(0.75 * len(widths)) - 1]
+                if len(widths) >= 2
+                else fallback_width
+            )
             if len(line.rstrip("\n")) > 1.5 * width:
                 indentation = ""
                 for idx in nearby:
                     source = reference_lines[idx][1]
-                    prefix = source[:len(source) - len(source.lstrip(" \t"))]
+                    prefix = source[: len(source) - len(source.lstrip(" \t"))]
                     if prefix:
                         indentation = prefix
                         break
-                prefix = line[:len(line) - len(line.lstrip(" \t"))]
+                prefix = line[: len(line) - len(line.lstrip(" \t"))]
                 wrapped = wrap_prose(
-                    line[len(prefix):], width, filetype=filetype,
+                    line[len(prefix) :],
+                    width,
+                    filetype=filetype,
                     indent_amount=len(indentation.expandtabs()),
                 )
                 line = prefix + wrapped
@@ -310,6 +377,4 @@ def run(arguments):
         position = stop
     final_text = "".join(output)
     # }}}
-    fp = open(arguments[1], "w", encoding="utf-8")
-    fp.write(final_text)
-    fp.close()
+    return final_text
