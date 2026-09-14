@@ -694,6 +694,7 @@ def wrap_prose(
         "cleanoo": "Strip LibreOffice markup before wrapping.",
         "i": "Indentation level for wrapped lines.",
     },
+    filename_extensions={"filename": [".md", ".tex"]},
 )
 def wr(filename, wrapnumber=45, punctuation_slop=20, cleanoo=False, i=-1):
     indent_amount = i if i != -1 else 4

@@ -360,7 +360,10 @@ def gvr(arguments):
     subprocess.Popen(" ".join(cmd))
 
 
-@register_command("match whitespace")
+@register_command(
+    "match whitespace",
+    filename_extensions={"arguments": [".md", ".tex"]},
+)
 def wmatch(arguments):
     match_spaces.run(arguments)
 

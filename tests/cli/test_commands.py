@@ -136,6 +136,13 @@ def test_file_completers_are_extension_specific(monkeypatch):
 
     assert wgrph_action.completer.allowednames == ["*.yaml", "*.yml"]
     assert cpb_action.completer.allowednames == ["*.md"]
+    for command, dest in [("wr", "filename"), ("wmatch", "arguments")]:
+        action = next(
+            action
+            for action in parser._pydifft_subparsers[command]._actions
+            if action.dest == dest
+        )
+        assert action.completer.allowednames == ["*.md", "*.tex"]
 
 
 def test_wgrph_has_full_plan_flag():
@@ -219,6 +226,32 @@ def test_argcomplete_wgrph_filters_to_yaml_files(monkeypatch, tmp_path):
     )
 
     assert suggestions == ["plans/phase2.yaml", "plans/phase3.yml"]
+
+
+@pytest.mark.parametrize("command", ["wr", "wmatch", "wmatch first.md"])
+@pytest.mark.parametrize("prefix", ["", "docs/", "docs/sample"])
+def test_argcomplete_wr_and_wmatch_filter_files(
+    monkeypatch, tmp_path, command, prefix
+):
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    for directory in [tmp_path, docs_dir]:
+        for extension in ["md", "tex", "txt", "yaml", "qmd"]:
+            (directory / f"sample.{extension}").write_text("text\n")
+        (directory / "sample_folder").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    suggestions = _collect_argcomplete_suggestions(
+        monkeypatch, f"pydifft {command} {prefix}"
+    )
+
+    base = "docs/" if prefix.startswith("docs/") else ""
+    expected = [base + name for name in [
+        "sample.md", "sample.tex", "sample_folder/"
+    ]]
+    if not prefix:
+        expected.append("docs/")
+    assert sorted(suggestions) == sorted(expected)
 
 
 def test_tex2qmd_cli(tmp_path):
