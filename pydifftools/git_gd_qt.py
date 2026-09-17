@@ -358,7 +358,9 @@ class DiffTable(QTableView):
                 if line_y >= 0:
                     painter = QPainter(self.viewport())
                     painter.setPen(QColor("#808080"))
-                    painter.drawLine(0, line_y, self.viewport().width(), line_y)
+                    painter.drawLine(
+                        0, line_y, self.viewport().width(), line_y
+                    )
                     painter.end()
                 break
 
@@ -371,6 +373,7 @@ class DiffWindow(QWidget):
         entries: list["DiffEntry"],
         *,
         start_image_scores: bool = True,
+        command_args: Sequence[str] | None = None,
     ):
         super().__init__()
         self.repo_name = repo_name
@@ -417,7 +420,10 @@ class DiffWindow(QWidget):
         )
 
         self._adjust_geometry()
-        self._update_title()
+        self.setWindowTitle(
+            "gd "
+            + " ".join(diff_args if command_args is None else command_args)
+        )
 
         if self.model.rowCount() > 0:
             self.table.selectRow(0)
@@ -449,12 +455,6 @@ class DiffWindow(QWidget):
             worker.signals.finished.connect(self.results_finished)
             self.workers.append(worker)
             self.score_pool.start(worker)
-
-    def _update_title(self):
-        self.setWindowTitle(
-            f"git gd review — {self.repo_name} — "
-            f"{self.model.seen_count()}/{len(self.model.entries)} opened"
-        )
 
     def _adjust_geometry(self):
         frame = 2 * self.table.frameWidth()
@@ -566,7 +566,6 @@ class DiffWindow(QWidget):
             return
         entry = self.model.entries[row]
         self.model.mark_seen(row)
-        self._update_title()
 
         if is_raster_image_entry(entry):
             cmd = build_image_difftool_command(self.diff_args, entry)
@@ -581,12 +580,12 @@ class DiffWindow(QWidget):
             )
 
 
-def launch_review(repo_name, diff_args, entries):
+def launch_review(repo_name, diff_args, entries, *, command_args=None):
     app = QApplication(sys.argv)
     if not entries:
         QMessageBox.information(None, "git gd review", "No changed files.")
         return 0
 
-    win = DiffWindow(repo_name, diff_args, entries)
+    win = DiffWindow(repo_name, diff_args, entries, command_args=command_args)
     win.show()
     return app.exec()

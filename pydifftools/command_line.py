@@ -25,6 +25,9 @@ from .forward_search import (
     send_forward_search,
 )
 from .wrap_sentences import wr as wrap_sentences_wr  # registers wrap command
+from .wrap_sentences import (  # registers wrchk command
+    wrchk as wrap_sentences_wrchk,
+)
 from .separate_comments import tex_sepcomments
 from .unseparate_comments import tex_unsepcomments
 from .comment_functions import matchingbrackets

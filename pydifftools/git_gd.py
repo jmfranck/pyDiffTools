@@ -329,7 +329,8 @@ def build_difftool_command(
         if tool_cmd is not None:
             # {{{ turn the configured gvim diff invocation into a file open
             # Added files have no meaningful left side.  Retain wrapper and
-            # foreground options, but remove diff mode and Git's side variables.
+            # foreground options, but remove diff mode and Git's side
+            # variables.
             command = []
             for argument in shlex.split(tool_cmd):
                 if argument == "-d" or any(
@@ -453,7 +454,7 @@ def main(argv: Sequence[str]) -> int:
                 "the command."
             ) from exc
         raise
-    return launch_review(name, diff_args, entries)
+    return launch_review(name, diff_args, entries, command_args=argv)
 
 
 @register_command(

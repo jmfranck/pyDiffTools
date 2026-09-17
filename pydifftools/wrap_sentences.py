@@ -7,6 +7,20 @@ from .command_registry import register_command
 
 DISPLAY_MATH = re.compile(r"(?<!\\)(?:\\\\)*(\$\$)")
 
+# Shared with wrchk so the two commands agree on what a paragraph, a
+# sentence boundary, and a LaTeX structural macro look like.
+PARAGRAPH_SPLIT = re.compile(r"(\n(?:[ \t]*\n)+)")
+# A sentence ends at a '.', '!' or '?' preceded by 3 characters that are
+# not themselves sentence-ending punctuation -- a crude guard against
+# treating "e.g." or "..." as a sentence break.
+SENTENCE_END = r"[^.!?]{3}[.!?]"
+SENTENCE_SPLIT = re.compile("(" + SENTENCE_END + r")[ \n]")
+SENTENCE_BOUNDARY = re.compile("(" + SENTENCE_END + r")([ \n])")
+LATEX_MACRO_SPLIT = re.compile(
+    r"(\\(?:begin|end|usepackage|newcommand|section"
+    r"|subsection|subsubsection|paragraph|input){[^}]*})"
+)
+
 
 @dataclass
 class MarkdownBlock:
@@ -598,6 +612,51 @@ def classify_lines(
     # }}}
 
 
+def _math_boundaries(words):
+    """Word indices adjoining a paired inline-math run in a word list.
+
+    wrap_prose and check_prose both prefer to break lines at these
+    boundaries rather than splitting an inline math expression.
+    """
+    boundaries = set()
+    in_math = False
+    opening_word = None
+    for j, word in enumerate(words):
+        for dollar in re.finditer(r"(?<!\$)\$(?!\$)", word):
+            pos = dollar.start()
+            if (len(word[:pos]) - len(word[:pos].rstrip("\\"))) % 2:
+                continue
+            if not in_math:
+                opening_word = j if pos == 0 else None
+            else:
+                if opening_word is not None and opening_word > 0:
+                    boundaries.add(opening_word - 1)
+                if pos == len(word) - 1:
+                    boundaries.add(j)
+            in_math = not in_math
+    return boundaries
+
+
+def _next_break(words, wrapnumber, punctuation_slop, boundaries, offset):
+    """Index of the last word wr would keep on the line starting here.
+
+    Shared by wrap_prose (which then emits that line) and check_prose
+    (which replays the same choice to see if a source line agrees).
+    """
+    counts = list(itertools.accumulate(len(word) + 1 for word in words))
+    upto = min(range(len(counts)), key=lambda j: abs(counts[j] - wrapnumber))
+    candidates = [
+        j
+        for j, word in enumerate(words)
+        if (len(word) > 1 and word[-1] in ",;:)-") or offset + j in boundaries
+    ]
+    if candidates:
+        punct = min(candidates, key=lambda j: abs(counts[j] - wrapnumber))
+        if punct < upto and upto - punct < punctuation_slop:
+            upto = punct
+    return upto
+
+
 def wrap_prose(
     text,
     wrapnumber=45,
@@ -608,13 +667,13 @@ def wrap_prose(
     """Wrap prose with sentence and punctuation rules for both commands."""
     output = []
     # Keep paragraph separators and the boundary newlines next to exclusions.
-    for paragraph in re.split(r"(\n(?:[ \t]*\n)+)", text):
+    for paragraph in PARAGRAPH_SPLIT.split(text):
         if not paragraph.strip():
             output.append(paragraph)
             continue
         leading = "\n" if paragraph.startswith("\n") else ""
         trailing = "\n" if paragraph.endswith("\n") else ""
-        parts = re.split(r"([^\.!?]{3}[\.!?])[ \n]", paragraph.strip("\n"))
+        parts = SENTENCE_SPLIT.split(paragraph.strip("\n"))
         sentences = [
             parts[j] + (parts[j + 1] if j + 1 < len(parts) else "")
             for j in range(0, len(parts), 2)
@@ -622,56 +681,20 @@ def wrap_prose(
         sentences = [
             part
             for sentence in sentences
-            for part in re.split(
-                r"(\\(?:begin|end|usepackage|newcommand|section"
-                r"|subsection|subsubsection|paragraph|input){[^}]*})",
-                sentence,
-            )
+            for part in LATEX_MACRO_SPLIT.split(sentence)
         ]
         lines = []
         indentation = 0
         for sentence in sentences:
             words = [word for word in re.split("[ \n]+", sentence) if word]
-            # Mark existing whitespace at the two boundaries of paired math.
-            boundaries = set()
-            in_math = False
-            opening_word = None
-            for j, word in enumerate(words):
-                for dollar in re.finditer(r"(?<!\$)\$(?!\$)", word):
-                    pos = dollar.start()
-                    if (len(word[:pos]) - len(word[:pos].rstrip("\\"))) % 2:
-                        continue
-                    if not in_math:
-                        opening_word = j if pos == 0 else None
-                    else:
-                        if opening_word is not None and opening_word > 0:
-                            boundaries.add(opening_word - 1)
-                        if pos == len(word) - 1:
-                            boundaries.add(j)
-                    in_math = not in_math
+            boundaries = _math_boundaries(words)
             if filetype == "latex":
                 indentation = 0
             offset = 0
             while words:
-                counts = list(
-                    itertools.accumulate(len(word) + 1 for word in words)
+                upto = _next_break(
+                    words, wrapnumber, punctuation_slop, boundaries, offset
                 )
-                upto = min(
-                    range(len(counts)),
-                    key=lambda j: abs(counts[j] - wrapnumber),
-                )
-                candidates = [
-                    j
-                    for j, word in enumerate(words)
-                    if (len(word) > 1 and word[-1] in ",;:)-")
-                    or offset + j in boundaries
-                ]
-                if candidates:
-                    punct = min(
-                        candidates, key=lambda j: abs(counts[j] - wrapnumber)
-                    )
-                    if punct < upto and upto - punct < punctuation_slop:
-                        upto = punct
                 lines.append(" " * indentation + " ".join(words[: upto + 1]))
                 words = words[upto + 1 :]
                 offset += upto + 1
@@ -681,52 +704,36 @@ def wrap_prose(
     return "".join(output)
 
 
-@register_command(
-    "wrap with indented sentence format (for markdown or latex).",
-    "wrap with indented sentence format (for markdown or latex).\n"
-    "Optional flag --cleanoo cleans latex exported from\n"
-    "OpenOffice/LibreOffice\n"
-    "Optional flag -i # specifies indentation level for subsequent\n"
-    "lines of a sentence (defaults to 4 -- e.g. for markdown you\n"
-    "will always want -i 0)",
-    help={
-        "filename": "Input file to wrap. Use '-' to read from stdin.",
-        "cleanoo": "Strip LibreOffice markup before wrapping.",
-        "i": "Indentation level for wrapped lines.",
-    },
-    filename_extensions={"filename": [".md", ".tex"]},
-)
-def wr(filename, wrapnumber=45, punctuation_slop=20, cleanoo=False, i=-1):
+def _prepare(filename, cleanoo=False, i=-1):
+    """Load text, detect filetype, resolve indentation, strip OO cruft.
+
+    Shared preamble for wr and wrchk. Returns
+    (alltext, filetype, indent_amount, display_name), where display_name
+    is "<stdin>" when reading stdin and filename otherwise.
+    """
     indent_amount = i if i != -1 else 4
-    stupid_strip = cleanoo
-    if filename == "-":
-        filename = None
     # {{{ load the file
-    if filename is not None:
+    if filename == "-":
+        sys.stdin.reconfigure(encoding="utf-8")
+        alltext = sys.stdin.read()
+        filetype = "latex"
+        display_name = "<stdin>"
+    else:
         with open(filename, encoding="utf-8") as fp:
             alltext = fp.read()
         # {{{ determine if the filetype is latex or markdown
         file_extension = filename.split(".")[-1]
         if file_extension == "tex":
             filetype = "latex"
-        elif file_extension == "md":
-            # print("identified as markdown!!")
+        elif file_extension in ("md", "qmd"):
             filetype = "markdown"
-        elif file_extension == "qmd":
-            # print("identified as markdown!!")
-            filetype = "markdown"
-        if filetype == "markdown":
-            if i == -1:
-                indent_amount = 0
+        if filetype == "markdown" and i == -1:
+            indent_amount = 0
         # }}}
-    else:
-        sys.stdin.reconfigure(encoding="utf-8")
-        fp = sys.stdin
-        alltext = fp.read()
-        filetype = "latex"
+        display_name = filename
     # }}}
     # {{{ strip stupid commands that appear in openoffice conversion
-    if stupid_strip:
+    if cleanoo:
         alltext = re.sub(r"\\bigskip\b\s*", "", alltext)
         alltext = re.sub(r"\\;", "", alltext)
         alltext = re.sub(r"(?:\\ ){4}", r"\quad ", alltext)
@@ -766,6 +773,26 @@ def wr(filename, wrapnumber=45, punctuation_slop=20, cleanoo=False, i=-1):
             m = re.search(r"\\mathit{", alltext)
         # }}}
     # }}}
+    return alltext, filetype, indent_amount, display_name
+
+
+@register_command(
+    "wrap with indented sentence format (for markdown or latex).",
+    "wrap with indented sentence format (for markdown or latex).\n"
+    "Optional flag --cleanoo cleans latex exported from\n"
+    "OpenOffice/LibreOffice\n"
+    "Optional flag -i # specifies indentation level for subsequent\n"
+    "lines of a sentence (defaults to 4 -- e.g. for markdown you\n"
+    "will always want -i 0)",
+    help={
+        "filename": "Input file to wrap. Use '-' to read from stdin.",
+        "cleanoo": "Strip LibreOffice markup before wrapping.",
+        "i": "Indentation level for wrapped lines.",
+    },
+    filename_extensions={"filename": [".md", ".tex"]},
+)
+def wr(filename, wrapnumber=45, punctuation_slop=20, cleanoo=False, i=-1):
+    alltext, filetype, indent_amount, _ = _prepare(filename, cleanoo, i)
     if filetype == "markdown":
         result = wrap_blocks(
             markdown_blocks(alltext),
@@ -792,8 +819,204 @@ def wr(filename, wrapnumber=45, punctuation_slop=20, cleanoo=False, i=-1):
                 else content
             )
         result = "".join(lines)
-    if filename is None:
+    if filename == "-":
         sys.stdout.write(result)
     else:
         with open(filename, "w", encoding="utf-8") as fp:
             fp.write(result)
+
+
+def _check_fragment(
+    fragment, frag_start, wrapnumber, punctuation_slop, base_line, stripped
+):
+    """Report line-length violations within one wrap unit (a sentence, or a
+    piece of one split off around a LaTeX structural macro).
+
+    Replays wr's own greedy word-fitting choice (_next_break) but always
+    resumes from the *real* line break already present in the source
+    (never from wr's own suggested break), so a shorter user break, or a
+    word nudged onto the next line, is never flagged -- only a line that
+    holds more words than wr's choice would allow is.
+    """
+    words, positions = [], []
+    for match in re.finditer(r"\S+", fragment):
+        words.append(match.group())
+        positions.append(frag_start + match.start())
+    if not words:
+        return []
+    ends = positions[1:] + [frag_start + len(fragment)]
+    breaks_after = [
+        "\n" in stripped[positions[j] + len(words[j]) : ends[j]]
+        for j in range(len(words))
+    ]
+    boundaries = _math_boundaries(words)
+    issues = []
+    offset = 0
+    while offset < len(words):
+        upto = _next_break(
+            words[offset:], wrapnumber, punctuation_slop, boundaries, offset
+        )
+        wr_end = offset + upto
+        actual_end = offset
+        while actual_end < len(words) - 1 and not breaks_after[actual_end]:
+            actual_end += 1
+        if actual_end > wr_end:
+            overflow = words[wr_end + 1]
+            line = base_line + stripped.count("\n", 0, positions[actual_end])
+            issues.append(
+                (
+                    line,
+                    f"line too long: wr would break after '{words[wr_end]}' "
+                    f"(before '{overflow}'); move '{overflow}' onward to "
+                    "the next line, or shorten this sentence",
+                )
+            )
+        offset = actual_end + 1
+    return issues
+
+
+def check_prose(content, wrapnumber, punctuation_slop, line_start=1):
+    """Report source lines in `content` that break wr's rules.
+
+    Two checks, mirroring wrap_prose's own paragraph/sentence/macro
+    splitting so the two commands never disagree about what counts as a
+    sentence: lines must not hold more words than wr's own greedy choice
+    would put there (see _check_fragment), and a sentence must not end
+    in the middle of a source line. A sentence-ending period followed by
+    a backslash-space (`\\ `) rather than a plain space -- the standard
+    LaTeX/Pandoc way to mark an abbreviation -- is never mistaken for a
+    boundary in the first place, since SENTENCE_BOUNDARY requires the
+    character right after the punctuation to be a plain space or
+    newline; no extra escape handling is needed for that case.
+    """
+    issues = []
+    line = line_start
+    for paragraph in PARAGRAPH_SPLIT.split(content):
+        if not paragraph.strip():
+            line += paragraph.count("\n")
+            continue
+        stripped = paragraph.strip("\n")
+        leading_newlines = len(paragraph) - len(paragraph.lstrip("\n"))
+        para_line = line + leading_newlines
+        parts = SENTENCE_BOUNDARY.split(stripped)
+        sentences, separators = [], []
+        for j in range(0, len(parts), 3):
+            if j + 2 < len(parts):
+                sentences.append(parts[j] + parts[j + 1])
+                separators.append(parts[j + 2])
+            else:
+                sentences.append(parts[j])
+        offset = 0
+        for k, sentence in enumerate(sentences):
+            sentence_start = offset
+            frag_offset = sentence_start
+            for fragment in LATEX_MACRO_SPLIT.split(sentence):
+                if fragment:
+                    issues.extend(
+                        _check_fragment(
+                            fragment,
+                            frag_offset,
+                            wrapnumber,
+                            punctuation_slop,
+                            para_line,
+                            stripped,
+                        )
+                    )
+                frag_offset += len(fragment)
+            offset += len(sentence)
+            if k < len(separators):
+                sep = separators[k]
+                offset += len(sep)
+                if sep == " " and (
+                    k + 1 >= len(sentences) or sentences[k + 1].strip()
+                ):
+                    issue_line = para_line + stripped.count(
+                        "\n", 0, sentence_start + len(sentence) - 1
+                    )
+                    issues.append(
+                        (
+                            issue_line,
+                            "sentence ends mid-line here; add a line break "
+                            "after the sentence, or write a backslash-"
+                            r"space (\ ) instead of a plain space if this "
+                            "is an abbreviation, not a sentence end",
+                        )
+                    )
+        line += paragraph.count("\n")
+    return sorted(issues)
+
+
+def _iter_classified_spans(text, filetype, line_start=1):
+    """Yield (line_number, content) for each wrappable classify_lines run.
+
+    Shared by wrchk's latex path and by _iter_block_spans for markdown's
+    leaf prose blocks -- both just need the same protected-region
+    exclusions wr itself uses.
+    """
+    classified = classify_lines(text, filetype, normalize_math=True)
+    line = line_start
+    for wrappable, group in itertools.groupby(classified, key=lambda x: x[0]):
+        content = "".join(l for _, l in group)
+        if wrappable:
+            yield line, content
+        line += content.count("\n")
+
+
+def _iter_block_spans(blocks, wrapnumber, line_start=1):
+    """Yield (line_number, width, content) for markdown's wrappable prose.
+
+    Mirrors wrap_blocks' recursion (reduce width by a container's margin,
+    recurse into children, classify_lines on leaf text) but yields spans
+    to check instead of wrapping them.
+    """
+    line = line_start
+    for block in blocks:
+        span = block.text.count("\n")
+        if block.kind == "raw":
+            pass
+        elif block.children:
+            yield from _iter_block_spans(
+                block.children, max(1, wrapnumber - block.margin), line
+            )
+        else:
+            for sub_line, content in _iter_classified_spans(
+                block.text, "markdown", line
+            ):
+                yield sub_line, wrapnumber, content
+        line += span
+
+
+@register_command(
+    "check wrapping and sentence-break rules (for markdown or latex).",
+    "check that a file already obeys wr's wrapping rules -- without\n"
+    "rewriting anything. Reports a source line as too long if it holds\n"
+    "more words than wr's own greedy choice would put there, and\n"
+    "reports a sentence that ends in the middle of a source line\n"
+    "instead of at a line break. Prints 'file:line: message' for each\n"
+    "violation and exits non-zero if any are found. Takes the same\n"
+    "arguments as wr.",
+    help={
+        "filename": "Input file to check. Use '-' to read from stdin.",
+        "cleanoo": "Strip LibreOffice markup before checking.",
+        "i": "Accepted for parity with wr; unused by the checks.",
+    },
+    filename_extensions={"filename": [".md", ".tex"]},
+)
+def wrchk(filename, wrapnumber=45, punctuation_slop=20, cleanoo=False, i=-1):
+    alltext, filetype, _, display_name = _prepare(filename, cleanoo, i)
+    if filetype == "markdown":
+        spans = _iter_block_spans(markdown_blocks(alltext), wrapnumber)
+    else:
+        spans = (
+            (line, wrapnumber, content)
+            for line, content in _iter_classified_spans(alltext, filetype)
+        )
+    issues = [
+        issue
+        for line, width, content in spans
+        for issue in check_prose(content, width, punctuation_slop, line)
+    ]
+    for line, message in issues:
+        print(f"{display_name}:{line}: {message}")
+    if issues:
+        raise SystemExit(1)

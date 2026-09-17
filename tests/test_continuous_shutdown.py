@@ -1,4 +1,5 @@
 import errno
+import os
 import threading
 import time
 from pathlib import Path
@@ -237,7 +238,16 @@ def test_cpb_keeps_watching_after_rebuild_error(monkeypatch, tmp_path, capsys):
     runtime = install_cpb_runtime(monkeypatch, build_hook=build_hook)
 
     def editor():
+        previous_stat = source.stat()
         source.write_text("broken\n")
+        # Make this same-size save detectable when rapid writes share an mtime.
+        os.utime(
+            source,
+            ns=(
+                previous_stat.st_atime_ns,
+                previous_stat.st_mtime_ns + 1_000_000_000,
+            ),
+        )
         assert failed_build.wait(timeout=2)
         source.write_text("recovered\n")
         assert runtime["browser"].refreshed.wait(timeout=2)
