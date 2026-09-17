@@ -1633,3 +1633,21 @@ def test_mfs_errors_when_no_matching_markdown(tmp_path):
                 assert "could not find the requested text" in str(exc)
     finally:
         os.chdir(cwd)
+
+
+def test_historical_added_file_uses_git_contents():
+    command = build_difftool_command(
+        ["abc123", "def456"],
+        DiffEntry("added.txt", 0, 0, status="A"),
+        tool_cmd='gvim -d "$LOCAL" "$REMOTE"',
+    )
+    assert command[:2] == ["git", "difftool"]
+    assert command[-4:] == ["abc123", "def456", "--", "added.txt"]
+
+
+def test_historical_image_diff_keeps_both_revisions():
+    command = build_image_difftool_command(
+        ["abc123", "def456"],
+        DiffEntry("image.png", None, None, status="A"),
+    )
+    assert command[-4:] == ["abc123", "def456", "--", "image.png"]

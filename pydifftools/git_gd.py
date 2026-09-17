@@ -112,13 +112,6 @@ def git_bytes(args: Sequence[str]) -> bytes:
     ).stdout
 
 
-def split_diff_args(argv: Sequence[str]):
-    if "--" in argv:
-        split_idx = argv.index("--")
-        return list(argv[:split_idx]), list(argv[split_idx + 1 :])
-    return list(argv), []
-
-
 def diff_args_with_renames(diff_args: Sequence[str]) -> list[str]:
     for arg in diff_args:
         if (
@@ -132,12 +125,11 @@ def diff_args_with_renames(diff_args: Sequence[str]) -> list[str]:
     return [*diff_args, "--find-renames"]
 
 
-def name_status_entries(
+def changed_entries(
     diff_args: Sequence[str], pathspec: Sequence[str]
 ) -> list[DiffEntry]:
+    # {{{ read status and rename pairs without filtering away rename sources
     cmd = ["diff", "--name-status", "-z", *diff_args_with_renames(diff_args)]
-    if pathspec:
-        cmd += ["--", *pathspec]
     data = git_bytes(cmd)
     fields = [x for x in data.split(b"\x00") if x]
     entries: list[DiffEntry] = []
@@ -170,31 +162,22 @@ def name_status_entries(
             entries.append(
                 DiffEntry(path=path, added=0, deleted=0, status=status)
             )
-    return entries
-
-
-def pathspec_changed_paths(
-    diff_args: Sequence[str], pathspec: Sequence[str]
-) -> set[str]:
+    # }}}
+    if not pathspec:
+        return entries
+    # {{{ select entries touching the requested paths
     cmd = ["diff", "--name-only", "-z", *diff_args_with_renames(diff_args)]
     if pathspec:
         cmd += ["--", *pathspec]
     data = git_bytes(cmd)
-    return {os.fsdecode(x) for x in data.split(b"\x00") if x}
+    scoped_paths = {os.fsdecode(x) for x in data.split(b"\x00") if x}
 
-
-def changed_entries(
-    diff_args: Sequence[str], pathspec: Sequence[str]
-) -> list[DiffEntry]:
-    entries = name_status_entries(diff_args, [])
-    if not pathspec:
-        return entries
-    scoped_paths = pathspec_changed_paths(diff_args, pathspec)
     return [
         entry
         for entry in entries
         if any(path in scoped_paths for path in entry.diff_paths)
     ]
+    # }}}
 
 
 def changed_paths(
@@ -323,7 +306,7 @@ def build_difftool_command(
 ) -> list[str]:
     tool_name = DIFFTOOL_NAME
     prefix = ["git"]
-    if entry.status == "A":
+    if entry.status == "A" and len(diff_args) <= 1:
         if tool_cmd is None:
             tool_cmd = configured_difftool_command()
         if tool_cmd is not None:
@@ -381,7 +364,14 @@ def repo_name() -> str:
 
 
 def build_entries(argv: Sequence[str]):
-    diff_args, pathspec = split_diff_args(argv)
+    # {{{ separate Git options/revisions from file filters
+    if "--" in argv:
+        split_idx = argv.index("--")
+        diff_args = list(argv[:split_idx])
+        pathspec = list(argv[split_idx + 1:])
+    else:
+        diff_args, pathspec = list(argv), []
+    # }}}
     entries = changed_entries(diff_args, pathspec)
     for entry in entries:
         if is_raster_image_entry(entry):
@@ -417,26 +407,16 @@ def diff_entry_sort_key(entry: DiffEntry):
     return (group, 2, entry.path)
 
 
-def install_alias() -> None:
-    subprocess.run(
-        ["git", "config", "--global", "alias.gd", INSTALL_ALIAS_VALUE],
-        check=True,
-    )
-    print("Installed global git alias: alias.gd -> pydifft gd")
-    tool_cmd = subprocess.run(
-        ["git", "config", "--global", "--get", "difftool.mygvim.cmd"],
-        capture_output=True,
-        text=True,
-    )
-    if tool_cmd.returncode != 0 or not tool_cmd.stdout.strip():
-        print(
-            "Reminder: configure difftool.mygvim.cmd so git difftool knows "
-            "which GUI diff tool to launch."
-        )
-
-
 def main(argv: Sequence[str]) -> int:
     try:
+        if not argv:
+            from PySide6.QtWidgets import QApplication
+            from .git_gd_history import HistoryWindow, load_history
+
+            app = QApplication.instance() or QApplication(sys.argv)
+            window = HistoryWindow(repo_name(), load_history())
+            window.show()
+            return app.exec()
         diff_args, entries = build_entries(argv)
         name = repo_name()
     except subprocess.CalledProcessError as exc:
@@ -460,7 +440,9 @@ def main(argv: Sequence[str]) -> int:
 @register_command(
     "review changed files in a Qt table before launching git difftool",
     "review changed files in a Qt table before launching git difftool\n\n"
-    "\n"
+    "With no arguments, browse the past two weeks of Git history.\n"
+    "Click a commit bubble to compare it with the working directory;\n"
+    "right-click to copy its hash or choose a comparison endpoint.\n\n"
     "Install the matching git alias automatically with:\n"
     "  pydifft gd --install\n\n"
     "or add it yourself with:\n"
@@ -480,7 +462,24 @@ def gd(arguments, install=False):
     if install:
         if arguments:
             raise SystemExit("pydifft gd --install does not take diff args")
-        install_alias()
+        # {{{ install the Git alias and check difftool configuration
+        subprocess.run(
+            ["git", "config", "--global", "alias.gd", INSTALL_ALIAS_VALUE],
+            check=True,
+        )
+        print("Installed global git alias: alias.gd -> pydifft gd")
+        tool_cmd = subprocess.run(
+            ["git", "config", "--global", "--get", "difftool.mygvim.cmd"],
+            capture_output=True,
+            text=True,
+        )
+        if tool_cmd.returncode != 0 or not tool_cmd.stdout.strip():
+            print(
+                "Reminder: configure difftool.mygvim.cmd so git difftool "
+                "knows "
+                "which GUI diff tool to launch."
+            )
+        # }}}
         return
     return_code = main(arguments)
     if return_code != 0:

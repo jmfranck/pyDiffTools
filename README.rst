@@ -56,7 +56,16 @@ included are (listed in order of fun/utility):
   ``_build``/``_display`` directories; with ``--watch`` it starts the HTTP
   server and automatically rebuilds the staged fragments whenever you edit
   a ``.qmd`` file.
-- `pydifft gd [git diff args...]` shows the same Qt review table as the old
+- ``pydifft gd`` (or ``git gd`` with the alias installed) opens the past
+  two weeks of history across branches, in Git date order. Colors follow
+  first-parent ancestry; merged branches join the receiving branch.
+  Tags and branch tips have vector icon badges; hashes appear on hover.
+  Click any part of a commit row
+  to compare with the working directory, or right-click to copy its hash
+  or set a commit as the comparison endpoint. The right-click menu can restore
+  the working-directory endpoint. Diff window titles show the equivalent
+  arguments, preferring tags, then branch names, then six-character hashes.
+  ``pydifft gd [git diff args...]`` shows the same Qt review table as the old
   ``git_gd_qt.py`` helper before launching ``git difftool`` for a selected
   file.
   Image rows are scored in the background and displayed as normalized
