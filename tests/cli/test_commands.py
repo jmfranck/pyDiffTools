@@ -636,6 +636,34 @@ def test_gd_builds_private_image_difftool_command():
     ]
 
 
+def test_tree_help_describes_history_pagination(capsys):
+    from pydifftools.command_line import main
+
+    main(["--help", "tree"])
+    output = capsys.readouterr().out
+    assert "last 40 commits across all branches" in output
+    assert "down arrow to load the next 40 commits in date order" in output
+    main(["--help", "gd"])
+    output = capsys.readouterr().out
+    assert "review unstaged changes, like git diff" in output
+    assert "pydifft tree" in output
+
+
+def test_tree_install_sets_git_alias(monkeypatch, capsys):
+    from pydifftools import command_line
+    from unittest.mock import Mock
+
+    run = Mock()
+    monkeypatch.setattr("pydifftools.git_gd.subprocess.run", run)
+    command_line.main(["tree", "--install"])
+    run.assert_called_once_with(
+        ["git", "config", "--global", "alias.tree",
+         '!f() { pydifft tree "$@"; }; f'],
+        check=True,
+    )
+    assert "alias.tree -> pydifft tree" in capsys.readouterr().out
+
+
 def test_gd_builds_background_image_score_command():
     entry = DiffEntry(path="plot name.png", added=None, deleted=None)
 
@@ -797,7 +825,9 @@ def test_mfs_marker_regex_is_case_insensitive(tmp_path):
         os.chdir(cwd)
 
 
-def test_mfs_strips_underscore_strikethrough_and_super_subscript_markup(tmp_path):
+def test_mfs_strips_underscore_strikethrough_and_super_subscript_markup(
+    tmp_path,
+):
     calls = []
 
     def fake_send(_address, search_text):
@@ -807,7 +837,9 @@ def test_mfs_strips_underscore_strikethrough_and_super_subscript_markup(tmp_path
     os.chdir(tmp_path)
     try:
         with patch("pydifftools.command_line.send_forward_search", fake_send):
-            mfs("_Result_ near __overview__ with ~~strike~~ and x^2^ and H~2~O")
+            mfs(
+                "_Result_ near __overview__ with ~~strike~~ and x^2^ and H~2~O"
+            )
         assert calls == ["Result near overview with strike and x2 and H2O"]
     finally:
         os.chdir(cwd)

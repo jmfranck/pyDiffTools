@@ -409,14 +409,6 @@ def diff_entry_sort_key(entry: DiffEntry):
 
 def main(argv: Sequence[str]) -> int:
     try:
-        if not argv:
-            from PySide6.QtWidgets import QApplication
-            from .git_gd_history import HistoryWindow, load_history
-
-            app = QApplication.instance() or QApplication(sys.argv)
-            window = HistoryWindow(repo_name(), load_history())
-            window.show()
-            return app.exec()
         diff_args, entries = build_entries(argv)
         name = repo_name()
     except subprocess.CalledProcessError as exc:
@@ -440,9 +432,8 @@ def main(argv: Sequence[str]) -> int:
 @register_command(
     "review changed files in a Qt table before launching git difftool",
     "review changed files in a Qt table before launching git difftool\n\n"
-    "With no arguments, browse the past two weeks of Git history.\n"
-    "Click a commit bubble to compare it with the working directory;\n"
-    "right-click to copy its hash or choose a comparison endpoint.\n\n"
+    "With no arguments, review unstaged changes, like git diff.\n"
+    "Use pydifft tree to browse Git history.\n\n"
     "Install the matching git alias automatically with:\n"
     "  pydifft gd --install\n\n"
     "or add it yourself with:\n"
@@ -482,5 +473,42 @@ def gd(arguments, install=False):
         # }}}
         return
     return_code = main(arguments)
+    if return_code != 0:
+        raise SystemExit(return_code)
+
+
+@register_command(
+    "browse Git history across all branches",
+    "Browse the last 40 commits across all branches.\n"
+    "Use the down arrow to load the next 40 commits in date order.\n"
+    "Click a commit to compare it with the working directory;\n"
+    "right-click to copy its hash or choose a comparison endpoint.\n\n"
+    "Run pydifft tree --install to install the git tree alias.",
+    help={"install": "Install or update the global git tree alias."},
+)
+def tree(install=False):
+    """Open the history browser or install its Git alias."""
+    try:
+        if install:
+            subprocess.run(
+                ["git", "config", "--global", "alias.tree",
+                 '!f() { pydifft tree "$@"; }; f'],
+                check=True,
+            )
+            print("Installed global git alias: alias.tree -> pydifft tree")
+            return
+        from PySide6.QtWidgets import QApplication
+        from .git_gd_history import HistoryWindow, load_history
+
+        app = QApplication.instance() or QApplication(sys.argv)
+        window = HistoryWindow(repo_name(), load_history())
+        window.show()
+        return_code = app.exec()
+    except subprocess.CalledProcessError as exc:
+        if isinstance(exc.stderr, bytes):
+            sys.stderr.buffer.write(exc.stderr)
+        elif exc.stderr:
+            sys.stderr.write(exc.stderr)
+        raise SystemExit(exc.returncode) from exc
     if return_code != 0:
         raise SystemExit(return_code)

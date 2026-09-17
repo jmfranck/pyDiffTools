@@ -9,7 +9,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QApplication, QGraphicsEllipseItem, QGraphicsScene, QGraphicsView,
     QGraphicsPathItem, QGraphicsRectItem, QGraphicsTextItem,
-    QLabel, QMenu, QMessageBox, QVBoxLayout, QWidget,
+    QLabel, QMenu, QMessageBox, QToolButton, QVBoxLayout, QWidget,
 )
 
 from .git_gd import build_entries, git_bytes
@@ -31,14 +31,14 @@ class HistoryCommit:
         return next(iter(self.tags or self.branches), self.oid[:6])
 
 
-def load_history():
+def load_history(limit=40):
     head = subprocess.run(
         ["git", "rev-parse", "--verify", "HEAD"],
         capture_output=True, text=True,
     ).stdout.strip()
     data = git_bytes([
         "log", "--all", *([head] if head else []), "--date-order",
-        "--since-as-filter=2 weeks ago",
+        f"--max-count={limit}",
         "--format=%H%x00%P%x00%cI%x00%s",
     ]).decode("utf-8", errors="replace")
     commits = []
@@ -136,7 +136,8 @@ class HistoryWindow(QWidget):
         self.endpoint = None
         self.diff_windows = []
         self.text_items = []
-        self.setWindowTitle(f"gd — {repo_name} — past two weeks")
+        self.commits = commits
+        self.setWindowTitle(f"tree — {repo_name} — history")
         self.resize(1100, 700)
         self.setStyleSheet(
             "HistoryWindow { background: #f5f7fb; }"
@@ -154,7 +155,7 @@ class HistoryWindow(QWidget):
         )
         layout.addWidget(title)
         layout.addWidget(QLabel(
-            "Past two weeks · Date order\n"
+            "All branches · Date order · 40 commits at a time\n"
             "Click any commit to open its diff. Right-click for endpoints."
         ))
         self.endpoint_label = QLabel()
@@ -168,8 +169,38 @@ class HistoryWindow(QWidget):
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
         )
         layout.addWidget(self.view)
+        self.more_button = QToolButton()
+        self.more_button.setArrowType(Qt.ArrowType.DownArrow)
+        self.more_button.setToolTip("Load the next 40 commits")
+        self.more_button.setAccessibleName("Load the next 40 commits")
+        self.more_button.clicked.connect(self.load_more)
+        self.more_button.setEnabled(len(commits) == 40)
+        layout.addWidget(
+            self.more_button, alignment=Qt.AlignmentFlag.AlignHCenter
+        )
+        self.draw_history()
+
+    def load_more(self):
+        limit = len(self.commits) + 40
+        try:
+            commits = load_history(limit)
+        except subprocess.CalledProcessError as exc:
+            QMessageBox.critical(self, "tree", str(exc))
+            return
+        scroll = self.view.verticalScrollBar().value()
+        self.commits = commits
+        self.draw_history()
+        self.view.verticalScrollBar().setValue(scroll)
+        self.more_button.setEnabled(len(commits) == limit)
+        if len(commits) < limit:
+            self.more_button.setToolTip("No more commits")
+
+    def draw_history(self):
+        self.text_items.clear()
+        self.scene.clear()
+        commits = self.commits
         if not commits:
-            self.scene.addText("No commits in the past two weeks.")
+            self.scene.addText("No commits.")
             return
         # {{{ draw ancestry edges, then interactive bubbles and commit labels
         colors = [QColor(value) for value in (
@@ -187,7 +218,7 @@ class HistoryWindow(QWidget):
             color = colors[commit.lane % len(colors)]
             for number, parent in enumerate(commit.parents):
                 if parent not in positions:
-                    # A short tail marks ancestry outside the time window.
+                    # A short tail marks ancestry beyond the loaded commits.
                     self.scene.addLine(x, y, x, y + 14, QPen(color, 2))
                     continue
                 px, py = positions[parent]

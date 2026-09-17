@@ -56,8 +56,9 @@ included are (listed in order of fun/utility):
   ``_build``/``_display`` directories; with ``--watch`` it starts the HTTP
   server and automatically rebuilds the staged fragments whenever you edit
   a ``.qmd`` file.
-- ``pydifft gd`` (or ``git gd`` with the alias installed) opens the past
-  two weeks of history across branches, in Git date order. Colors follow
+- ``pydifft tree`` (or ``git tree`` with the alias installed) opens the last
+  40 commits across all branches, in Git date order. Use the down arrow
+  below the history to add the next 40 commits. Colors follow
   first-parent ancestry; merged branches join the receiving branch.
   Tags and branch tips have vector icon badges; hashes appear on hover.
   Click any part of a commit row
@@ -65,6 +66,9 @@ included are (listed in order of fun/utility):
   or set a commit as the comparison endpoint. The right-click menu can restore
   the working-directory endpoint. Diff window titles show the equivalent
   arguments, preferring tags, then branch names, then six-character hashes.
+  Run ``pydifft tree --install`` to add the matching ``git tree`` alias.
+- ``pydifft gd`` (or ``git gd`` with the alias installed) reviews unstaged
+  changes, like bare ``git diff``.
   ``pydifft gd [git diff args...]`` shows the same Qt review table as the old
   ``git_gd_qt.py`` helper before launching ``git difftool`` for a selected
   file.
