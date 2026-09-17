@@ -540,7 +540,21 @@ def mfs(text):
     if marker_match:
         search_text = search_text[: marker_match.start()]
     search_text = re.sub(r"\[@[^\]]+\]", " ", search_text)
-    search_text = search_text.replace("**", " ").replace("*", " ")
+    # Strip paired markup delimiters (bold/italic, strikethrough,
+    # superscript/subscript). These delimiters hug the text they wrap with no
+    # space in the rendered output (e.g. "x^2^" renders as "x2"), so they are
+    # dropped rather than replaced with a space. Plain str.replace is used
+    # (not regex) so this is linear time regardless of how many delimiter
+    # characters appear.
+    search_text = (
+        search_text.replace("**", "")
+        .replace("__", "")
+        .replace("~~", "")
+        .replace("*", "")
+        .replace("_", "")
+        .replace("~", "")
+        .replace("^", "")
+    )
     search_text = re.sub(r"\s+", " ", search_text).strip()
     if not search_text:
         search_text = text.strip()

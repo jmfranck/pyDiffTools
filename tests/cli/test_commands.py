@@ -797,6 +797,42 @@ def test_mfs_marker_regex_is_case_insensitive(tmp_path):
         os.chdir(cwd)
 
 
+def test_mfs_strips_underscore_strikethrough_and_super_subscript_markup(tmp_path):
+    calls = []
+
+    def fake_send(_address, search_text):
+        calls.append(search_text)
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with patch("pydifftools.command_line.send_forward_search", fake_send):
+            mfs("_Result_ near __overview__ with ~~strike~~ and x^2^ and H~2~O")
+        assert calls == ["Result near overview with strike and x2 and H2O"]
+    finally:
+        os.chdir(cwd)
+
+
+def test_mfs_handles_long_run_of_underscores_without_hanging(tmp_path):
+    calls = []
+
+    def fake_send(_address, search_text):
+        calls.append(search_text)
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        adversarial_text = "a" + "_" * 20000 + "b"
+        start = time.monotonic()
+        with patch("pydifftools.command_line.send_forward_search", fake_send):
+            mfs(adversarial_text)
+        elapsed = time.monotonic() - start
+        assert elapsed < 5
+        assert calls == ["ab"]
+    finally:
+        os.chdir(cwd)
+
+
 def test_run_pandoc_adds_css_lua_and_js_files_from_markdown_directory(
     tmp_path, monkeypatch
 ):
