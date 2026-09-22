@@ -75,10 +75,15 @@ class doc_contents_class(object):
     def __str__(self):
         if len(self._processed_titles) > 0:
             raise ValueError(
-                "the following section"
-                " titles were not utilized -- this program is"
-                " for reordering, not dropping!:\n"
-                + str(self._processed_titles)
+                "the following section titles are missing from the"
+                " outline:\n\t"
+                + "\n\t".join(self._processed_titles)
+                + "\nEvery existing section must appear in the outline, so"
+                " that entire sections of text are never dropped by"
+                " accident.  If you really want to get rid of a section,"
+                " add a new heading (e.g. 'for deletion') to the outline"
+                " and move the unwanted sections underneath it; then delete"
+                " that part of the file by hand."
             )
         retval = ""
         for j in self.contents.keys():
@@ -88,7 +93,7 @@ class doc_contents_class(object):
                     new_name = self._aliases[j]
                 if self.format_type == "markdown":
                     retval += "#" * self.level_numbers[self.types[j]]
-                    retval += f" {new_name}\n\n"
+                    retval += f" {new_name}\n"
                 else:
                     retval += f"\\{self.types[j]}{{{new_name}}}"
             retval += f"{self.contents[j]}"
@@ -134,14 +139,24 @@ class doc_contents_class(object):
                 title, self.contents.keys()
             )
             yesorno = input(
-                f"didn't find\n\t{title}\nin keys, maybe you"
-                f" want\n\t{best_match}\nsay y or n"
+                f"didn't find\n\t{title}\namong the existing sections."
+                f"  Is it a renamed version of\n\t{best_match}\n?"
+                " say y to rename, or n to add it as a new, empty section: "
             )
             if yesorno == "y":
                 self._aliases[best_match] = title  # will be replaced later
                 title = best_match
+            elif yesorno == "n":
+                # a new section, so it isn't on the list of titles to place
+                self.contents[title] = ""
+                self._processed_titles.append(title)
             else:
-                raise ValueError("problem with replacement")
+                raise ValueError("expected y or n")
+        if title not in self._processed_titles:
+            raise ValueError(
+                f"the section\n\t{title}\nappears more than once in the"
+                " outline"
+            )
         self.contents.move_to_end(title)
         self._processed_titles.remove(title)
         self.types[title] = self.inv_prefix[ilevel * "\t"]

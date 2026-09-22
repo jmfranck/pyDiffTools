@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from pydifftools import continuous
+from pydifftools import continuous, outline
 from pydifftools.continuous import run_pandoc
 from pydifftools.command_line import mfs
 from pydifftools.command_registry import _COMMAND_SPECS
@@ -331,7 +331,7 @@ def test_markdown_outline_reorder(tmp_path):
         sys.executable,
         "-m",
         "pydifftools.command_line",
-        "xomd",
+        "xo",
         str(target),
     ]
     proc_extract = subprocess.run(
@@ -351,7 +351,7 @@ def test_markdown_outline_reorder(tmp_path):
         sys.executable,
         "-m",
         "pydifftools.command_line",
-        "xomdreorder",
+        "xore",
         str(target),
     ]
     proc_reorder = subprocess.run(
@@ -361,6 +361,155 @@ def test_markdown_outline_reorder(tmp_path):
     content = target.read_text()
     assert content.index("## Second Topic") < content.index("## First Topic")
     assert "##### Hidden Notes" in content
+
+
+def test_markdown_outline_roundtrip_preserves_text(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    original = (
+        "---\n"
+        "title: Example\n"
+        "abstract: |\n"
+        "    Some abstract.\n"
+        "linkReferences: true\n"
+        "---\n"
+        "\n"
+        "# Introduction\n"
+        "\n"
+        "### First point\n"
+        "\n"
+        "Text of the first point.\n"
+        "\n"
+        "```\n"
+        "# not a heading\n"
+        "```\n"
+        "\n"
+        "---\n"
+        "\n"
+        "### Second point\n"
+        "Text right under the heading.\n"
+        "\n"
+        "# Conclusion\n"
+        "\n"
+        "Done.\n"
+    )
+    target = tmp_path / "paper.md"
+    target.write_text(original)
+    outline.xo("paper.md")
+    outline_text = (tmp_path / "paper_outline.md").read_text()
+    assert outline_text == (
+        "*\tIntroduction\n"
+        "\t\t*\tFirst point\n"
+        "\t\t*\tSecond point\n"
+        "*\tConclusion"
+    )
+    outline.xore("paper.md")
+    assert target.read_text() == original
+
+
+def test_tex_outline_uses_extension(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "paper.tex"
+    target.write_text(
+        "preamble\n\\section{Alpha}\nalpha text\n"
+        "\\section{Beta}\nbeta text\n"
+    )
+    outline.xo("paper.tex")
+    outline_path = tmp_path / "paper_outline.md"
+    assert outline_path.read_text() == "*\tAlpha\n*\tBeta"
+    outline_path.write_text("*\tBeta\n*\tAlpha\n")
+    outline.xore("paper.tex")
+    content = target.read_text()
+    assert content.index("\\section{Beta}") < content.index(
+        "\\section{Alpha}"
+    )
+
+
+def test_tex_outline_roundtrip_preserves_text(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    original = (
+        "\\documentclass{article}\n"
+        "\\begin{document}\n"
+        "\\section{Introduction}\n"
+        "Intro text with $x^2$.\n"
+        "\n"
+        "\\subsection{Rates of $k_{\\mathrm{HE}}$}\\label{sec:rates}\n"
+        "Rate text.\n"
+        "\\paragraph{A detail}\n"
+        "Detail text.\n"
+        "\\section{Conclusion}\n"
+        "Done.\n"
+        "\\end{document}\n"
+    )
+    target = tmp_path / "paper.tex"
+    target.write_text(original)
+    outline.xo("paper.tex")
+    # the outline is a markdown list for tex sources too
+    assert (tmp_path / "paper_outline.md").read_text() == (
+        "*\tIntroduction\n"
+        "\t*\tRates of $k_{\\mathrm{HE}}$\n"
+        "\t\t\t*\tA detail\n"
+        "*\tConclusion"
+    )
+    outline.xore("paper.tex")
+    assert target.read_text() == original
+
+
+def test_outline_indentation_sets_level(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "paper.tex").write_text(
+        "\\section{Alpha}\na\n\\subsection{Beta}\nb\n"
+    )
+    (tmp_path / "paper.md").write_text("# Alpha\na\n\n## Beta\nb\n")
+    for name in ["paper.tex", "paper.md"]:
+        outline.xo(name)
+        # promote Beta to the top level and demote Alpha under it
+        (tmp_path / "paper_outline.md").write_text(
+            "*\tBeta\n\t\t*\tAlpha\n"
+        )
+        outline.xore(name)
+    assert (tmp_path / "paper.tex").read_text() == (
+        "\\section{Beta}\nb\n\\subsubsection{Alpha}\na\n"
+    )
+    assert (tmp_path / "paper.md").read_text() == (
+        "# Beta\nb\n### Alpha\na\n\n"
+    )
+
+
+def test_outline_refuses_to_drop_sections(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    original = "# Keep\nkeep text\n\n# Unwanted\nunwanted text\n"
+    target = tmp_path / "paper.md"
+    target.write_text(original)
+    outline.xo("paper.md")
+    outline_path = tmp_path / "paper_outline.md"
+    outline_path.write_text("*\tKeep\n")
+    with pytest.raises(ValueError, match="for deletion"):
+        outline.xore("paper.md")
+    # the failed reorder must leave the source untouched
+    assert target.read_text() == original
+    # a new heading lets the user collect sections to delete by hand
+    outline_path.write_text("*\tKeep\n*\tfor deletion\n\t*\tUnwanted\n")
+    monkeypatch.setattr("builtins.input", lambda prompt: "n")
+    outline.xore("paper.md")
+    assert target.read_text() == (
+        "# Keep\nkeep text\n\n# for deletion\n## Unwanted\nunwanted text\n"
+    )
+
+
+def test_outline_rejects_duplicate_sections(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "paper.md").write_text("# Alpha\na\n")
+    outline.xo("paper.md")
+    (tmp_path / "paper_outline.md").write_text("*\tAlpha\n*\tAlpha\n")
+    with pytest.raises(ValueError, match="more than once"):
+        outline.xore("paper.md")
+
+
+def test_outline_rejects_unknown_extension(tmp_path):
+    target = tmp_path / "notes.txt"
+    target.write_text("hello\n")
+    with pytest.raises(ValueError):
+        outline.xo(str(target))
 
 
 def test_gd_install_sets_git_alias(monkeypatch, capsys):
