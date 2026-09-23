@@ -46,6 +46,15 @@ included are (listed in order of fun/utility):
   refreshed as you edit the file.  This wraps the former
   ``flowchart/watch_graph.py`` script so all of its functionality is now
   available through the main ``pydifft`` entry point.
+  Add ``--diff-base HEAD`` (or a branch, tag, commit, or quoted reflog
+  reference) to compare against that Git snapshot throughout the preview
+  session. Additions are green, deletions are red and struck through, and
+  unchanged content is muted. Renames share one box; date, status, and
+  dependency changes are annotated. Navigation, filters, and reloads retain
+  the baseline, whose reference and commit appear below the graph.
+  Comparison uses the same repository-relative YAML path; a file absent
+  from the revision is treated as an empty plan. Historical file renames
+  are not followed, and comparison markup is never written to YAML.
 - `pydifft tex2qmd file.tex` converts LaTeX sources to Quarto markdown.
   The converter preserves custom observation blocks and errata tags while
   translating verbatim/python environments into fenced code blocks so the

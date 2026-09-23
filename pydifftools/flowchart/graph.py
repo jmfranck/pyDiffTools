@@ -42,15 +42,11 @@ def _str_presenter(dumper, data: str):
     return dumper.represent_scalar("tag:yaml.org,2002:str", data)
 
 
-def _register_block_str_presenter() -> None:
-    """Register the multiline string presenter on all dumpers we use."""
-
-    for dumper in (yaml.Dumper, yaml.SafeDumper, IndentDumper):
-        if getattr(dumper, "yaml_representers", None) is not None:
-            dumper.add_representer(str, _str_presenter)
-
-
-_register_block_str_presenter()
+# {{{ Register multiline strings with each YAML dumper
+for dumper in (yaml.Dumper, yaml.SafeDumper, IndentDumper):
+    if getattr(dumper, "yaml_representers", None) is not None:
+        dumper.add_representer(str, _str_presenter)
+# }}}
 
 
 class EmptyGraphYamlError(ValueError):
@@ -428,12 +424,6 @@ def endpoint_projects(data):
     return projects
 
 
-def _node_label(text, wrap_width=55):
-    if text is None:
-        return ""
-    return _format_label(text, wrap_width)
-
-
 def _normalize_graph_dates(data):
     # Normalize due dates to mm/dd/yy so the YAML is consistent across years.
     if "nodes" not in data:
@@ -482,9 +472,11 @@ def _append_node(
             if parent_due is None or not str(parent_due).strip():
                 depends_on_undated_parent = True
                 break
-    label = _node_label(
-        _node_text_with_due(node, depends_on_undated_parent), wrap_width
+    label = _format_label(
+        _node_text_with_due(node, depends_on_undated_parent) or "", wrap_width
     )
+    if "_comparison_label" in node:
+        label = "<" + node["_comparison_label"] + ">"
     task_link_line = (
         f'<font point-size="9">__WGRPH_TASK_LINK__:{node_name}</font>'
     )
@@ -734,6 +726,7 @@ def write_dot_from_yaml(
     filter_task=None,
     filter_completed=False,
     resolve_due_date_conflict=None,
+    comparison=None,
 ):
     data = load_graph_yaml(str(yaml_path), old_data=old_data)
     _normalize_graph_dates(data)
@@ -847,7 +840,11 @@ def write_dot_from_yaml(
             adjust_due_after_parents(name)
         # }}}
     data_for_dot = data
-    if filter_task is not None:
+    if comparison is not None:
+        data_for_dot = comparison.render(
+            data, wrap_width, filter_task, filter_completed
+        )
+    elif filter_task is not None:
         # Limit the rendered graph to incomplete ancestors of the target task.
         if "nodes" not in data or filter_task not in data["nodes"]:
             matches = [

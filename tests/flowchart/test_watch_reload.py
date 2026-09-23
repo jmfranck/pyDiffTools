@@ -61,6 +61,7 @@ def test_watch_html_uses_block_embed(tmp_path):
 def test_watch_html_shows_project_overview_link_in_date_mode():
     html = _watch_html("/graph.svg", True)
     assert "<a href='/'>project overview</a>" in html
+    assert "<a href='/?d=1&p=1'>exclude completed</a>" in html
     assert "<a href='/?p=1'>full plan</a>" in html
 
 
@@ -76,6 +77,7 @@ def test_watch_html_shows_project_overview_link_in_full_plan_mode():
     assert "<a href='/?d=1'>date-ordered</a>" in html
     assert "<a href='/'>project overview</a>" in html
     assert "<a href='/?p=1'>full plan</a>" not in html
+    assert "exclude completed" not in html
 
 
 def test_watch_view_state_defaults_to_project_overview():
@@ -91,6 +93,14 @@ def test_watch_view_state_prefers_task_mode_over_date_mode():
 def test_watch_view_state_parses_full_plan_mode():
     assert _watch_view_state_from_params({"p": ["1"]}) == (
         False,
+        None,
+        True,
+    )
+
+
+def test_watch_view_state_keeps_completed_filter_in_date_mode():
+    assert _watch_view_state_from_params({"d": ["1"], "p": ["1"]}) == (
+        True,
         None,
         True,
     )

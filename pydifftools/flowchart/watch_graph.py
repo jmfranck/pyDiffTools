@@ -1,4 +1,5 @@
 import subprocess
+import html
 import sys
 import time
 import shutil
@@ -26,6 +27,7 @@ from pydifftools.browser_lifecycle import (
     browser_window_is_alive,
     close_browser_window,
 )
+from .comparison import PlanComparison
 from .graph import EmptyGraphYamlError, endpoint_projects, write_dot_from_yaml
 
 
@@ -98,22 +100,6 @@ def _svg_style_set(style_text, key, value):
     return ";".join(parts)
 
 
-def _svg_get_float_attr(shape, attr_name, default_value):
-    if attr_name in shape.attrib:
-        try:
-            return float(shape.attrib[attr_name])
-        except ValueError:
-            pass
-    if "style" in shape.attrib:
-        styled = _svg_style_get(shape.attrib["style"], attr_name)
-        if styled is not None:
-            try:
-                return float(styled)
-            except ValueError:
-                pass
-    return default_value
-
-
 def _svg_set_stroke(shape, color, stroke_width=None):
     shape.set("stroke", color)
     if stroke_width is not None:
@@ -131,106 +117,6 @@ def _svg_set_stroke(shape, color, stroke_width=None):
             )
 
 
-def _svg_set_fill(shape, color):
-    shape.set("fill", color)
-    if "style" in shape.attrib:
-        shape.set(
-            "style", _svg_style_set(shape.attrib["style"], "fill", color)
-        )
-
-
-def _svg_stroke_color(shape):
-    if "stroke" in shape.attrib:
-        return shape.attrib["stroke"].strip().lower()
-    if "style" in shape.attrib:
-        styled = _svg_style_get(shape.attrib["style"], "stroke")
-        if styled:
-            return styled.strip().lower()
-    return None
-
-
-def _svg_shape_is_red(shape):
-    stroke = _svg_stroke_color(shape)
-    if stroke is None:
-        return False
-    return stroke in {"red", "#ff0000", "#f00", "rgb(255,0,0)"}
-
-
-def _svg_shape_bounds(shape, namespace):
-    if shape.tag == f"{namespace}polygon" and "points" in shape.attrib:
-        coords = []
-        for pair in shape.attrib["points"].strip().split(" "):
-            if not pair:
-                continue
-            xy = pair.split(",")
-            if len(xy) != 2:
-                continue
-            try:
-                coords.append((float(xy[0]), float(xy[1])))
-            except ValueError:
-                return None
-        if coords:
-            return (
-                min(x for x, y in coords),
-                max(x for x, y in coords),
-                min(y for x, y in coords),
-                max(y for x, y in coords),
-            )
-    if shape.tag == f"{namespace}rect":
-        try:
-            x = float(shape.attrib["x"])
-            y = float(shape.attrib["y"])
-            width = float(shape.attrib["width"])
-            height = float(shape.attrib["height"])
-        except (KeyError, ValueError):
-            return None
-        return (x, x + width, y, y + height)
-    if shape.tag == f"{namespace}ellipse":
-        try:
-            cx = float(shape.attrib["cx"])
-            cy = float(shape.attrib["cy"])
-            rx = float(shape.attrib["rx"])
-            ry = float(shape.attrib["ry"])
-        except (KeyError, ValueError):
-            return None
-        return (cx - rx, cx + rx, cy - ry, cy + ry)
-    return None
-
-
-def _svg_parse_viewbox(svg_root):
-    viewbox = svg_root.attrib.get("viewBox")
-    if viewbox is None:
-        return None
-    parts = viewbox.replace(",", " ").split()
-    if len(parts) != 4:
-        return None
-    try:
-        return tuple(float(part) for part in parts)
-    except ValueError:
-        return None
-
-
-def _svg_add_canvas_padding(svg_root, padding=8.0):
-    # Graphviz emits a tight canvas; add small fixed padding so post-processed
-    # outlines and anti-aliased strokes are never clipped at edges.
-    viewbox = _svg_parse_viewbox(svg_root)
-    if viewbox is None:
-        return
-
-    view_x, view_y, view_w, view_h = viewbox
-    if view_w <= 0.0 or view_h <= 0.0:
-        return
-
-    new_view_x = view_x - padding
-    new_view_y = view_y - padding
-    new_view_w = view_w + 2.0 * padding
-    new_view_h = view_h + 2.0 * padding
-    svg_root.set(
-        "viewBox",
-        f"{new_view_x:.2f} {new_view_y:.2f} {new_view_w:.2f} {new_view_h:.2f}",
-    )
-
-
 def _watch_view_state_from_params(params):
     # Treat each GET query as the full requested mode so navigation links can
     # reliably switch back to the overview without depending on prior state.
@@ -243,8 +129,6 @@ def _watch_view_state_from_params(params):
     if "d" in params:
         d_value = params["d"][-1]
         order_by_date = d_value in ("1", "true", "yes", "on", "")
-        if order_by_date:
-            filter_completed = False
     if "t" in params:
         t_value = params["t"][-1]
         if t_value is not None and str(t_value) != "":
@@ -254,32 +138,41 @@ def _watch_view_state_from_params(params):
     return order_by_date, target_task, filter_completed
 
 
-def _watch_footer_links(
-    order_by_date, target_task=None, filter_completed=False
-):
-    links = []
-    if not order_by_date:
-        links.append(("/?d=1", "date-ordered"))
-    if not filter_completed:
-        links.append(("/?p=1", "full plan"))
-    if order_by_date or filter_completed:
-        links.append(("/", "project overview"))
-    elif target_task is not None and str(target_task).strip():
-        links.append(("/", "project overview"))
-    return links
-
-
 def _watch_html(
-    svg_url, order_by_date, target_task=None, filter_completed=False
+    svg_url,
+    order_by_date,
+    target_task=None,
+    filter_completed=False,
+    comparison=None,
 ):
     # Keep the SVG as the page's main content so browser zoom behavior matches
     # the original watcher experience (the graph scales, not just footer text).
+    # {{{ Build links for the other preview views
+    links = []
+    if not order_by_date:
+        links.append(("/?d=1", "date-ordered"))
+    if order_by_date and not filter_completed:
+        links.append(("/?d=1&p=1", "exclude completed"))
+    if not filter_completed:
+        links.append(("/?p=1", "full plan"))
+    if (
+        order_by_date
+        or filter_completed
+        or (target_task is not None and str(target_task).strip())
+    ):
+        links.append(("/", "project overview"))
     footer_html = " | ".join(
-        f"<a href='{footer_url}'>{footer_label}</a>"
-        for footer_url, footer_label in _watch_footer_links(
-            order_by_date, target_task, filter_completed
-        )
+        f"<a href='{url}'>{label}</a>" for url, label in links
     )
+    # }}}
+    if comparison is not None:
+        footer_html += (
+            " | Comparing against "
+            + html.escape(comparison.reference)
+            + " ("
+            + comparison.commit[:12]
+            + ")"
+        )
     return (
         "<html><body style='margin:0'>"
         "<embed id='svg-view' style='display:block;' type='image/svg+xml'"
@@ -307,68 +200,6 @@ def _send_preview_response(handler, body_bytes, content_type):
     ):
         return False
     return True
-
-
-def _svg_expanded_outline(
-    shape, namespace, expand, stroke_color, stroke_width
-):
-    bounds = _svg_shape_bounds(shape, namespace)
-    if bounds is None:
-        return None
-    x_min, x_max, y_min, y_max = bounds
-    if shape.tag == f"{namespace}ellipse":
-        cx = (x_min + x_max) / 2.0
-        cy = (y_min + y_max) / 2.0
-        return ET.Element(
-            f"{namespace}ellipse",
-            {
-                "cx": f"{cx:.2f}",
-                "cy": f"{cy:.2f}",
-                "rx": f"{((x_max - x_min) / 2.0) + expand:.2f}",
-                "ry": f"{((y_max - y_min) / 2.0) + expand:.2f}",
-                "fill": "none",
-                "stroke": stroke_color,
-                "stroke-width": f"{stroke_width:g}",
-            },
-        )
-    return ET.Element(
-        f"{namespace}rect",
-        {
-            "x": f"{x_min - expand:.2f}",
-            "y": f"{y_min - expand:.2f}",
-            "width": f"{(x_max - x_min) + 2.0 * expand:.2f}",
-            "height": f"{(y_max - y_min) + 2.0 * expand:.2f}",
-            "fill": "none",
-            "stroke": stroke_color,
-            "stroke-width": f"{stroke_width:g}",
-        },
-    )
-
-
-def _svg_add_task_links(svg_root, namespace):
-    # Replace marker text emitted in DOT labels with clickable links. Graphviz
-    # generates one <text> item per line, so the marker occupies its own row.
-    xlink_ns = "http://www.w3.org/1999/xlink"
-    ET.register_namespace("xlink", xlink_ns)
-    link_marker = "__WGRPH_TASK_LINK__:"
-    for group in svg_root.iter(f"{namespace}g"):
-        if "class" not in group.attrib or group.attrib["class"] != "node":
-            continue
-        for index, child in enumerate(list(group)):
-            if child.tag != f"{namespace}text" or child.text is None:
-                continue
-            if not child.text.startswith(link_marker):
-                continue
-            task_name = child.text[len(link_marker) :]
-            child.text = task_name
-            link = ET.Element(f"{namespace}a")
-            link.set(
-                f"{{{xlink_ns}}}href", f"/?t={urllib.parse.quote(task_name)}"
-            )
-            link.set("target", "_top")
-            link.append(child)
-            group.remove(child)
-            group.insert(index, link)
 
 
 def _resolve_due_date_conflict_with_qt(
@@ -421,6 +252,7 @@ def build_graph(
     target_task=None,
     filter_completed=False,
     resolve_due_date_conflict=None,
+    comparison=None,
 ):
     # Graphviz is required for dot -> svg rendering.
     if shutil.which("dot") is None:
@@ -438,6 +270,7 @@ def build_graph(
         filter_task=target_task,
         filter_completed=filter_completed,
         resolve_due_date_conflict=resolve_due_date_conflict,
+        comparison=comparison,
     )
     subprocess.run(
         ["dot", "-Tsvg", str(dot_file), "-o", str(svg_file)],
@@ -449,7 +282,31 @@ def build_graph(
     if svg_root.tag.startswith("{"):
         namespace = svg_root.tag[: svg_root.tag.find("}") + 1]
 
-    _svg_add_task_links(svg_root, namespace)
+    # {{{ Make each task name a navigation link
+    # Replace marker text emitted in DOT labels with clickable links. Graphviz
+    # generates one <text> item per line, so the marker occupies its own row.
+    xlink_ns = "http://www.w3.org/1999/xlink"
+    ET.register_namespace("xlink", xlink_ns)
+    link_marker = "__WGRPH_TASK_LINK__:"
+    for group in svg_root.iter(f"{namespace}g"):
+        if "class" not in group.attrib or group.attrib["class"] != "node":
+            continue
+        for index, child in enumerate(list(group)):
+            if child.tag != f"{namespace}text" or child.text is None:
+                continue
+            if not child.text.startswith(link_marker):
+                continue
+            task_name = child.text[len(link_marker) :]
+            child.text = task_name
+            link = ET.Element(f"{namespace}a")
+            link.set(
+                f"{{{xlink_ns}}}href", f"/?t={urllib.parse.quote(task_name)}"
+            )
+            link.set("target", "_top")
+            link.append(child)
+            group.remove(child)
+            group.insert(index, link)
+    # }}}
 
     if not order_by_date:
         # In dependency view mode, each endpoint style defines a project
@@ -561,7 +418,14 @@ def build_graph(
                 if child.tag in (f"{namespace}path", f"{namespace}polygon"):
                     _svg_set_stroke(child, edge_color)
                     if child.tag == f"{namespace}polygon":
-                        _svg_set_fill(child, edge_color)
+                        child.set("fill", edge_color)
+                        if "style" in child.attrib:
+                            child.set(
+                                "style",
+                                _svg_style_set(
+                                    child.attrib["style"], "fill", edge_color
+                                ),
+                            )
 
         # Color node borders by project membership after edge coloring. Nodes
         # that belong to multiple projects get concentric transparent outlines.
@@ -591,34 +455,100 @@ def build_graph(
                 break
             if border_shape is None or border_index is None:
                 continue
-            if _svg_shape_is_red(border_shape):
-                continue
-            base_stroke_width = _svg_get_float_attr(
-                border_shape, "stroke-width", 1.0
+            # {{{ Read the existing border style before project coloring
+            stroke = border_shape.get("stroke") or _svg_style_get(
+                border_shape.get("style", ""), "stroke"
             )
+            if stroke and stroke.strip().lower() in {
+                "red",
+                "#ff0000",
+                "#f00",
+                "rgb(255,0,0)",
+            }:
+                continue
+            base_stroke_width = 1.0
+            for value in (
+                border_shape.get("stroke-width"),
+                _svg_style_get(border_shape.get("style", ""), "stroke-width"),
+            ):
+                try:
+                    base_stroke_width = float(value)
+                    break
+                except (TypeError, ValueError):
+                    pass
+            # }}}
             _svg_set_stroke(
                 border_shape, colors[0], stroke_width=base_stroke_width
             )
             inserts = []
             for ring_index, ring_color in enumerate(colors[1:], start=1):
-                outline = _svg_expanded_outline(
-                    border_shape,
-                    namespace,
-                    # Graphviz's emitted geometry can effectively make a
-                    # one-line-width expansion render as only ~half-width
-                    # visual offset, so push each added ring out by two
-                    # stroke widths per ring to keep borders distinct.
-                    expand=2.0 * base_stroke_width * ring_index,
-                    stroke_color=ring_color,
-                    stroke_width=base_stroke_width,
-                )
-                if outline is None:
+                # {{{ Add concentric outlines for shared project membership
+                expand = 2.0 * base_stroke_width * ring_index
+                shape = border_shape
+                try:
+                    if shape.tag == f"{namespace}ellipse":
+                        attrs = {
+                            "cx": shape.attrib["cx"],
+                            "cy": shape.attrib["cy"],
+                            "rx": str(float(shape.attrib["rx"]) + expand),
+                            "ry": str(float(shape.attrib["ry"]) + expand),
+                        }
+                        tag = "ellipse"
+                    else:
+                        if shape.tag == f"{namespace}polygon":
+                            coords = [
+                                tuple(map(float, pair.split(",")))
+                                for pair in shape.attrib["points"].split()
+                            ]
+                            x_min = min(x for x, y in coords)
+                            x_max = max(x for x, y in coords)
+                            y_min = min(y for x, y in coords)
+                            y_max = max(y for x, y in coords)
+                        elif shape.tag == f"{namespace}rect":
+                            x_min = float(shape.attrib["x"])
+                            y_min = float(shape.attrib["y"])
+                            x_max = x_min + float(shape.attrib["width"])
+                            y_max = y_min + float(shape.attrib["height"])
+                        else:
+                            continue
+                        attrs = {
+                            "x": str(x_min - expand),
+                            "y": str(y_min - expand),
+                            "width": str(x_max - x_min + 2 * expand),
+                            "height": str(y_max - y_min + 2 * expand),
+                        }
+                        tag = "rect"
+                except (KeyError, ValueError):
                     continue
+                attrs.update(
+                    {
+                        "fill": "none",
+                        "stroke": ring_color,
+                        "stroke-width": f"{base_stroke_width:g}",
+                    }
+                )
+                outline = ET.Element(f"{namespace}{tag}", attrs)
+                # }}}
                 inserts.append((border_index + ring_index, outline))
             for insert_index, outline in reversed(inserts):
                 group.insert(insert_index, outline)
 
-    _svg_add_canvas_padding(svg_root, padding=24.0)
+    if comparison is not None:
+        comparison.style_svg(svg_root, namespace)
+    # {{{ Pad the canvas so expanded project borders are never clipped
+    try:
+        x, y, width, height = map(
+            float, svg_root.attrib["viewBox"].replace(",", " ").split()
+        )
+        if width > 0 and height > 0:
+            svg_root.set(
+                "viewBox",
+                f"{x - 24:.2f} {y - 24:.2f} "
+                f"{width + 48:.2f} {height + 48:.2f}",
+            )
+    except (KeyError, ValueError):
+        pass
+    # }}}
     svg_tree.write(str(svg_file), encoding="utf-8", xml_declaration=True)
     return data
 
@@ -639,6 +569,7 @@ class GraphEventHandler(FileSystemEventHandler):
         state=None,
         resolve_due_date_conflict=None,
         debounce=0.25,
+        comparison=None,
     ):
         self.yaml_file = Path(yaml_file)
         self.dot_file = Path(dot_file)
@@ -650,6 +581,7 @@ class GraphEventHandler(FileSystemEventHandler):
         self.webdriver = webdriver
         self.wrap_width = wrap_width
         self.data = data
+        self.comparison = comparison
         self.resolve_due_date_conflict = resolve_due_date_conflict
         if state is None:
             self.state = {
@@ -674,6 +606,8 @@ class GraphEventHandler(FileSystemEventHandler):
             self._last_handled = now
             try:
                 build_kwargs = {}
+                if self.comparison is not None:
+                    build_kwargs["comparison"] = self.comparison
                 if self.resolve_due_date_conflict is not None:
                     build_kwargs["resolve_due_date_conflict"] = (
                         self.resolve_due_date_conflict
@@ -783,10 +717,10 @@ class FlowchartPreviewServer:
                 ):
                     event_handler.state["order_by_date"] = order_by_date
                     event_handler.state["target_task"] = target_task
-                    event_handler.state["filter_completed"] = (
-                        filter_completed
-                    )
+                    event_handler.state["filter_completed"] = filter_completed
                     build_kwargs = {}
+                    if event_handler.comparison is not None:
+                        build_kwargs["comparison"] = event_handler.comparison
                     if event_handler.resolve_due_date_conflict is not None:
                         build_kwargs["resolve_due_date_conflict"] = (
                             event_handler.resolve_due_date_conflict
@@ -809,6 +743,7 @@ class FlowchartPreviewServer:
                     event_handler.state["order_by_date"],
                     event_handler.state["target_task"],
                     event_handler.state["filter_completed"],
+                    event_handler.comparison,
                 )
                 body_bytes = body.encode("utf-8")
                 _send_preview_response(
@@ -855,10 +790,11 @@ class FlowchartPreviewServer:
         "d": "Render nodes by date without showing connections",
         "t": "Task name to focus on (show incomplete ancestor tasks only)",
         "p": "Render the full plan with completed tasks filtered out",
+        "diff_base": "Compare the live plan against a Git revision",
     },
     filename_extensions={"yaml": (".yaml", ".yml")},
 )
-def wgrph(yaml, wrap_width=55, d=False, t=None, p=False):
+def wgrph(yaml, wrap_width=55, d=False, t=None, p=False, diff_base=None):
     # Selenium is only required when actually launching the watcher, so it is
     # imported here to avoid breaking the command-line tools when the optional
     # dependency is not installed.
@@ -875,6 +811,9 @@ def wgrph(yaml, wrap_width=55, d=False, t=None, p=False):
     if not yaml_file.exists():
         raise FileNotFoundError(f"YAML file not found: {yaml_file}")
 
+    comparison = (
+        PlanComparison(yaml_file, diff_base) if diff_base is not None else None
+    )
     dot_file = yaml_file.with_suffix(".dot")
     svg_file = yaml_file.with_suffix(".svg")
 
@@ -897,6 +836,7 @@ def wgrph(yaml, wrap_width=55, d=False, t=None, p=False):
         None,
         initial_state["target_task"],
         resolve_due_date_conflict=_resolve_due_date_conflict_with_qt,
+        **({"comparison": comparison} if comparison is not None else {}),
     )
 
     options = Options()
@@ -913,6 +853,7 @@ def wgrph(yaml, wrap_width=55, d=False, t=None, p=False):
         data,
         initial_state,
         _resolve_due_date_conflict_with_qt,
+        comparison=comparison,
     )
     preview_server = FlowchartPreviewServer(event_handler)
     preview_server.start()
