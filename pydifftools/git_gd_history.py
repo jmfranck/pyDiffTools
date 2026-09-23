@@ -25,6 +25,7 @@ class HistoryCommit:
     tags: list[str] = field(default_factory=list)
     branches: list[str] = field(default_factory=list)
     lane: int = 0
+    author: str = ""
 
     @property
     def label(self):
@@ -39,12 +40,14 @@ def load_history(limit=40):
     data = git_bytes([
         "log", "--all", *([head] if head else []), "--date-order",
         f"--max-count={limit}",
-        "--format=%H%x00%P%x00%cI%x00%s",
+        "--format=%H%x00%P%x00%cI%x00%an%x00%s",
     ]).decode("utf-8", errors="replace")
     commits = []
     for line in data.splitlines():
-        oid, parents, date, subject = line.split("\0", 3)
-        commits.append(HistoryCommit(oid, parents.split(), date, subject))
+        oid, parents, date, author, subject = line.split("\0", 4)
+        commits.append(HistoryCommit(
+            oid, parents.split(), date, subject, author=author,
+        ))
     by_oid = {commit.oid: commit for commit in commits}
     refs = git_bytes([
         "for-each-ref", "--sort=refname",
@@ -207,14 +210,28 @@ class HistoryWindow(QWidget):
             "#397dcc", "#d47824", "#339969", "#a960c0", "#d14c70",
             "#239ca8", "#8b8940",
         )]
+        metadata = []
+        for commit in commits:
+            date = QGraphicsTextItem("\n".join((
+                commit.date[:10], commit.date[11:19], commit.author,
+            )))
+            date.setFont(QFont(self.font().family(), 9))
+            date.document().setDocumentMargin(0)
+            date.setDefaultTextColor(QColor("#748198"))
+            metadata.append(date)
+        row_height = max(
+            48, max(item.boundingRect().height() for item in metadata) + 4,
+        )
+        metadata_width = max(item.boundingRect().width() for item in metadata)
         positions = {
-            commit.oid: (24 + commit.lane * 26, 30 + row * 60)
+            commit.oid: (24 + commit.lane * 26, row_height * (row + 0.5))
             for row, commit in enumerate(commits)
         }
         by_oid = {commit.oid: commit for commit in commits}
         text_x = 52 + max(commit.lane for commit in commits) * 26
-        for commit in commits:
+        for commit, date in zip(commits, metadata):
             x, y = positions[commit.oid]
+            top = y - row_height / 2
             color = colors[commit.lane % len(colors)]
             for number, parent in enumerate(commit.parents):
                 if parent not in positions:
@@ -238,7 +255,7 @@ class HistoryWindow(QWidget):
                 self.scene.addPath(path, QPen(edge_color, 2))
             self.scene.addItem(CommitBubble(commit, self, x, y, color))
             # Each row, including its labels and artwork, is one click target.
-            row = QGraphicsRectItem(0, y - 29, 1000, 59)
+            row = QGraphicsRectItem(0, top, 1000, row_height - 1)
             row.setData(0, commit)
             row.setPen(QPen(Qt.PenStyle.NoPen))
             row.setBrush(QColor("#ffffff"))
@@ -246,15 +263,14 @@ class HistoryWindow(QWidget):
             row.setCursor(Qt.CursorShape.PointingHandCursor)
             row.setToolTip(f"{commit.oid}\n{commit.date}\n{commit.subject}")
             self.scene.addItem(row)
-            date = QGraphicsTextItem(commit.date[:10], row)
-            date.setDefaultTextColor(QColor("#748198"))
-            date.setPos(text_x, y - 20)
+            date.setParentItem(row)
+            date.setPos(text_x, top + 2)
             subject = QGraphicsTextItem(commit.subject, row)
             subject.setFont(QFont(self.font().family(), 11))
             subject.setDefaultTextColor(QColor("#202c40"))
-            subject.setPos(text_x + 110, y - 21)
+            subject.setPos(text_x + metadata_width + 16, top)
             self.text_items.extend([date, subject])
-            badge_x = text_x + 110
+            badge_x = subject.x()
             for kind, names in (("tag", commit.tags),
                                 ("branch", commit.branches)):
                 for name in names:
@@ -263,11 +279,11 @@ class HistoryWindow(QWidget):
                     self.text_items.append(label)
                     label.setFont(QFont(self.font().family(), 9))
                     label.setDefaultTextColor(badge_color)
-                    label.setPos(badge_x + 23, y + 4)
+                    label.setPos(badge_x + 23, top + 23)
                     width = label.boundingRect().width() + 30
                     badge_path = QPainterPath()
                     badge_path.addRoundedRect(
-                        QRectF(badge_x, y + 5, width, 23), 5, 5
+                        QRectF(badge_x, top + 24, width, 23), 5, 5
                     )
                     badge = QGraphicsPathItem(badge_path, row)
                     badge.setBrush(QColor(
@@ -294,13 +310,13 @@ class HistoryWindow(QWidget):
                         for cx, cy in ((4, 2), (4, 15), (12, 2)):
                             icon.addEllipse(QRectF(cx - 2, cy - 2, 4, 4))
                     art = QGraphicsPathItem(icon, row)
-                    art.setPos(badge_x + 5, y + 8)
+                    art.setPos(badge_x + 5, top + 27)
                     art.setPen(QPen(badge_color, 1.4))
                     badge_x += width + 7
-            row.setRect(0, y - 29, max(
+            row.setRect(0, top, max(
                 1000, badge_x + 20,
                 subject.x() + subject.boundingRect().width() + 20,
-            ), 59)
+            ), row_height - 1)
         # }}}
 
     def set_endpoint(self, commit):

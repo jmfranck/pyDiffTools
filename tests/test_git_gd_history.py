@@ -40,6 +40,8 @@ def test_history_merge_lanes_refs_and_old_commits(tmp_path, monkeypatch):
     commits = load_history()
     by_oid = {commit.oid: commit for commit in commits}
     assert old in by_oid
+    assert by_oid[old].date == "2000-01-01T12:00:00+00:00"
+    assert by_oid[old].author == "Test"
     assert by_oid[merge].parents == [main, topic]
     assert by_oid[merge].lane == by_oid[main].lane == by_oid[fork].lane
     assert by_oid[topic].lane != by_oid[merge].lane
