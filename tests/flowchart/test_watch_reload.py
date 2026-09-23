@@ -55,20 +55,21 @@ def test_watch_html_uses_block_embed(tmp_path):
     assert "id='svg-view'" in html
     assert "type='image/svg+xml'" in html
     assert "<a href='/?d=1'>date-ordered</a>" in html
-    assert "<a href='/?p=1'>full plan</a>" in html
+    assert "<a href='/?p=1'>exclude completed</a>" in html
+    assert "<a href='/?p=0'>full plan</a>" in html
 
 
 def test_watch_html_shows_project_overview_link_in_date_mode():
     html = _watch_html("/graph.svg", True)
     assert "<a href='/'>project overview</a>" in html
     assert "<a href='/?d=1&p=1'>exclude completed</a>" in html
-    assert "<a href='/?p=1'>full plan</a>" in html
+    assert "<a href='/?p=0'>full plan</a>" in html
 
 
 def test_watch_html_shows_project_overview_link_in_task_mode():
     html = _watch_html("/graph.svg", False, "task_a")
     assert "<a href='/?d=1'>date-ordered</a>" in html
-    assert "<a href='/?p=1'>full plan</a>" in html
+    assert "<a href='/?p=0'>full plan</a>" in html
     assert "<a href='/'>project overview</a>" in html
 
 

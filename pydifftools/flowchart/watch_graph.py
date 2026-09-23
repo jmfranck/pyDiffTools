@@ -151,10 +151,12 @@ def _watch_html(
     links = []
     if not order_by_date:
         links.append(("/?d=1", "date-ordered"))
+    if not filter_completed and not order_by_date:
+        links.append(("/?p=1", "exclude completed"))
     if order_by_date and not filter_completed:
         links.append(("/?d=1&p=1", "exclude completed"))
     if not filter_completed:
-        links.append(("/?p=1", "full plan"))
+        links.append(("/?p=0", "full plan"))
     if (
         order_by_date
         or filter_completed
