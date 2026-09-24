@@ -327,10 +327,12 @@ def build_graph(
         for index, child in enumerate(list(group)):
             if child.tag != f"{namespace}text" or child.text is None:
                 continue
-            if not child.text.startswith(link_marker):
+            marker_index = child.text.find(link_marker)
+            if marker_index < 0:
                 continue
-            task_name = child.text[len(link_marker) :]
-            child.text = task_name
+            prefix = child.text[:marker_index]
+            task_name = child.text[marker_index + len(link_marker) :]
+            child.text = prefix + task_name
             link = ET.Element(f"{namespace}a")
             link.set(
                 f"{{{xlink_ns}}}href", f"/?t={urllib.parse.quote(task_name)}"

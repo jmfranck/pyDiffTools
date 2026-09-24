@@ -177,14 +177,16 @@ def test_render_rich_changes_and_no_yaml_artifacts(plan):
         55,
         comparison=baseline,
     )
-    assert (
-        "<b>deleted:</b>"
-        in baseline.render(current, 55)["nodes"]["gone"]["_comparison_label"]
-    )
-    assert (
-        "<b>added:</b>"
-        in baseline.render(current, 55)["nodes"]["added"]["_comparison_label"]
-    )
+    deleted_model = baseline.render(current, 55)
+    assert deleted_model["nodes"]["gone"]["_comparison_status"] == "deleted"
+    assert "<b>deleted:</b>" not in deleted_model["nodes"]["gone"][
+        "_comparison_label"
+    ]
+    added_model = baseline.render(current, 55)
+    assert added_model["nodes"]["added"]["_comparison_status"] == "added"
+    assert "<b>added:</b>" not in added_model["nodes"]["added"][
+        "_comparison_label"
+    ]
     saved = yaml.safe_load(plan.read_text())
     assert saved == data
     assert "gone" not in saved["nodes"]
@@ -199,6 +201,19 @@ def test_render_rich_changes_and_no_yaml_artifacts(plan):
     assert "10/02/26" in svg and "10/04/26" in svg
     root = ET.fromstring(svg)
     assert root.tag.endswith("svg")
+    namespace = root.tag[: root.tag.find("}") + 1]
+    old_node = next(
+        group
+        for group in root.iter(f"{namespace}g")
+        if group.find(f"{namespace}title") is not None
+        and group.find(f"{namespace}title").text == "old"
+    )
+    old_title = next(
+        item
+        for item in old_node.iter(f"{namespace}text")
+        if item.text == "old"
+    )
+    assert old_title.get("fill") == "#888888"
 
 
 def test_deleted_navigation_filters_and_date_order(plan):

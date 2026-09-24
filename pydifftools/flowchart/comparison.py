@@ -230,8 +230,9 @@ class PlanComparison:
                 before.get("text", ""), after.get("text", ""), width
             )
             if state in ("added", "removed"):
-                prefix = "added:" if state == "added" else "deleted:"
-                body = f"<b>{prefix}</b><br/>{body}"
+                node["_comparison_status"] = (
+                    "added" if state == "added" else "deleted"
+                )
             if previous is not None and previous != name:
                 body = (
                     f'<font color="#c62828"><s>{html.escape(previous)}</s>'
@@ -327,5 +328,3 @@ class PlanComparison:
                         item.set("fill", "#888888")
                     if state == "removed":
                         item.set("text-decoration", "line-through")
-                    elif state == "changed" and item.text in self.node_states:
-                        item.set("fill", "#16803c")

@@ -477,8 +477,11 @@ def _append_node(
     )
     if "_comparison_label" in node:
         label = "<" + node["_comparison_label"] + ">"
+    status = node.get("_comparison_status")
+    status_prefix = f"<b>{status}:</b> " if status else ""
     task_link_line = (
-        f'<font point-size="9">__WGRPH_TASK_LINK__:{node_name}</font>'
+        f'<font point-size="9">{status_prefix}'
+        f"__WGRPH_TASK_LINK__:{node_name}</font>"
     )
     if label:
         label = "<" + task_link_line + '<br align="left"/>' + label[1:]
