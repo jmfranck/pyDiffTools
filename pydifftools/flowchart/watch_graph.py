@@ -145,8 +145,6 @@ def _watch_html(
     filter_completed=False,
     comparison=None,
 ):
-    # Keep the SVG as the page's main content so browser zoom behavior matches
-    # the original watcher experience (the graph scales, not just footer text).
     # {{{ Build links for the other preview views
     links = []
     diff_query = (
@@ -184,13 +182,37 @@ def _watch_html(
             + comparison.commit[:12]
             + ")"
         )
+    # The graph viewport fills the window above the footer links. Pan/zoom
+    # (wheel, drag, toolbar, box zoom) is handled inside the embedded SVG by
+    # wgrph_view.js, so it never changes the browser zoom level.
     return (
-        "<html><body style='margin:0'>"
-        "<embed id='svg-view' style='display:block;' type='image/svg+xml'"
+        "<html><head><style>"
+        "html,body{height:100%;margin:0;overflow:hidden;}"
+        "body{display:flex;flex-direction:column;}"
+        "#graph-area{position:relative;flex:1 1 auto;min-height:0;}"
+        "#svg-view{display:block;width:100%;height:100%;}"
+        "#wgrph-toolbar{position:absolute;top:6px;right:6px;display:flex;"
+        "gap:2px;}"
+        "#wgrph-toolbar button{font-size:15px;min-width:2em;cursor:pointer;"
+        "background:#f4f4f4;border:1px solid #aaa;border-radius:3px;}"
+        "#wgrph-toolbar button.active{background:#cde;border-color:#468;}"
+        "</style></head><body>"
+        "<div id='graph-area'>"
+        "<embed id='svg-view' type='image/svg+xml'"
         f" src='{svg_url}'/>"
+        "<div id='wgrph-toolbar'>"
+        "<button id='wgrph-home' title='Home: fit whole graph'>&#8962;"
+        "</button>"
+        "<button id='wgrph-zoom-in' title='Zoom in'>+</button>"
+        "<button id='wgrph-zoom-out' title='Zoom out'>&#8722;</button>"
+        "<button id='wgrph-box-zoom' title='Zoom to rectangle (Esc to exit)'>"
+        "&#9633;</button>"
+        "</div></div>"
         "<p style='margin:0.4em 0.8em;font-family:sans-serif;font-size:13px;'>"
         f"{footer_html}"
         "</p>"
+        "<script src='/svg-pan-zoom.min.js'></script>"
+        "<script src='/wgrph_view.js'></script>"
         "</body></html>"
     )
 
@@ -703,6 +725,13 @@ class FlowchartPreviewServer:
                         self,
                         svg_bytes,
                         "image/svg+xml; charset=utf-8",
+                    )
+                    return
+                if parsed.path in ("/svg-pan-zoom.min.js", "/wgrph_view.js"):
+                    _send_preview_response(
+                        self,
+                        (Path(__file__).parent / parsed.path[1:]).read_bytes(),
+                        "text/javascript; charset=utf-8",
                     )
                     return
 

@@ -49,6 +49,10 @@ pydifftools = [
     "comment_tags_no_comments.lua",
     "comment_toggle.js",
 ]
+"pydifftools.flowchart" = [
+    "svg-pan-zoom.min.js",
+    "wgrph_view.js",
+]
 
 [tool.black]
 line-length = 79
