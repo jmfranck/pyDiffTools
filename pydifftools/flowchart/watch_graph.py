@@ -149,20 +149,29 @@ def _watch_html(
     # the original watcher experience (the graph scales, not just footer text).
     # {{{ Build links for the other preview views
     links = []
+    diff_query = (
+        "?diff-base=" + urllib.parse.quote(comparison.reference, safe="")
+        if comparison is not None
+        else ""
+    )
+    if diff_query:
+        separator = "&" if "?" in svg_url else "?"
+        svg_url += separator + diff_query[1:]
+    query_prefix = f"{diff_query}&" if diff_query else "?"
     if not order_by_date:
-        links.append(("/?d=1", "date-ordered"))
+        links.append((f"/{query_prefix}d=1", "date-ordered"))
     if not filter_completed and not order_by_date:
-        links.append(("/?p=1", "exclude completed"))
+        links.append((f"/{query_prefix}p=1", "exclude completed"))
     if order_by_date and not filter_completed:
-        links.append(("/?d=1&p=1", "exclude completed"))
+        links.append((f"/{query_prefix}d=1&p=1", "exclude completed"))
     if not filter_completed:
-        links.append(("/?p=0", "full plan"))
+        links.append((f"/{query_prefix}p=0", "full plan"))
     if (
         order_by_date
         or filter_completed
         or (target_task is not None and str(target_task).strip())
     ):
-        links.append(("/", "project overview"))
+        links.append((f"/{diff_query}", "project overview"))
     footer_html = " | ".join(
         f"<a href='{url}'>{label}</a>" for url, label in links
     )
@@ -762,6 +771,10 @@ class FlowchartPreviewServer:
         port = self.httpd.server_address[1]
         self.base_url = f"http://{self.host}:{port}/"
         self.svg_url = f"http://{self.host}:{port}/graph.svg"
+        if event_handler.comparison is not None:
+            self.svg_url += "?diff-base=" + urllib.parse.quote(
+                event_handler.comparison.reference, safe=""
+            )
         # Start serving immediately so the first browser navigation does not
         # block waiting for the watcher loop to call handle_request.
         self.server_thread = threading.Thread(
@@ -859,22 +872,32 @@ def wgrph(yaml, wrap_width=55, d=False, t=None, p=False, diff_base=None):
     )
     preview_server = FlowchartPreviewServer(event_handler)
     preview_server.start()
-    event_handler.preview_url = preview_server.base_url
     event_handler.svg_url = preview_server.svg_url
+    preview_url = preview_server.base_url
+    if comparison is not None:
+        preview_url += "?diff-base=" + urllib.parse.quote(
+            comparison.reference, safe=""
+        )
+    event_handler.preview_url = preview_url
 
-    driver = start_chrome(webdriver, options, preview_server.base_url)
+    driver = start_chrome(webdriver, options, preview_url)
     event_handler.driver = driver
 
     if t is not None and str(t).strip():
         driver.get(
-            preview_server.base_url
-            + "?t="
+            preview_url
+            + ("&" if "?" in preview_url else "?")
+            + "t="
             + urllib.parse.quote(str(t).strip())
         )
     elif d:
-        driver.get(preview_server.base_url + "?d=1")
+        driver.get(
+            preview_url + ("&" if "?" in preview_url else "?") + "d=1"
+        )
     elif p:
-        driver.get(preview_server.base_url + "?p=1")
+        driver.get(
+            preview_url + ("&" if "?" in preview_url else "?") + "p=1"
+        )
 
     observer = Observer()
     observer.schedule(event_handler, yaml_file.parent, recursive=False)

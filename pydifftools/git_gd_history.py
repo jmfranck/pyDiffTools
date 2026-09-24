@@ -45,6 +45,8 @@ def load_history(limit=40):
     commits = []
     for line in data.splitlines():
         oid, parents, date, author, subject = line.split("\0", 4)
+        if date.endswith("Z"):
+            date = date[:-1] + "+00:00"
         commits.append(HistoryCommit(
             oid, parents.split(), date, subject, author=author,
         ))

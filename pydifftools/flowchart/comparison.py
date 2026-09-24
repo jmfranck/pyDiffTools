@@ -229,6 +229,9 @@ class PlanComparison:
             body = self.label(
                 before.get("text", ""), after.get("text", ""), width
             )
+            if state in ("added", "removed"):
+                prefix = "added:" if state == "added" else "deleted:"
+                body = f"<b>{prefix}</b><br/>{body}"
             if previous is not None and previous != name:
                 body = (
                     f'<font color="#c62828"><s>{html.escape(previous)}</s>'

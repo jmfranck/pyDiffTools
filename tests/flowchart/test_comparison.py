@@ -88,6 +88,12 @@ def test_cli_and_git_references(plan):
     assert baseline.commit[:12] in _watch_html(
         "/graph.svg", False, comparison=baseline
     )
+    diff_html = _watch_html(
+        "/graph.svg", False, comparison=baseline
+    )
+    assert "src='/graph.svg?diff-base=%40'" in diff_html
+    assert "href='/?diff-base=%40&d=1'" in diff_html
+    assert "href='/?diff-base=%40&p=1'" in diff_html
     with pytest.raises(ValueError, match="Cannot compare"):
         PlanComparison(plan, "not-a-revision")
     assert PlanComparison(plan.parent / "new.yaml", "HEAD").data == {
@@ -170,6 +176,14 @@ def test_render_rich_changes_and_no_yaml_artifacts(plan):
         plan.with_suffix(".svg"),
         55,
         comparison=baseline,
+    )
+    assert (
+        "<b>deleted:</b>"
+        in baseline.render(current, 55)["nodes"]["gone"]["_comparison_label"]
+    )
+    assert (
+        "<b>added:</b>"
+        in baseline.render(current, 55)["nodes"]["added"]["_comparison_label"]
     )
     saved = yaml.safe_load(plan.read_text())
     assert saved == data
