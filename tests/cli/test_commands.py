@@ -505,6 +505,80 @@ def test_outline_rejects_duplicate_sections(tmp_path, monkeypatch):
         outline.xore("paper.md")
 
 
+TSO4_OLD = "FIG: TSO4 isooctane T-cycle, w₀3 vs w₀20 [move earlier]"
+TSO4_NEW = (
+    "FIG: TSO4 isooctane T-cycle, w₀3 vs w₀20 [merge → T-cycle overview]"
+)
+CAT16_OLD = "FIG: CAT-16 T-cycle + shed-vs-w₀ series"
+CAT16_NEW = "FIG: CAT-16 T-cycle + shed-vs-w₀ series (revised)"
+
+
+def _write_rename_paper(tmp_path):
+    target = tmp_path / "paper.md"
+    target.write_text(
+        "# Intro\nintro text\n\n"
+        "# Methods\nmethods text\n\n"
+        f"## {TSO4_OLD}\ntso4 text\n\n"
+        f"## {CAT16_OLD}\ncat16 text\n\n"
+        "# Conclusion\nconclusion text\n"
+    )
+    outline.xo("paper.md")
+    return target
+
+
+def test_outline_rename_detection(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    target = _write_rename_paper(tmp_path)
+    (tmp_path / "paper_outline.md").write_text(
+        "*\tIntro\n"
+        "*\tConclusion\n"
+        "*\tMaterials and Methods\n"
+        "*\tOutlook\n"
+        "*\tNEW: Side note\n"
+        f"\t*\t{TSO4_NEW}\n"
+        f"\t*\t{CAT16_NEW}\n"
+        "*\tAppendix\n"
+    )
+    answers = ["1", "n", "1", "1"]
+    prompts = []
+
+    def fake_input(prompt):
+        prompts.append(prompt)
+        return answers.pop(0)
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    outline.xore("paper.md")
+    assert answers == []
+    # the regression case: the true original must rank first, even though
+    # the CAT-16 figure is also a rename candidate
+    assert TSO4_NEW in prompts[2]
+    assert f"1) [82] {TSO4_OLD}" in prompts[2]
+    assert target.read_text() == (
+        "# Intro\nintro text\n\n"
+        "# Conclusion\nconclusion text\n"
+        "# Materials and Methods\nmethods text\n\n"
+        "# Outlook\n"
+        "# NEW: Side note\n"
+        f"## {TSO4_NEW}\ntso4 text\n\n"
+        f"## {CAT16_NEW}\ncat16 text\n\n"
+        "# Appendix\n"
+    )
+
+
+def test_outline_rename_abort(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    target = _write_rename_paper(tmp_path)
+    original = target.read_text()
+    (tmp_path / "paper_outline.md").write_text(
+        "*\tIntro\n*\tMaterials and Methods\n"
+        f"\t*\t{TSO4_OLD}\n\t*\t{CAT16_OLD}\n*\tConclusion\n"
+    )
+    monkeypatch.setattr("builtins.input", lambda prompt: "q")
+    with pytest.raises(ValueError, match="aborted"):
+        outline.xore("paper.md")
+    assert target.read_text() == original
+
+
 def test_outline_rejects_unknown_extension(tmp_path):
     target = tmp_path / "notes.txt"
     target.write_text("hello\n")

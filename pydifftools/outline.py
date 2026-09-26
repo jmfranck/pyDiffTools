@@ -171,8 +171,8 @@ def xore(filename):
         all_contents = pickle.load(fp)
     all_contents.set_format(format_type)
     with open(markdownfile, "r", encoding="utf-8") as fp:
-        for thisline in fp:
-            all_contents.outline_in_order(thisline.rstrip())
+        outline_lines = [j.rstrip() for j in fp]
+    all_contents.outline_in_order(outline_lines)
     # build the text before opening the target, so that an error (e.g. a
     # section missing from the outline) doesn't leave an empty file
     reordered = str(all_contents)

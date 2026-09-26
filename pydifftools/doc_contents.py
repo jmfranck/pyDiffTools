@@ -1,5 +1,6 @@
 from collections import OrderedDict
-from fuzzywuzzy import process
+import re
+from fuzzywuzzy import fuzz
 
 
 class doc_contents_class(object):
@@ -8,7 +9,6 @@ class doc_contents_class(object):
         self.contents["header"] = ""
         self.types = {}
         self.types["header"] = "header"
-        self._reordering_started = False
         self._aliases = {}
         self._processed_titles = []
         self.set_format(format_type)
@@ -52,7 +52,6 @@ class doc_contents_class(object):
         self.contents = d["contents"]
         self.types = d["types"]
         self._aliases = {}  # doesn't exist, but still needed
-        self._reordering_started = False
         self._processed_titles = []
         if "format_type" in d:
             self.set_format(d["format_type"])
@@ -107,56 +106,101 @@ class doc_contents_class(object):
                 indent = (self.level_numbers[self.types[j]] - 1) * "\t"
                 thistitle = (indent + "\t").join(j.split("\n"))
                 retval.append(indent + "*\t" + thistitle)
-        self._reordering_started = False
         return "\n".join(retval)
 
-    def outline_in_order(self, thisline):
-        if not self._reordering_started:
-            self._processed_titles = [
-                j for j in self.contents.keys() if self.types[j] != "header"
-            ]
-            self._reordering_started = True
-        ilevel = 0
-        spacelevel = 0
-        hitmarker = False
-        for j, thischar in enumerate(thisline):
+    def outline_in_order(self, outline_lines):
+        self._processed_titles = [
+            j for j in self.contents.keys() if self.types[j] != "header"
+        ]
+        # {{{ parse (level, title) from each outline line
+        parsed = []
+        for thisline in outline_lines:
+            if not thisline.strip():
+                continue
+            ilevel = 0
+            spacelevel = 0
+            hitmarker = False
+            for j, thischar in enumerate(thisline):
+                if not hitmarker:
+                    if thischar == " ":
+                        spacelevel += 1
+                    if spacelevel == 4 or thischar == "\t":
+                        ilevel += 1
+                        spacelevel = 0
+                    elif thischar == "*":
+                        hitmarker = True
+                else:
+                    assert thischar in [" ", "\t"]
+                    title = thisline[j + 1 :]
+                    break
             if not hitmarker:
-                if thischar == " ":
-                    spacelevel += 1
-                if spacelevel == 4 or thischar == "\t":
-                    ilevel += 1
-                    spacelevel = 0
-                elif thischar == "*":
-                    hitmarker = True
+                raise ValueError("somehow, there wasn't a * marker!")
+            parsed.append((ilevel, title))
+        # }}}
+        # {{{ resolve titles that aren't existing sections -- only sections
+        #     that appear nowhere in the outline can have been renamed
+        outline_titles = {title for _, title in parsed}
+        orphans = [
+            j
+            for j in self.contents.keys()
+            if self.types[j] != "header" and j not in outline_titles
+        ]
+        renamed = {}
+        for _, title in parsed:
+            if title in self.contents.keys() or title in renamed:
+                continue
+            if re.search(r"\bNEW\b", title):
+                print(f"adding\n\t{title}\nas a new section (labeled NEW)")
+            elif len(orphans) == 0:
+                print(
+                    f"adding\n\t{title}\nas a new section (no unplaced"
+                    " sections are left that it could be a rename of)"
+                )
             else:
-                assert thischar in [" ", "\t"]
-                title = thisline[j + 1 :]
-                break
-        if not hitmarker:
-            raise ValueError("somehow, there wasn't a * marker!")
-        if title not in self.contents.keys():
-            best_match, match_quality = process.extractOne(
-                title, self.contents.keys()
-            )
-            yesorno = input(
-                f"didn't find\n\t{title}\namong the existing sections."
-                f"  Is it a renamed version of\n\t{best_match}\n?"
-                " say y to rename, or n to add it as a new, empty section: "
-            )
-            if yesorno == "y":
-                self._aliases[best_match] = title  # will be replaced later
-                title = best_match
-            elif yesorno == "n":
-                # a new section, so it isn't on the list of titles to place
-                self.contents[title] = ""
-                self._processed_titles.append(title)
-            else:
-                raise ValueError("expected y or n")
-        if title not in self._processed_titles:
-            raise ValueError(
-                f"the section\n\t{title}\nappears more than once in the"
-                " outline"
-            )
-        self.contents.move_to_end(title)
-        self._processed_titles.remove(title)
-        self.types[title] = self.inv_prefix[ilevel * "\t"]
+                ranked = sorted(
+                    orphans,
+                    key=lambda j: fuzz.token_sort_ratio(title, j),
+                    reverse=True,
+                )[:5]
+                choices = "".join(
+                    f"\n  {n + 1}) [{fuzz.token_sort_ratio(title, j)}] {j}"
+                    for n, j in enumerate(ranked)
+                )
+                prompt = (
+                    f"didn't find\n\t{title}\namong the existing sections."
+                    " Is it a renamed version of one of these sections that"
+                    f" don't appear in the outline?{choices}\nenter a number"
+                    " to rename, n to add it as a new, empty section, or q"
+                    " to quit without writing anything: "
+                )
+                while True:
+                    answer = input(prompt).strip()
+                    if answer in ("n", "q"):
+                        break
+                    if answer.isdigit() and 1 <= int(answer) <= len(ranked):
+                        break
+                    print(f"didn't understand {answer!r}")
+                if answer == "q":
+                    raise ValueError("aborted -- nothing was written")
+                if answer != "n":
+                    original = ranked[int(answer) - 1]
+                    self._aliases[original] = title  # will be replaced later
+                    renamed[title] = original
+                    orphans.remove(original)
+                    continue
+            # a new section, so it isn't on the list of titles to place
+            self.contents[title] = ""
+            self._processed_titles.append(title)
+        # }}}
+        # {{{ reorder sections to match the outline
+        for ilevel, title in parsed:
+            title = renamed.get(title, title)
+            if title not in self._processed_titles:
+                raise ValueError(
+                    f"the section\n\t{title}\nappears more than once in the"
+                    " outline"
+                )
+            self.contents.move_to_end(title)
+            self._processed_titles.remove(title)
+            self.types[title] = self.inv_prefix[ilevel * "\t"]
+        # }}}
