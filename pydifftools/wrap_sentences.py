@@ -826,62 +826,13 @@ def wr(filename, wrapnumber=45, punctuation_slop=20, cleanoo=False, i=-1):
             fp.write(result)
 
 
-def _check_fragment(
-    fragment, frag_start, wrapnumber, punctuation_slop, base_line, stripped
-):
-    """Report line-length violations within one wrap unit (a sentence, or a
-    piece of one split off around a LaTeX structural macro).
-
-    Replays wr's own greedy word-fitting choice (_next_break) but always
-    resumes from the *real* line break already present in the source
-    (never from wr's own suggested break), so a shorter user break, or a
-    word nudged onto the next line, is never flagged -- only a line that
-    holds more words than wr's choice would allow is.
-    """
-    words, positions = [], []
-    for match in re.finditer(r"\S+", fragment):
-        words.append(match.group())
-        positions.append(frag_start + match.start())
-    if not words:
-        return []
-    ends = positions[1:] + [frag_start + len(fragment)]
-    breaks_after = [
-        "\n" in stripped[positions[j] + len(words[j]) : ends[j]]
-        for j in range(len(words))
-    ]
-    boundaries = _math_boundaries(words)
-    issues = []
-    offset = 0
-    while offset < len(words):
-        upto = _next_break(
-            words[offset:], wrapnumber, punctuation_slop, boundaries, offset
-        )
-        wr_end = offset + upto
-        actual_end = offset
-        while actual_end < len(words) - 1 and not breaks_after[actual_end]:
-            actual_end += 1
-        if actual_end > wr_end:
-            overflow = words[wr_end + 1]
-            line = base_line + stripped.count("\n", 0, positions[actual_end])
-            issues.append(
-                (
-                    line,
-                    f"line too long: wr would break after '{words[wr_end]}' "
-                    f"(before '{overflow}'); move '{overflow}' onward to "
-                    "the next line, or shorten this sentence",
-                )
-            )
-        offset = actual_end + 1
-    return issues
-
-
 def check_prose(content, wrapnumber, punctuation_slop, line_start=1):
     """Report source lines in `content` that break wr's rules.
 
     Two checks, mirroring wrap_prose's own paragraph/sentence/macro
     splitting so the two commands never disagree about what counts as a
     sentence: lines must not hold more words than wr's own greedy choice
-    would put there (see _check_fragment), and a sentence must not end
+    would put there (see the fragment check below), and a sentence must not end
     in the middle of a source line. A sentence-ending period followed by
     a backslash-space (`\\ `) rather than a plain space -- the standard
     LaTeX/Pandoc way to mark an abbreviation -- is never mistaken for a
@@ -912,16 +863,54 @@ def check_prose(content, wrapnumber, punctuation_slop, line_start=1):
             frag_offset = sentence_start
             for fragment in LATEX_MACRO_SPLIT.split(sentence):
                 if fragment:
-                    issues.extend(
-                        _check_fragment(
-                            fragment,
-                            frag_offset,
-                            wrapnumber,
-                            punctuation_slop,
-                            para_line,
-                            stripped,
-                        )
-                    )
+                    # {{{ check line lengths within this sentence fragment
+                    words, positions = [], []
+                    for match in re.finditer(r"\S+", fragment):
+                        words.append(match.group())
+                        positions.append(frag_offset + match.start())
+                    if words:
+                        ends = positions[1:] + [frag_offset + len(fragment)]
+                        breaks_after = [
+                            "\n"
+                            in stripped[
+                                positions[j] + len(words[j]) : ends[j]
+                            ]
+                            for j in range(len(words))
+                        ]
+                        boundaries = _math_boundaries(words)
+                        fragment_offset = 0
+                        while fragment_offset < len(words):
+                            upto = _next_break(
+                                words[fragment_offset:],
+                                wrapnumber,
+                                punctuation_slop,
+                                boundaries,
+                                fragment_offset,
+                            )
+                            wr_end = fragment_offset + upto
+                            actual_end = fragment_offset
+                            while (
+                                actual_end < len(words) - 1
+                                and not breaks_after[actual_end]
+                            ):
+                                actual_end += 1
+                            if actual_end > wr_end:
+                                overflow = words[wr_end + 1]
+                                issue_line = para_line + stripped.count(
+                                    "\n", 0, positions[actual_end]
+                                )
+                                issues.append(
+                                    (
+                                        issue_line,
+                                        "line too long: wr would break after "
+                                        f"'{words[wr_end]}' (before "
+                                        f"'{overflow}'); move '{overflow}' "
+                                        "onward to the next line, or shorten "
+                                        "this sentence",
+                                    )
+                                )
+                            fragment_offset = actual_end + 1
+                    # }}}
                 frag_offset += len(fragment)
             offset += len(sentence)
             if k < len(separators):
@@ -986,6 +975,19 @@ def _iter_block_spans(blocks, wrapnumber, line_start=1):
         line += span
 
 
+def markdown_lint_issues_from_text(
+    content, wrapnumber=45, punctuation_slop=20
+):
+    """Return lint issues for Markdown text using wrchk's existing rules."""
+    return [
+        issue
+        for line, width, span in _iter_block_spans(
+            markdown_blocks(content), wrapnumber
+        )
+        for issue in check_prose(span, width, punctuation_slop, line)
+    ]
+
+
 @register_command(
     "check wrapping and sentence-break rules (for markdown or latex).",
     "check that a file already obeys wr's wrapping rules -- without\n"
@@ -1005,17 +1007,19 @@ def _iter_block_spans(blocks, wrapnumber, line_start=1):
 def wrchk(filename, wrapnumber=45, punctuation_slop=20, cleanoo=False, i=-1):
     alltext, filetype, _, display_name = _prepare(filename, cleanoo, i)
     if filetype == "markdown":
-        spans = _iter_block_spans(markdown_blocks(alltext), wrapnumber)
+        issues = markdown_lint_issues_from_text(
+            alltext, wrapnumber, punctuation_slop
+        )
     else:
         spans = (
             (line, wrapnumber, content)
             for line, content in _iter_classified_spans(alltext, filetype)
         )
-    issues = [
-        issue
-        for line, width, content in spans
-        for issue in check_prose(content, width, punctuation_slop, line)
-    ]
+        issues = [
+            issue
+            for line, width, content in spans
+            for issue in check_prose(content, width, punctuation_slop, line)
+        ]
     for line, message in issues:
         print(f"{display_name}:{line}: {message}")
     if issues:

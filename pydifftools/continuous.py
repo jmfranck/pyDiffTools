@@ -1,5 +1,6 @@
 """Continuous Pandoc build utility that requires geckodriver."""
 
+import json
 import time
 import subprocess
 import sys
@@ -10,10 +11,10 @@ import shutil
 import threading
 import queue
 import traceback
-import json
 import tempfile
 from pathlib import Path
 import yaml
+import textwrap
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
@@ -61,70 +62,6 @@ def _comment_filter_mode(path, packaged_filters=None):
     return "custom"
 
 
-def _confirm_restore_comment_filter(active_mode):
-    if active_mode == "none":
-        message = (
-            "The current lua filter is the one that does not show comments, "
-            "but you ran without the --no-comments flag.\n\n"
-            "Note that you have not locally edited the filter relative to "
-            "the library default.\n\n"
-            "Do you want to show comments, or continue with no comments?"
-        )
-        default_choice = "restore"
-    elif active_mode == "custom":
-        message = (
-            "The current lua filter does not match the pyDiffTools library "
-            "default or the no-comments filter, but you ran without the "
-            "--no-comments flag.\n\n"
-            "Note that this looks like a locally edited filter.\n\n"
-            "Do you want to show comments using the library default, or "
-            "continue with no comments?"
-        )
-        default_choice = "keep"
-    else:
-        raise ValueError(
-            "Comment filter restore prompt is only valid for custom or "
-            f"no-comments filters, not {active_mode!r}"
-        )
-    prompt_script = """
-import sys
-from PySide6.QtWidgets import QApplication, QMessageBox
-
-app = QApplication(sys.argv[:1])
-box = QMessageBox()
-box.setWindowTitle("pydifft cpb")
-box.setIcon(QMessageBox.Icon.Question)
-box.setText(sys.argv[1])
-keep_button = box.addButton(
-    "no comments", QMessageBox.ButtonRole.RejectRole
-)
-restore_button = box.addButton(
-    "show comments", QMessageBox.ButtonRole.AcceptRole
-)
-if sys.argv[2] == "restore":
-    box.setDefaultButton(restore_button)
-else:
-    box.setDefaultButton(keep_button)
-box.exec()
-if box.clickedButton() is restore_button:
-    sys.exit(0)
-sys.exit(1)
-"""
-    result = subprocess.run(
-        [sys.executable, "-c", prompt_script, message, default_choice],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode == 0:
-        return True
-    if result.returncode == 1:
-        return False
-    stderr = result.stderr.strip()
-    if stderr:
-        raise RuntimeError(f"pydifft cpb filter dialog failed: {stderr}")
-    raise RuntimeError("pydifft cpb filter dialog failed.")
-
-
 def run_pandoc(
     filename,
     html_file,
@@ -132,6 +69,120 @@ def run_pandoc(
     no_comments=False,
     comment_filter_session=None,
 ):
+    # {{{ review Markdown lint issues in a Qt walkthrough
+    def show_markdown_lint(filename, issues):
+        """Walk through cpb's Markdown style issues in a Qt window."""
+        dialog_script = r"""
+    import html
+    import json
+    import sys
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import (
+        QApplication,
+        QDialog,
+        QLabel,
+        QPushButton,
+        QVBoxLayout,
+    )
+
+    filename = sys.argv[1]
+    issues = json.loads(sys.argv[2])
+    app = QApplication(sys.argv[:1])
+    dialog = QDialog()
+    dialog.setWindowTitle("pydifft cpb — Markdown style")
+    dialog.resize(620, 260)
+    layout = QVBoxLayout(dialog)
+    heading = QLabel()
+    heading.setTextFormat(Qt.TextFormat.RichText)
+    details = QLabel()
+    details.setTextFormat(Qt.TextFormat.RichText)
+    details.setWordWrap(True)
+    fix = QLabel()
+    fix.setTextFormat(Qt.TextFormat.RichText)
+    fix.setWordWrap(True)
+    layout.addWidget(heading)
+    layout.addWidget(details)
+    layout.addWidget(fix)
+    button = QPushButton("Next")
+    layout.addWidget(button)
+    index = 0
+
+    def show_issue():
+        global index
+        if index >= len(issues):
+            heading.setText("<b>All listed issues reviewed.</b>")
+            details.setText(
+                "Edit the source if needed, then continue to check it again."
+            )
+            fix.setText("")
+            button.setText("Check again")
+            return
+        line, message = issues[index]
+        heading.setText(
+            f"<b>{html.escape(filename)}:{line}</b> — issue "
+            f"{index + 1} of {len(issues)}"
+        )
+        details.setText(html.escape(message))
+        if message.startswith("sentence ends mid-line"):
+            fix.setText(
+                "Fix: end the sentence on this line, then continue the next "
+                "sentence on a new source line.<br>"
+                "<span style='color:green'>↳ Enter</span> "
+                "<span style='color:green'><i>soft return: this newline "
+                "appears only in the source.</i></span>"
+            )
+        else:
+            fix.setText(
+                "Fix: add a source newline within the sentence so the prose "
+                "wraps at 55 characters or fewer.<br>"
+                "<span style='color:green'>↳ Enter</span> "
+                "<span style='color:green'><i>soft return: this newline "
+                "appears only in the source.</i></span>"
+            )
+
+    def advance():
+        global index
+        index += 1
+        show_issue()
+
+    button.clicked.connect(advance)
+    show_issue()
+    dialog.exec()
+    """
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                textwrap.dedent(dialog_script),
+                filename,
+                json.dumps(issues),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip()
+            if detail:
+                raise RuntimeError(
+                    f"cpb Markdown lint dialog failed: {detail}"
+                )
+            raise RuntimeError("cpb Markdown lint dialog failed.")
+    # }}}
+    # Keep cpb's build gate tied to wrchk's Markdown rules. Recheck after each
+    # walkthrough because users can edit the source in their editor while the
+    # Qt window is open.
+    from .wrap_sentences import markdown_lint_issues_from_text
+
+    while True:
+        with open(filename, encoding="utf-8") as fp:
+            markdown_text = fp.read()
+        issues = markdown_lint_issues_from_text(
+            markdown_text, wrapnumber=55
+        )
+        if not issues:
+            break
+        show_markdown_lint(filename, issues)
+
     if comments_to_margin:
         comment_filter_mode = "margin"
     elif no_comments:
@@ -198,9 +249,81 @@ def run_pandoc(
                 ):
                     show_comments = comment_filter_session["show_comments"]
                 else:
-                    show_comments = _confirm_restore_comment_filter(
-                        active_mode
+                    # {{{ ask whether to restore comments after detecting a
+                    # locally changed comment filter
+                    if active_mode == "none":
+                        message = (
+                            "The current lua filter is the one that does "
+                            "not show comments, but you ran without the "
+                            "--no-comments flag.\n\n"
+                            "Note that you have not locally edited the "
+                            "filter relative to the library default.\n\n"
+                            "Do you want to show comments, or continue "
+                            "with no comments?"
+                        )
+                        default_choice = "restore"
+                    else:
+                        message = (
+                            "The current lua filter does not match the "
+                            "pyDiffTools library default or the "
+                            "no-comments filter, but you ran without the "
+                            "--no-comments flag.\n\n"
+                            "Note that this looks like a locally edited "
+                            "filter.\n\n"
+                            "Do you want to show comments using the "
+                            "library default, or continue with no comments?"
+                        )
+                        default_choice = "keep"
+                    prompt_script = """
+import sys
+from PySide6.QtWidgets import QApplication, QMessageBox
+
+app = QApplication(sys.argv[:1])
+box = QMessageBox()
+box.setWindowTitle("pydifft cpb")
+box.setIcon(QMessageBox.Icon.Question)
+box.setText(sys.argv[1])
+keep_button = box.addButton(
+    "no comments", QMessageBox.ButtonRole.RejectRole
+)
+restore_button = box.addButton(
+    "show comments", QMessageBox.ButtonRole.AcceptRole
+)
+if sys.argv[2] == "restore":
+    box.setDefaultButton(restore_button)
+else:
+    box.setDefaultButton(keep_button)
+box.exec()
+if box.clickedButton() is restore_button:
+    sys.exit(0)
+sys.exit(1)
+"""
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            "-c",
+                            prompt_script,
+                            message,
+                            default_choice,
+                        ],
+                        capture_output=True,
+                        text=True,
                     )
+                    if result.returncode == 0:
+                        show_comments = True
+                    elif result.returncode == 1:
+                        show_comments = False
+                    else:
+                        stderr = result.stderr.strip()
+                        if stderr:
+                            raise RuntimeError(
+                                "pydifft cpb filter dialog failed: "
+                                f"{stderr}"
+                            )
+                        raise RuntimeError(
+                            "pydifft cpb filter dialog failed."
+                        )
+                    # }}}
                     if comment_filter_session is not None:
                         comment_filter_session["show_comments"] = (
                             show_comments
