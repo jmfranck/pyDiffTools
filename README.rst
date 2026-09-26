@@ -41,6 +41,47 @@ included are (listed in order of fun/utility):
   (currently tested on windows with *version 3.5* of the former,
   *not the latest installer*,
   since crossref isn't built with the most recent version).
+
+  When Pandoc reports missing citations, ``cpb`` retrieves their BibTeX
+  entries from the running local Zotero application, updates the active
+  bibliography, and rebuilds once. Install and enable
+  `Better BibTeX <https://retorque.re/zotero-better-bibtex/installation/>`_
+  in Zotero. No API key or Python dependency is needed. The integration uses
+  Better BibTeX's documented
+  `local JSON-RPC API <https://retorque.re/zotero-better-bibtex/exporting/json-rpc/>`_
+  at ``127.0.0.1:23119`` and searches the default personal library.
+  Zotero supports Windows, macOS, and Linux; this integration uses portable
+  Python file operations and Qt dialogs. Its automated runtime checks have
+  been performed on Linux, not on Windows.
+
+  Declare a single local ``.bib`` file with ``bibliography: references.bib``
+  in the Markdown YAML header; relative paths are resolved beside the
+  Markdown file. Without that declaration, ``cpb`` uses a single adjacent
+  ``.bib`` file. Multiple or unsupported bibliographies are rendered normally
+  but are not automatically edited. Missing keys, unavailable Zotero, and
+  failed updates produce warnings; rendering continues. If Zotero or Better
+  BibTeX is unavailable at startup, an informational Qt window explains the
+  feature without blocking the preview.
+
+  Before importing a possible duplicate, a Qt dialog offers keeping the
+  existing entry, keeping the Zotero entry, or merging selected fields.
+  Matching uses DOI, book ISBN/edition, or a similar title with the same
+  first author and year. Conflicting DOIs are not treated as duplicates.
+  This follows the identifier and field comparison approach used by
+  `JabRef <https://docs.jabref.org/finding-sorting-and-cleaning-entries/mergeentries>`_.
+  The merge defaults to existing values and the existing key, filling absent
+  fields from Zotero. You can also keep both entries or skip an import.
+  After resolving a duplicate, ``@UNCHOSEN`` becomes ``@CHOSEN`` in the active
+  Markdown document. Code, links, ordinary text, and other documents are not
+  rewritten. Untouched bibliography entries retain their original text.
+  Edits made while a lookup or dialog is in progress abort the update.
+
+  Tests use recorded Zotero responses and real Pandoc. For the optional local
+  smoke tests, run ``PYDIFFTOOLS_ZOTERO_LIVE=1 python -m pytest -q
+  tests/test_zotero.py``. This additionally checks the live Hoult export and
+  builds a temporary copy of ``~/notebook/papers/eigenmode``, verifying that
+  the original files are unchanged. The ordinary suite requires neither
+  Zotero nor this notebook directory.
 - `pydifft wgrph <graph.yaml>` watches a YAML flowchart description,
   rebuilds the DOT/SVG output using GraphViz, and keeps a browser window
   refreshed as you edit the file.  This wraps the former

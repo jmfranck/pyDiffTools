@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import subprocess
 import sys
@@ -8,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 from pydifftools import continuous, outline
-from pydifftools.continuous import run_pandoc
+from pydifftools.continuous import run_pandoc, _confirm_restore_comment_filter
 from pydifftools.command_line import mfs
 from pydifftools.command_registry import _COMMAND_SPECS
 from pydifftools.forward_search import ForwardSearchUnavailable
@@ -1183,6 +1184,87 @@ def test_run_pandoc_allows_missing_bibliography_and_csl(
     command = captured_command["value"]
     assert "--bibliography" not in command
     assert not any(token.startswith("--csl=") for token in command)
+
+
+def test_run_pandoc_recovers_only_citeproc_keys_and_rebuilds_once(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "content.md"
+    source.write_text("[@missing]\n")
+    bib = tmp_path / "library.bib"
+    bib.write_text("% existing bibliography\n")
+    html = tmp_path / "content.html"
+    commands = []
+    recoveries = []
+
+    def fake_run(command):
+        commands.append(command[:])
+        html.write_text("<html><head></head><body>ok</body></html>")
+        diagnostic = Path(command[command.index("--log") + 1])
+        diagnostic.write_text(
+            json.dumps(
+                [
+                    {
+                        "type": "CiteprocWarning",
+                        "message": "citation missing not found",
+                    },
+                    {
+                        "type": "CiteprocWarning",
+                        "message": "citation missing not found",
+                    },
+                    {
+                        "type": "OtherWarning",
+                        "message": "citation unrelated not found",
+                    },
+                ]
+            )
+        )
+        return subprocess.CompletedProcess(command, 0)
+
+    def recover(path, keys, **kwargs):
+        recoveries.append((path, keys, kwargs["source"]))
+        return keys
+
+    monkeypatch.setattr(continuous.subprocess, "run", fake_run)
+    monkeypatch.setattr(continuous, "recover_bibliography", recover)
+    monkeypatch.setattr(continuous.shutil, "which", lambda _name: "tool")
+    run_pandoc(str(source), str(html))
+    assert len(commands) == 2
+    assert commands[0] == commands[1]
+    assert recoveries == [(str(bib), ["missing"], str(source))]
+
+
+def test_run_pandoc_does_not_recover_after_render_failure(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "content.md"
+    source.write_text("[@missing]\n")
+    recoveries = []
+    monkeypatch.setattr(
+        continuous,
+        "recover_bibliography",
+        lambda *_a, **_k: recoveries.append(True),
+    )
+    monkeypatch.setattr(
+        continuous.subprocess,
+        "run",
+        lambda command: subprocess.CompletedProcess(command, 1),
+    )
+    monkeypatch.setattr(continuous.shutil, "which", lambda _name: "tool")
+    with pytest.raises(RuntimeError, match="Pandoc failed"):
+        run_pandoc(str(source), str(tmp_path / "content.html"))
+    assert recoveries == []
+
+
+@pytest.mark.parametrize("status,expected", [(0, True), (1, False)])
+def test_comment_dialog_returns_user_selection(monkeypatch, status, expected):
+    # Both cpb dialogs use an isolated Qt process; preserve the existing
+    # comment-filter dialog's interpretation of its subprocess result.
+    monkeypatch.setattr(
+        continuous.subprocess, "run",
+        lambda *_a, **_k: subprocess.CompletedProcess([], status, "", ""),
+    )
+    assert _confirm_restore_comment_filter("custom") is expected
 
 
 def test_run_pandoc_orders_scholarly_metadata_before_author_blocks(

@@ -10,10 +10,15 @@ import shutil
 import threading
 import queue
 import traceback
+import json
+import tempfile
+from pathlib import Path
+import yaml
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 from .command_registry import register_command
+from .zotero import recover_bibliography, zotero_notice
 from .browser_lifecycle import (
     browser_window_is_alive,
     close_browser_window,
@@ -262,14 +267,51 @@ def run_pandoc(
                         os.path.join(package_dir, asset_name),
                         target_path,
                     )
+    # {{{ select the declared bibliography before adjacent-file discovery
+    bibliography_declared = False
+    bibliography_paths = []
+    front_matter = re.match(
+        r"\A\ufeff?---[^\S\n]*\n(.*?)\n(?:---|\.\.\.)[^\S\n]*(?:\n|$)",
+        markdown_text,
+        flags=re.DOTALL,
+    )
+    if front_matter:
+        try:
+            metadata = yaml.safe_load(front_matter[1])
+        except yaml.YAMLError:
+            metadata = None  # Pandoc will report invalid document metadata.
+        if isinstance(metadata, dict) and "bibliography" in metadata:
+            bibliography_declared = True
+            declared = metadata["bibliography"]
+            if isinstance(declared, str):
+                declared = [declared]
+            if isinstance(declared, list) and all(
+                isinstance(value, str) and value for value in declared
+            ):
+                bibliography_paths = [
+                    value if "://" in value
+                    else os.path.abspath(os.path.join(source_dir, value))
+                    for value in declared
+                ]
+    # }}}
     localfiles = {}
     for k in ["csl", "bib"]:
+        if k == "bib" and bibliography_declared:
+            localfiles[k] = None
+            continue
         localfiles[k] = [
             f for f in os.listdir(source_dir) if f.endswith("." + k)
         ]
         if len(localfiles[k]) == 1:
             localfiles[k] = os.path.join(source_dir, localfiles[k][0])
         elif len(localfiles[k]) == 0:
+            localfiles[k] = None
+        elif k == "bib":
+            print(
+                "cpb: multiple adjacent .bib files; declare a bibliography "
+                "in the Markdown metadata to enable citation recovery.",
+                file=sys.stderr,
+            )
             localfiles[k] = None
         else:
             raise ValueError(
@@ -309,26 +351,72 @@ def run_pandoc(
         html_file,
         filename,
     ]
-    if localfiles["bib"]:
-        command[1:1] = ["--bibliography", localfiles["bib"]]
+    if not bibliography_declared and localfiles["bib"]:
+        bibliography_paths = [localfiles["bib"]]
+    for bibliography_path in bibliography_paths:
+        command[1:1] = ["--bibliography", bibliography_path]
+    recovery_bibliography = (
+        bibliography_paths[0]
+        if len(bibliography_paths) == 1
+        and "://" not in bibliography_paths[0]
+        else None
+    )
     if localfiles["csl"]:
         command.insert(1, f"--csl={localfiles['csl']}")
     for css_file in localfiles["css"]:
         command.extend(["--css", os.path.join(source_dir, css_file)])
     for lua_file in localfiles["lua"]:
         command.extend(["--lua-filter", os.path.join(source_dir, lua_file)])
-    # command = ['pandoc', '-s', '--mathjax', '-o', html_file, filename]
-    print("running:", " ".join(command))
-    completed = subprocess.run(
-        command,
-    )
-    if getattr(completed, "returncode", 0) != 0:
-        raise RuntimeError(
-            f"Pandoc failed with exit code {completed.returncode} while "
-            f"building {html_file}.\n"
-            f"Command: {' '.join(command)}"
-        )
-    print("running:\n", command)
+    # {{{ render, recover missing citations, and rebuild at most once
+    with tempfile.TemporaryDirectory(prefix="pydifft-citations-") as temp_dir:
+        diagnostic_path = Path(temp_dir) / "pandoc.json"
+        command.extend(["--log", str(diagnostic_path)])
+        for attempt in range(2):
+            diagnostic_path.write_text("[]", encoding="utf-8")
+            print("running:", " ".join(command))
+            completed = subprocess.run(command)
+            if getattr(completed, "returncode", 0) != 0:
+                raise RuntimeError(
+                    f"Pandoc failed with exit code {completed.returncode} "
+                    f"while building {html_file}.\n"
+                    f"Command: {' '.join(command)}"
+                )
+            try:
+                diagnostics = json.loads(
+                    diagnostic_path.read_text(encoding="utf-8")
+                )
+                if not isinstance(diagnostics, list):
+                    raise ValueError("expected a list of Pandoc diagnostics")
+                missing = []
+                for diagnostic in diagnostics:
+                    if not isinstance(diagnostic, dict):
+                        continue
+                    if diagnostic.get("type") != "CiteprocWarning":
+                        continue
+                    message = diagnostic.get("message", "")
+                    match = re.fullmatch(
+                        r"citation (.+) not found", str(message)
+                    )
+                    if match and match[1] not in missing:
+                        missing.append(match[1])
+            except (OSError, ValueError) as exc:
+                print(
+                    f"cpb: cannot read citation diagnostics: {exc}",
+                    file=sys.stderr,
+                )
+                break
+            if not missing:
+                break
+            if attempt == 0 and recover_bibliography(
+                recovery_bibliography, missing, source=filename
+            ):
+                continue
+            print(
+                f"cpb: unresolved citations: {', '.join(missing)}",
+                file=sys.stderr,
+            )
+            break
+    # }}}
     if not os.path.exists(html_file):
         raise RuntimeError(
             "Pandoc completed but did not create the expected HTML file: "
@@ -512,6 +600,7 @@ def cpb(filename, comments_to_margin=False, no_comments=False):
         daemon=True,
     )
     chrome = None
+    notice = None
     observer = None
     observer_started = False
     socket_thread_started = False
@@ -540,6 +629,7 @@ def cpb(filename, comments_to_margin=False, no_comments=False):
             comment_filter_session=comment_filter_session,
         )
         append_autorefresh(html_file)
+        notice = zotero_notice()
 
         # Selenium is deliberately initialized once, after the first
         # successful build. Nothing in recovery constructs a browser.
@@ -724,6 +814,10 @@ def cpb(filename, comments_to_margin=False, no_comments=False):
         if socket_thread_started:
             socket_thread.join()
         close_browser_window(chrome)
+        if notice is not None:
+            if notice.poll() is None:
+                notice.terminate()
+            notice.wait()
 
 
 if __name__ == "__main__":

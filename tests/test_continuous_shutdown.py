@@ -3,6 +3,7 @@ import os
 import threading
 import time
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from selenium import webdriver
@@ -101,6 +102,7 @@ def install_cpb_runtime(monkeypatch, build_hook=None):
         return observer
 
     monkeypatch.setattr(continuous, "run_pandoc", fake_run_pandoc)
+    monkeypatch.setattr(continuous, "zotero_notice", lambda: None)
     monkeypatch.setattr(webdriver, "Chrome", fake_chrome)
     monkeypatch.setattr(continuous, "Observer", exhausted_observer)
     monkeypatch.setattr(continuous, "PollingObserver", polling_observer)
@@ -303,6 +305,29 @@ def test_cpb_initial_build_failure_does_not_open_chrome(monkeypatch, tmp_path):
         continuous.cpb(str(source))
 
     assert chrome_calls == []
+
+
+def test_cpb_notice_does_not_prevent_preview_or_repeat_on_rebuild(
+    monkeypatch, tmp_path
+):
+    source = tmp_path / "content.md"
+    source.write_text("before\n")
+    runtime = install_cpb_runtime(monkeypatch)
+    notice = Mock()
+    notice.poll.return_value = None
+    notify = Mock(return_value=notice)
+    monkeypatch.setattr(continuous, "zotero_notice", notify)
+
+    def editor():
+        source.write_text("after\n")
+        assert runtime["browser"].refreshed.wait(timeout=2)
+
+    run_cpb_with_editor(source, runtime["browser"], editor)
+    assert runtime["builds"] == ["before\n", "after\n"]
+    notify.assert_called_once_with()
+    notice.terminate.assert_called_once_with()
+    notice.wait.assert_called_once_with()
+    assert_clean_polling_shutdown(runtime)
 
 
 def test_cpb_listener_acknowledges_before_initial_build_finishes(
