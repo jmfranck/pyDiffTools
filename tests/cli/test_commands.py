@@ -1746,7 +1746,7 @@ def test_no_comments_filter_ships_with_special_marker():
     assert "function Blocks(blocks)" in no_comments_filter
 
 
-def test_run_pandoc_comment_tag_regression_end_to_end(tmp_path):
+def test_run_pandoc_comment_tag_regression_end_to_end(tmp_path, monkeypatch):
     # This markdown reproduces the current failing mode where list content
     # inside <comment> leaks into the main body text.
     markdown_content = """Because these contributions have a smaller
@@ -1800,6 +1800,10 @@ It's still unclear what causes the low-$E_a$ region.
     html_file = tmp_path / "notes.html"
     markdown_file.write_text(markdown_content)
     write_minimal_bibliography_and_csl(tmp_path)
+    monkeypatch.setattr(
+        "pydifftools.wrap_sentences.markdown_lint_issues_from_text",
+        lambda *_args, **_kwargs: [],
+    )
 
     cwd = os.getcwd()
     os.chdir(tmp_path)
@@ -1832,7 +1836,9 @@ It's still unclear what causes the low-$E_a$ region.
     assert overlay_with_list
 
 
-def test_run_pandoc_no_comments_removes_all_comment_rendering(tmp_path):
+def test_run_pandoc_no_comments_removes_all_comment_rendering(
+    tmp_path, monkeypatch
+):
     markdown_content = """Lead-in prose that should remain.
 <comment>
 Inline comment text that should disappear.
@@ -1855,6 +1861,10 @@ Closing prose with [@dummy_ref] that should remain.
     html_file = tmp_path / "notes.html"
     markdown_file.write_text(markdown_content)
     write_minimal_bibliography_and_csl(tmp_path)
+    monkeypatch.setattr(
+        "pydifftools.wrap_sentences.markdown_lint_issues_from_text",
+        lambda *_args, **_kwargs: [],
+    )
 
     cwd = os.getcwd()
     os.chdir(tmp_path)
