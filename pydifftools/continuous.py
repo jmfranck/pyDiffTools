@@ -19,6 +19,7 @@ from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 from .command_registry import register_command
 from .zotero import recover_bibliography, zotero_notice
+from .comment_migration import prepare_comment_source
 from .browser_lifecycle import (
     browser_window_is_alive,
     close_browser_window,
@@ -360,7 +361,17 @@ def run_pandoc(
     with open(filename, encoding="utf-8") as fp:
         markdown_text = fp.read()
     if (
-        "<comment>" in markdown_text
+        re.search(
+            r"</?[A-Za-z]{2}com(?:-(?:left|right))?>",
+            markdown_text,
+            re.IGNORECASE,
+        )
+        or re.search(
+            r"\.[A-Za-z]{2}com(?:-(?:left|right))?(?=[\s}])",
+            markdown_text,
+            re.IGNORECASE,
+        )
+        or "<comment>" in markdown_text
         or "<comment-left>" in markdown_text
         or "<comment-right>" in markdown_text
         or "comment-right" in markdown_text
@@ -812,6 +823,7 @@ def cpb(filename, comments_to_margin=False, no_comments=False):
         # orphaned browser session. Remember the source version from before
         # the build so an edit during a slow Pandoc run remains pending.
         source_missing = object()
+        prepare_comment_source(filename)
         initial_source_stat = os.stat(source_path)
         handled_signature = (
             initial_source_stat.st_ino,
@@ -952,6 +964,7 @@ def cpb(filename, comments_to_margin=False, no_comments=False):
                         if not browser_window_is_alive(chrome):
                             break
                         try:
+                            prepare_comment_source(filename)
                             run_pandoc(
                                 filename,
                                 html_file,

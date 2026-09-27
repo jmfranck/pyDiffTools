@@ -54,6 +54,15 @@ included are (listed in order of fun/utility):
   Python file operations and Qt dialogs. Its automated runtime checks have
   been performed on Linux, not on Windows.
 
+  Comment bubbles use author tags such as ``<JFcom>…</JFcom>`` and
+  ``<JFcom-left>…</JFcom-left>``. Block comments can use Markdown Div classes
+  such as ``::: {.JFcom-left}``. Add a quoted six-digit hex color to the YAML
+  header (for example, ``JFcolor: '#5aa0ff'``) to enable that author's tags.
+  Before the first build, ``cpb`` offers to migrate legacy ``<comment>`` tags
+  and ``.comment-left/right`` blocks, and resolves author tags without a
+  matching color. New authors choose a hue in a Qt picker; ``cpb`` adds their
+  ``XXcolor`` field to the header.
+
   Declare a single local ``.bib`` file with ``bibliography: references.bib``
   in the Markdown YAML header; relative paths are resolved beside the
   Markdown file. Without that declaration, ``cpb`` uses a single adjacent

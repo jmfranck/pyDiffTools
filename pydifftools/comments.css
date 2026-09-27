@@ -195,8 +195,9 @@ span.comment-pin > span.comment-right,
 span.comment-pin > span.comment-left {
   box-sizing: border-box;
   padding: 0.45rem 0.65rem;
-  border: 1px solid #5aa0ff;
+  border: 1px solid var(--comment-accent-color, #5aa0ff);
   background: #eaf3ff;
+  background: color-mix(in srgb, var(--comment-accent-color, #5aa0ff) 13%, white);
   color: #1a1a1a;
   border-radius: 0.45rem;
   font-size: 0.85em;
@@ -265,7 +266,7 @@ span.comment-pin > span.comment-right::before {
   top: 0.55rem;
   border-width: var(--comment-arrow-height) var(--comment-left-arrow-width) var(--comment-arrow-height) 0;
   border-style: solid;
-  border-color: transparent #5aa0ff transparent transparent;
+  border-color: transparent var(--comment-accent-color, #5aa0ff) transparent transparent;
 }
 span.comment-pin > span.comment-right::after {
   content: "";
@@ -275,6 +276,7 @@ span.comment-pin > span.comment-right::after {
   border-width: var(--comment-arrow-height) var(--comment-left-arrow-width) var(--comment-arrow-height) 0;
   border-style: solid;
   border-color: transparent #eaf3ff transparent transparent;
+  border-color: transparent color-mix(in srgb, var(--comment-accent-color, #5aa0ff) 13%, white) transparent transparent;
 }
 
 /* Pointer triangles (inline left) */
@@ -285,7 +287,7 @@ span.comment-pin > span.comment-left::before {
   top: 0.55rem;
   border-width: var(--comment-arrow-height) 0 var(--comment-arrow-height) var(--comment-arrow-width);
   border-style: solid;
-  border-color: transparent transparent transparent #5aa0ff;
+  border-color: transparent transparent transparent var(--comment-accent-color, #5aa0ff);
 }
 span.comment-pin > span.comment-left::after {
   content: "";
@@ -295,6 +297,7 @@ span.comment-pin > span.comment-left::after {
   border-width: var(--comment-arrow-height) 0 var(--comment-arrow-height) var(--comment-arrow-width);
   border-style: solid;
   border-color: transparent transparent transparent #eaf3ff;
+  border-color: transparent transparent transparent color-mix(in srgb, var(--comment-accent-color, #5aa0ff) 13%, white);
 }
 
 /* ---------- Print ---------- */
@@ -391,7 +394,7 @@ span.comment-pin > span.comment-left::after {
   top: 0.55rem;
   border-width: var(--comment-arrow-height) var(--comment-left-arrow-width) var(--comment-arrow-height) 0;
   border-style: solid;
-  border-color: transparent #5aa0ff transparent transparent;
+  border-color: transparent var(--comment-accent-color, #5aa0ff) transparent transparent;
 }
 .comment-overlay.comment-right::after {
   content: "";
@@ -401,6 +404,7 @@ span.comment-pin > span.comment-left::after {
   border-width: var(--comment-arrow-height) var(--comment-left-arrow-width) var(--comment-arrow-height) 0;
   border-style: solid;
   border-color: transparent #eaf3ff transparent transparent;
+  border-color: transparent color-mix(in srgb, var(--comment-accent-color, #5aa0ff) 13%, white) transparent transparent;
 }
 .comment-overlay.comment-left::before {
   content: "";
@@ -409,7 +413,7 @@ span.comment-pin > span.comment-left::after {
   top: 0.55rem;
   border-width: var(--comment-arrow-height) 0 var(--comment-arrow-height) var(--comment-arrow-width);
   border-style: solid;
-  border-color: transparent transparent transparent #5aa0ff;
+  border-color: transparent transparent transparent var(--comment-accent-color, #5aa0ff);
 }
 .comment-overlay.comment-left::after {
   content: "";
@@ -419,6 +423,7 @@ span.comment-pin > span.comment-left::after {
   border-width: var(--comment-arrow-height) 0 var(--comment-arrow-height) var(--comment-arrow-width);
   border-style: solid;
   border-color: transparent transparent transparent #eaf3ff;
+  border-color: transparent transparent transparent color-mix(in srgb, var(--comment-accent-color, #5aa0ff) 13%, white);
 }
 
 /* Optional: click-to-hide behavior styling (your JS toggles this) */

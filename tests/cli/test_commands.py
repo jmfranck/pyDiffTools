@@ -1423,6 +1423,52 @@ def test_run_pandoc_copies_comment_assets_for_comment_div_blocks(
     assert (project_dir / "comment_toggle.js").exists()
 
 
+def test_run_pandoc_renders_author_tags_and_divs_with_header_color(tmp_path):
+    markdown_file = tmp_path / "notes.md"
+    html_file = tmp_path / "notes.html"
+    markdown_file.write_text(
+        "---\nJFcolor: '#d455aa'\n---\n\n"
+        "Before <JFcom>inline</JFcom> after.\n\n"
+        "::: {.JFcom-left}\nblock comment\n:::\n"
+    )
+    write_minimal_bibliography_and_csl(tmp_path)
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        run_pandoc(str(markdown_file), str(html_file))
+    finally:
+        os.chdir(cwd)
+
+    html_content = html_file.read_text()
+    assert 'data-comment-author="JF"' in html_content
+    assert "--comment-accent-color: #d455aa" in html_content
+    assert 'class="comment-left"' in html_content
+
+
+def test_no_comments_filter_removes_author_tags_and_blocks(tmp_path):
+    markdown_file = tmp_path / "notes.md"
+    html_file = tmp_path / "notes.html"
+    markdown_file.write_text(
+        "---\nJFcolor: '#d455aa'\n---\n\n"
+        "Before <JFcom>private note</JFcom> after.\n\n"
+        "::: {.JFcom-right}\nprivate block\n:::\n"
+    )
+    write_minimal_bibliography_and_csl(tmp_path)
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        run_pandoc(str(markdown_file), str(html_file), no_comments=True)
+    finally:
+        os.chdir(cwd)
+
+    html_content = html_file.read_text()
+    assert "private note" not in html_content
+    assert "private block" not in html_content
+    assert "comment-pin" not in html_content
+
+
 def test_run_pandoc_does_not_overwrite_existing_comment_assets(
     tmp_path, monkeypatch
 ):

@@ -27,6 +27,7 @@ local OPENERS = {
   ["<comment-right>"] = { close = "</comment-right>" },
   ["<comment-left>"] = { close = "</comment-left>" },
 }
+local AUTHOR_COLORS = {}
 
 local function para_like_t(block)
   return block and (block.t == "Para" or block.t == "Plain")
@@ -198,6 +199,11 @@ local function has_comment_class(el)
     if class_name == "comment-right" or class_name == "comment-left" then
       return true
     end
+    local initials = class_name:match("^([A-Za-z][A-Za-z])com")
+    initials = initials and initials:upper() or nil
+    if initials and AUTHOR_COLORS[initials] then
+      return true
+    end
   end
   return false
 end
@@ -325,4 +331,20 @@ function Div(el)
   if has_comment_class(el) then
     return {}
   end
+end
+
+function Pandoc(doc)
+  for key, value in pairs(doc.meta) do
+    local initials = tostring(key):match("^([A-Za-z][A-Za-z])color$")
+    local color = pandoc.utils.stringify(value)
+    if initials and color:match("^#%x%x%x%x%x%x$") then
+      initials = initials:upper()
+      AUTHOR_COLORS[initials] = color:lower()
+      for _, suffix in ipairs({"com", "com-left", "com-right"}) do
+        local tag = "<" .. initials:lower() .. suffix .. ">"
+        OPENERS[tag] = { close = "</" .. initials:lower() .. suffix .. ">" }
+      end
+    end
+  end
+  return doc:walk({ Inlines = Inlines, Blocks = Blocks, Div = Div })
 end

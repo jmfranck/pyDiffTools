@@ -32,6 +32,7 @@ local OPENERS = {
   ["<comment-right>"] = { side = "comment-right", close = "</comment-right>" },
   ["<comment-left>"] = { side = "comment-left", close = "</comment-left>" },
 }
+local AUTHOR_COLORS = {}
 
 local comment_id = 0
 local function next_id()
@@ -39,8 +40,15 @@ local function next_id()
   return "c" .. tostring(comment_id)
 end
 
-local function make_inline_comment(side, content_inlines)
-  local inner = pandoc.Span(content_inlines, pandoc.Attr("", { side }, {}))
+local function make_inline_comment(side, content_inlines, spec)
+  local attributes = {}
+  if spec and spec.color then
+    attributes["style"] = "--comment-accent-color: " .. spec.color .. ";"
+    attributes["data-comment-author"] = spec.author
+  end
+  local inner = pandoc.Span(
+    content_inlines, pandoc.Attr("", { side }, attributes)
+  )
   return pandoc.Span(pandoc.List({ inner }), pandoc.Attr("", { "comment-pin" }, {}))
 end
 
@@ -50,11 +58,16 @@ local function make_block_anchor(id)
     '<span class="comment-pin comment-pin-block" data-comment-id="' .. id .. '"></span>')
 end
 
-local function make_block_overlay(side, id, content_blocks)
+local function make_block_overlay(side, id, content_blocks, spec)
   -- Div can contain BulletList/Para/etc. JS will position this overlay.
   return pandoc.Div(
     content_blocks,
-    pandoc.Attr("", { "comment-overlay", side }, { ["data-comment-id"] = id })
+    pandoc.Attr("", { "comment-overlay", side }, {
+      ["data-comment-id"] = id,
+      ["data-comment-author"] = spec and spec.author or nil,
+      ["style"] = spec and spec.color
+        and ("--comment-accent-color: " .. spec.color .. ";") or nil,
+    })
   )
 end
 
@@ -263,7 +276,7 @@ function Inlines(inlines)
       end
 
       if found then
-        out:insert(make_inline_comment(spec.side, buf))
+        out:insert(make_inline_comment(spec.side, buf, spec))
         i = j + 1
       else
         -- unmatched: leave literal
@@ -353,7 +366,7 @@ function Blocks(blocks)
         if not merged_with_inline_anchor then
           out:insert(make_block_anchor(id))
         end
-        out:insert(make_block_overlay(spec.side, id, buf))
+        out:insert(make_block_overlay(spec.side, id, buf, spec))
 
         -- Keep trailing content after the closer in main flow.
         for after_index = 1, #after_close_blocks do
@@ -369,4 +382,55 @@ function Blocks(blocks)
   end
 
   return out
+end
+
+function Div(el)
+  for index, class_name in ipairs(el.classes) do
+    local author, side = class_name:match("^([A-Za-z][A-Za-z])com%-(left)$")
+    if not author then
+      author, side = class_name:match("^([A-Za-z][A-Za-z])com%-(right)$")
+    end
+    if not author then
+      author = class_name:match("^([A-Za-z][A-Za-z])com$")
+      side = "right"
+    end
+    author = author and author:upper() or nil
+    local color = author and AUTHOR_COLORS[author] or nil
+    if color then
+      el.classes[index] = "comment-" .. side
+      local style = el.attributes.style or ""
+      if #style > 0 and not style:match(";%s*$") then
+        style = style .. ";"
+      end
+      el.attributes.style = style .. "--comment-accent-color: " .. color .. ";"
+      el.attributes["data-comment-author"] = author
+    end
+  end
+  return el
+end
+
+function Pandoc(doc)
+  for key, value in pairs(doc.meta) do
+    local initials = tostring(key):match("^([A-Za-z][A-Za-z])color$")
+    local color = pandoc.utils.stringify(value)
+    if initials and color:match("^#%x%x%x%x%x%x$") then
+      initials = initials:upper()
+      color = color:lower()
+      AUTHOR_COLORS[initials] = color
+      for suffix, side in pairs({
+        ["com"] = "comment-right",
+        ["com-left"] = "comment-left",
+        ["com-right"] = "comment-right",
+      }) do
+        local tag = "<" .. initials:lower() .. suffix .. ">"
+        OPENERS[tag] = {
+          side = side,
+          close = "</" .. initials:lower() .. suffix .. ">",
+          color = color,
+          author = initials,
+        }
+      end
+    end
+  end
+  return doc:walk({ Inlines = Inlines, Blocks = Blocks, Div = Div })
 end
