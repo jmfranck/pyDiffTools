@@ -14,7 +14,6 @@ import traceback
 import tempfile
 from pathlib import Path
 import yaml
-import textwrap
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
@@ -127,21 +126,149 @@ sys.exit(1)
     raise RuntimeError("pydifft cpb filter dialog failed.")
 
 
-def run_pandoc(
-    filename,
-    html_file,
-    comments_to_margin=False,
-    no_comments=False,
-    comment_filter_session=None,
-):
-    # {{{ review Markdown lint issues in a Qt walkthrough
-    def show_markdown_lint(filename, issues):
-        """Walk through cpb's Markdown style issues in a Qt window."""
-        dialog_script = r"""
-    import html
-    import json
-    import sys
+def show_markdown_fix_dialog(report):
+    """Show automatic fixes and any source edits that still need a user."""
+    from html import escape
+
     from PySide6.QtCore import Qt
+    from PySide6.QtGui import QFontDatabase
+    from PySide6.QtWidgets import (
+        QApplication,
+        QDialog,
+        QHBoxLayout,
+        QLabel,
+        QPushButton,
+        QTextEdit,
+        QVBoxLayout,
+    )
+
+    fixes = report["fixes"]
+    warnings = report["warnings"]
+    records = [
+        {"record_type": "fix", **fix}
+        for fix in fixes
+    ] + [
+        {"record_type": "warning", **warning}
+        for warning in warnings
+    ]
+    if not records:
+        return
+
+    dialog = QDialog()
+    dialog._pydifftools_application = (
+        QApplication.instance() or QApplication([])
+    )
+    dialog.setWindowTitle("Markdown source fixes")
+    dialog.resize(760, 480)
+    layout = QVBoxLayout(dialog)
+    heading = QLabel()
+    heading.setWordWrap(True)
+    details = QLabel()
+    details.setWordWrap(True)
+    layout.addWidget(heading)
+    layout.addWidget(details)
+
+    preview_row = QHBoxLayout()
+    line_numbers = QLabel()
+    line_numbers.setAlignment(
+        Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight
+    )
+    line_numbers.setStyleSheet("color: #666; padding-right: 8px;")
+    line_numbers.setFont(
+        QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+    )
+    preview = QTextEdit()
+    preview.setReadOnly(True)
+    preview.setFont(
+        QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+    )
+    preview_row.addWidget(line_numbers)
+    preview_row.addWidget(preview, 1)
+    layout.addLayout(preview_row, 1)
+
+    button = QPushButton()
+    layout.addWidget(button)
+    index = 0
+    user_says_fixed = False
+
+    def show_record():
+        record = records[index]
+        line = record["line"]
+        if record["record_type"] == "fix":
+            heading.setText("I fixed this source line automatically.")
+            details.setText(record["reason"])
+            before_lines = record["before"].splitlines() or [""]
+            after_lines = record["after"].splitlines() or [""]
+            source_html = ""
+            numbers = []
+            if "\n" in record["after"]:
+                after_html = "<br>↳ ".join(
+                    escape(value)
+                    for value in record["after"].split("\n")
+                )
+                source_html = (
+                    "<pre style='font-family:monospace; margin:0'>"
+                    + "Before:<br>"
+                    + "<br>".join(escape(value) for value in before_lines)
+                    + "<br><br>After:<br>"
+                    + after_html
+                    + "</pre>"
+                )
+                numbers = [""] + list(
+                    range(line, line + len(before_lines))
+                )
+                numbers += ["", ""]
+                numbers += list(range(line, line + len(after_lines)))
+            line_numbers.setText("<br>".join(str(value) for value in numbers))
+            preview.setHtml(source_html)
+            button.setText("Next" if index + 1 < len(records) else "Done")
+        else:
+            heading.setText("This source span is not closed.")
+            if record["kind"] == "math":
+                delimiter = record["delimiter"]
+                details.setText(
+                    f"This math has no closing {delimiter}. Add {delimiter} "
+                    "where the expression ends, then choose “I've fixed it”."
+                )
+            else:
+                details.setText(
+                    "This HTML comment has no closing -->. Add --> where "
+                    "the comment ends, then choose “I've fixed it”."
+                )
+            offending_lines = record["offending"].splitlines() or [""]
+            line_numbers.setText(
+                "<br>".join(
+                    str(number)
+                    for number in range(line, line + len(offending_lines))
+                )
+            )
+            preview.setHtml(
+                "<pre style='font-family:monospace; margin:0'><b>"
+                + "<br>".join(escape(value) for value in offending_lines)
+                + "</b></pre>"
+            )
+            button.setText("I've fixed it")
+
+    def advance():
+        nonlocal index, user_says_fixed
+        if records[index]["record_type"] == "warning":
+            user_says_fixed = True
+            dialog.accept()
+            return
+        if index + 1 < len(records):
+            index += 1
+            show_record()
+        else:
+            dialog.accept()
+
+    button.clicked.connect(advance)
+    show_record()
+    dialog.exec()
+    return user_says_fixed
+
+
+def show_markdown_reload_dialog():
+    """Ask the user to reload a source file changed by automatic fixes."""
     from PySide6.QtWidgets import (
         QApplication,
         QDialog,
@@ -150,103 +277,54 @@ def run_pandoc(
         QVBoxLayout,
     )
 
-    filename = sys.argv[1]
-    issues = json.loads(sys.argv[2])
-    app = QApplication(sys.argv[:1])
     dialog = QDialog()
-    dialog.setWindowTitle("pydifft cpb — Markdown style")
-    dialog.resize(620, 260)
+    dialog._pydifftools_application = (
+        QApplication.instance() or QApplication([])
+    )
+    dialog.setWindowTitle("Reload the Markdown source")
+    dialog.resize(440, 150)
     layout = QVBoxLayout(dialog)
-    heading = QLabel()
-    heading.setTextFormat(Qt.TextFormat.RichText)
-    details = QLabel()
-    details.setTextFormat(Qt.TextFormat.RichText)
-    details.setWordWrap(True)
-    fix = QLabel()
-    fix.setTextFormat(Qt.TextFormat.RichText)
-    fix.setWordWrap(True)
-    layout.addWidget(heading)
-    layout.addWidget(details)
-    layout.addWidget(fix)
-    button = QPushButton("Next")
+    message = QLabel(
+        "I fixed the Markdown source. Reload it in your editor to see the "
+        "changes."
+    )
+    message.setWordWrap(True)
+    layout.addWidget(message)
+    button = QPushButton("I've reloaded")
+    button.clicked.connect(dialog.accept)
     layout.addWidget(button)
-    index = 0
-
-    def show_issue():
-        global index
-        if index >= len(issues):
-            heading.setText("<b>All listed issues reviewed.</b>")
-            details.setText(
-                "Edit the source if needed, then continue to check it again."
-            )
-            fix.setText("")
-            button.setText("Check again")
-            return
-        line, message = issues[index]
-        heading.setText(
-            f"<b>{html.escape(filename)}:{line}</b> — issue "
-            f"{index + 1} of {len(issues)}"
-        )
-        details.setText(html.escape(message))
-        if message.startswith("sentence ends mid-line"):
-            fix.setText(
-                "Fix: end the sentence on this line, then continue the next "
-                "sentence on a new source line.<br>"
-                "<span style='color:green'>↳ Enter</span> "
-                "<span style='color:green'><i>soft return: this newline "
-                "appears only in the source.</i></span>"
-            )
-        else:
-            fix.setText(
-                "Fix: add a source newline within the sentence so the prose "
-                "wraps at 55 characters or fewer.<br>"
-                "<span style='color:green'>↳ Enter</span> "
-                "<span style='color:green'><i>soft return: this newline "
-                "appears only in the source.</i></span>"
-            )
-
-    def advance():
-        global index
-        index += 1
-        show_issue()
-
-    button.clicked.connect(advance)
-    show_issue()
     dialog.exec()
-    """
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                textwrap.dedent(dialog_script),
-                filename,
-                json.dumps(issues),
-            ],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            detail = result.stderr.strip()
-            if detail:
-                raise RuntimeError(
-                    f"cpb Markdown lint dialog failed: {detail}"
-                )
-            raise RuntimeError("cpb Markdown lint dialog failed.")
-    # }}}
-    # Keep cpb's build gate tied to wrchk's Markdown rules. Recheck after each
-    # walkthrough because users can edit the source in their editor while the
-    # Qt window is open.
-    from .wrap_sentences import markdown_lint_issues_from_text
 
+
+def run_pandoc(
+    filename,
+    html_file,
+    comments_to_margin=False,
+    no_comments=False,
+    comment_filter_session=None,
+):
+    # {{{ automatically fix Markdown source and request edits for
+    # unfinished spans
+    from .wrap_sentences import autofix_markdown_file
+
+    automatic_fixes_were_made = False
     while True:
-        with open(filename, encoding="utf-8") as fp:
-            markdown_text = fp.read()
-        issues = markdown_lint_issues_from_text(
-            markdown_text, wrapnumber=55
-        )
-        if not issues:
-            break
-        show_markdown_lint(filename, issues)
+        report = autofix_markdown_file(filename, wrapnumber=55)
+        automatic_fixes_were_made |= bool(report["fixes"])
+        if report["fixes"] or report["warnings"]:
+            user_says_fixed = show_markdown_fix_dialog(report)
+            if report["warnings"]:
+                if not user_says_fixed:
+                    raise RuntimeError(
+                        "The Markdown source still has an unclosed math "
+                        "expression or HTML comment."
+                    )
+                continue
+        break
+
+    if automatic_fixes_were_made:
+        show_markdown_reload_dialog()
+    # }}}
 
     if comments_to_margin:
         comment_filter_mode = "margin"

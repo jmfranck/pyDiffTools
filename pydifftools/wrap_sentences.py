@@ -978,14 +978,236 @@ def _iter_block_spans(blocks, wrapnumber, line_start=1):
 def markdown_lint_issues_from_text(
     content, wrapnumber=45, punctuation_slop=20
 ):
-    """Return lint issues for Markdown text using wrchk's existing rules."""
-    return [
+    """Return Markdown writing issues, including unfinished source spans."""
+    def mask_comment(match):
+        return "".join("\n" if char == "\n" else " " for char in match[0])
+
+    prose_content = re.sub(
+        r"<!--.*?(?:-->|\Z)", mask_comment, content, flags=re.DOTALL
+    )
+    issues = [
         issue
         for line, width, span in _iter_block_spans(
-            markdown_blocks(content), wrapnumber
+            markdown_blocks(prose_content), wrapnumber
         )
         for issue in check_prose(span, width, punctuation_slop, line)
     ]
+    issues.extend(
+        (issue["line"], issue["message"])
+        for issue in unclosed_markdown_spans(content)
+    )
+    return sorted(issues)
+
+
+def unclosed_markdown_spans(content, math_line_limit=50):
+    """Find unfinished math and HTML comments in Markdown source."""
+    lines = content.splitlines(keepends=True)
+    spans = []
+    fence_char = None
+    fence_size = 0
+    math_start = None
+    math_delimiter = None
+    math_content = []
+    comment_start = None
+    comment_content = []
+    inline_code_delimiter = None
+    token_pattern = re.compile(
+        r"<!--|-->|(?<!\\)\$\$|(?<!\\)\$|`+"
+    )
+
+    for line_number, line in enumerate(lines, 1):
+        fence = re.match(r"^[ \t]*(?P<marker>`{3,}|~{3,})", line)
+        if fence_char is not None:
+            if (
+                fence
+                and fence.group("marker")[0] == fence_char
+                and len(fence.group("marker")) >= fence_size
+            ):
+                fence_char = None
+            continue
+        if fence:
+            fence_char = fence.group("marker")[0]
+            fence_size = len(fence.group("marker"))
+            continue
+
+        for token in token_pattern.finditer(line):
+            value = token.group()
+            if comment_start is not None:
+                if value == "-->":
+                    comment_start = None
+                    comment_content = []
+                continue
+            if math_start is not None:
+                if value == math_delimiter:
+                    math_start = None
+                    math_delimiter = None
+                    math_content = []
+                continue
+            if inline_code_delimiter is not None:
+                if value.startswith("`") and value == inline_code_delimiter:
+                    inline_code_delimiter = None
+                continue
+            if value.startswith("`"):
+                inline_code_delimiter = value
+                continue
+            if value == "<!--":
+                comment_start = line_number
+                comment_content = [line[token.start() :]]
+            elif value in {"$", "$$"}:
+                math_start = line_number
+                math_delimiter = value
+                math_content = [line[token.start() :]]
+        if comment_start is not None and line_number > comment_start:
+            comment_content.append(line)
+        if math_start is not None and line_number > math_start:
+            math_content.append(line)
+
+    if comment_start is not None:
+        spans.append(
+            {
+                "kind": "comment",
+                "line": comment_start,
+                "message": "unclosed HTML comment: add '-->' to close it",
+                "offending": "".join(comment_content).rstrip("\r\n"),
+            }
+        )
+    if (
+        math_start is not None
+        and len(lines) - math_start + 1 >= math_line_limit
+    ):
+        spans.append(
+            {
+                "kind": "math",
+                "line": math_start,
+                "message": (
+                    "unclosed math: add the matching "
+                    f"'{math_delimiter}' to close it"
+                ),
+                "offending": "".join(math_content).rstrip("\r\n"),
+                "delimiter": math_delimiter,
+            }
+        )
+    return spans
+
+
+# Kept public so the automatic source edits can be unit-tested directly.
+def apply_markdown_issue_fix(content, line_number, message):
+    """Insert one source line break for a wrchk Markdown issue."""
+    lines = content.splitlines(keepends=True)
+    index = line_number - 1
+    if index < 0 or index >= len(lines):
+        raise ValueError(
+            f"Markdown issue refers to missing line {line_number}"
+        )
+    old_line = lines[index]
+    ending = ""
+    if old_line.endswith("\r\n"):
+        old_line, ending = old_line[:-2], "\r\n"
+    elif old_line.endswith(("\n", "\r")):
+        old_line, ending = old_line[:-1], old_line[-1:]
+    if not ending:
+        ending = "\n"
+
+    # {{{ keep continuation lines inside their Markdown container
+    container = re.match(
+        r"^((?:[ \t]*>[ \t]?)*)(?:([-+*]|[0-9]+[.)])([ \t]+))?",
+        old_line,
+    )
+    quote_prefix, marker, marker_space = container.groups()
+    if marker:
+        prefix = quote_prefix + " " * (len(marker) + len(marker_space))
+    elif quote_prefix:
+        prefix = quote_prefix
+    else:
+        prefix = re.match(r"^[ \t]*", old_line).group()
+    # }}}
+    if message.startswith("line too long:"):
+        match = re.search(r"before '([^']+)'", message)
+        if match is None:
+            raise ValueError(
+                f"Cannot find the suggested word in {message!r}"
+            )
+        word = re.escape(match.group(1))
+        position = re.search(r"(?<!\S)" + word + r"(?!\S)", old_line)
+        if position is None:
+            raise ValueError(
+                f"Cannot find {match.group(1)!r} on Markdown line "
+                f"{line_number}"
+            )
+        split_at = position.start()
+        first = old_line[:split_at].rstrip()
+        second = old_line[split_at:].lstrip(" \t")
+        reason = (
+            "This line was hard to read because it held too many words. "
+            "I moved the next words onto a new line."
+        )
+    elif message.startswith("sentence ends mid-line"):
+        boundary = SENTENCE_BOUNDARY.search(old_line)
+        if boundary is None or boundary.group(2) != " ":
+            raise ValueError(
+                "Cannot find the sentence break on Markdown line "
+                f"{line_number}"
+            )
+        first = old_line[: boundary.end(1)].rstrip()
+        second = old_line[boundary.end(2) :].lstrip(" \t")
+        reason = (
+            "A sentence ended, but the next sentence continued on the same "
+            "source line. I started it on a new line."
+        )
+    else:
+        raise ValueError(f"No automatic fix is available for {message!r}")
+
+    fixed_line = first + ending + prefix + second + ending
+    lines[index] = fixed_line
+    after = first + "\n" + prefix + second
+    return "".join(lines), old_line, after, reason
+
+
+def autofix_markdown_file(filename, wrapnumber=55, punctuation_slop=20):
+    """Apply safe source line breaks and report unfinished source spans."""
+    with open(filename, encoding="utf-8", newline="") as fp:
+        content = fp.read()
+    fixes = []
+    for _ in range(1000):
+        issues = markdown_lint_issues_from_text(
+            content, wrapnumber=wrapnumber, punctuation_slop=punctuation_slop
+        )
+        fixable = next(
+            (
+                issue
+                for issue in issues
+                if not issue[1].startswith(
+                    ("unclosed math:", "unclosed HTML comment:")
+                )
+            ),
+            None,
+        )
+        if fixable is None:
+            break
+        line_number, message = fixable
+        updated, before, after, reason = apply_markdown_issue_fix(
+            content, line_number, message
+        )
+        if updated == content:
+            raise RuntimeError(
+                f"Automatic Markdown fix made no change at line {line_number}"
+            )
+        fixes.append(
+            {
+                "line": line_number,
+                "reason": reason,
+                "before": before,
+                "after": after,
+            }
+        )
+        content = updated
+    else:
+        raise RuntimeError("Too many automatic Markdown fixes were needed.")
+
+    if fixes:
+        with open(filename, "w", encoding="utf-8", newline="") as fp:
+            fp.write(content)
+    return {"fixes": fixes, "warnings": unclosed_markdown_spans(content)}
 
 
 @register_command(
