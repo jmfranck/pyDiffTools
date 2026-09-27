@@ -62,6 +62,71 @@ def _comment_filter_mode(path, packaged_filters=None):
     return "custom"
 
 
+# Kept separate so its prompt choices can be unit-tested.
+def confirm_restore_comment_filter(active_mode):
+    if active_mode == "none":
+        message = (
+            "The current lua filter is the one that does not show comments, "
+            "but you ran without the --no-comments flag.\n\n"
+            "Note that you have not locally edited the filter relative to "
+            "the library default.\n\n"
+            "Do you want to show comments, or continue with no comments?"
+        )
+        default_choice = "restore"
+    elif active_mode == "custom":
+        message = (
+            "The current lua filter does not match the pyDiffTools library "
+            "default or the no-comments filter, but you ran without the "
+            "--no-comments flag.\n\n"
+            "Note that this looks like a locally edited filter.\n\n"
+            "Do you want to show comments using the library default, or "
+            "continue with no comments?"
+        )
+        default_choice = "keep"
+    else:
+        raise ValueError(
+            "Comment filter restore prompt is only valid for custom or "
+            f"no-comments filters, not {active_mode!r}"
+        )
+    prompt_script = """
+import sys
+from PySide6.QtWidgets import QApplication, QMessageBox
+
+app = QApplication(sys.argv[:1])
+box = QMessageBox()
+box.setWindowTitle("pydifft cpb")
+box.setIcon(QMessageBox.Icon.Question)
+box.setText(sys.argv[1])
+keep_button = box.addButton(
+    "no comments", QMessageBox.ButtonRole.RejectRole
+)
+restore_button = box.addButton(
+    "show comments", QMessageBox.ButtonRole.AcceptRole
+)
+if sys.argv[2] == "restore":
+    box.setDefaultButton(restore_button)
+else:
+    box.setDefaultButton(keep_button)
+box.exec()
+if box.clickedButton() is restore_button:
+    sys.exit(0)
+sys.exit(1)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", prompt_script, message, default_choice],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    stderr = result.stderr.strip()
+    if stderr:
+        raise RuntimeError(f"pydifft cpb filter dialog failed: {stderr}")
+    raise RuntimeError("pydifft cpb filter dialog failed.")
+
+
 def run_pandoc(
     filename,
     html_file,
@@ -251,78 +316,9 @@ def run_pandoc(
                 else:
                     # {{{ ask whether to restore comments after detecting a
                     # locally changed comment filter
-                    if active_mode == "none":
-                        message = (
-                            "The current lua filter is the one that does "
-                            "not show comments, but you ran without the "
-                            "--no-comments flag.\n\n"
-                            "Note that you have not locally edited the "
-                            "filter relative to the library default.\n\n"
-                            "Do you want to show comments, or continue "
-                            "with no comments?"
-                        )
-                        default_choice = "restore"
-                    else:
-                        message = (
-                            "The current lua filter does not match the "
-                            "pyDiffTools library default or the "
-                            "no-comments filter, but you ran without the "
-                            "--no-comments flag.\n\n"
-                            "Note that this looks like a locally edited "
-                            "filter.\n\n"
-                            "Do you want to show comments using the "
-                            "library default, or continue with no comments?"
-                        )
-                        default_choice = "keep"
-                    prompt_script = """
-import sys
-from PySide6.QtWidgets import QApplication, QMessageBox
-
-app = QApplication(sys.argv[:1])
-box = QMessageBox()
-box.setWindowTitle("pydifft cpb")
-box.setIcon(QMessageBox.Icon.Question)
-box.setText(sys.argv[1])
-keep_button = box.addButton(
-    "no comments", QMessageBox.ButtonRole.RejectRole
-)
-restore_button = box.addButton(
-    "show comments", QMessageBox.ButtonRole.AcceptRole
-)
-if sys.argv[2] == "restore":
-    box.setDefaultButton(restore_button)
-else:
-    box.setDefaultButton(keep_button)
-box.exec()
-if box.clickedButton() is restore_button:
-    sys.exit(0)
-sys.exit(1)
-"""
-                    result = subprocess.run(
-                        [
-                            sys.executable,
-                            "-c",
-                            prompt_script,
-                            message,
-                            default_choice,
-                        ],
-                        capture_output=True,
-                        text=True,
+                    show_comments = confirm_restore_comment_filter(
+                        active_mode
                     )
-                    if result.returncode == 0:
-                        show_comments = True
-                    elif result.returncode == 1:
-                        show_comments = False
-                    else:
-                        stderr = result.stderr.strip()
-                        if stderr:
-                            raise RuntimeError(
-                                "pydifft cpb filter dialog failed: "
-                                f"{stderr}"
-                            )
-                        raise RuntimeError(
-                            "pydifft cpb filter dialog failed."
-                        )
                     # }}}
                     if comment_filter_session is not None:
                         comment_filter_session["show_comments"] = (

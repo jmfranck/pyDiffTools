@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 from pydifftools import continuous, outline
-from pydifftools.continuous import run_pandoc, _confirm_restore_comment_filter
+from pydifftools.continuous import run_pandoc, confirm_restore_comment_filter
 from pydifftools.command_line import mfs
 from pydifftools.command_registry import _COMMAND_SPECS
 from pydifftools.forward_search import ForwardSearchUnavailable
@@ -1264,7 +1264,7 @@ def test_comment_dialog_returns_user_selection(monkeypatch, status, expected):
         continuous.subprocess, "run",
         lambda *_a, **_k: subprocess.CompletedProcess([], status, "", ""),
     )
-    assert _confirm_restore_comment_filter("custom") is expected
+    assert confirm_restore_comment_filter("custom") is expected
 
 
 def test_run_pandoc_orders_scholarly_metadata_before_author_blocks(
@@ -1455,7 +1455,7 @@ def test_run_pandoc_does_not_overwrite_existing_comment_assets(
         return False
 
     monkeypatch.setattr(
-        continuous, "_confirm_restore_comment_filter", keep_custom_filter
+        continuous, "confirm_restore_comment_filter", keep_custom_filter
     )
 
     def fake_run(_command):
@@ -1523,7 +1523,7 @@ def test_default_comment_filter_does_not_prompt(tmp_path, monkeypatch):
         raise AssertionError("default filter should not prompt")
 
     monkeypatch.setattr(
-        continuous, "_confirm_restore_comment_filter", fail_prompt
+        continuous, "confirm_restore_comment_filter", fail_prompt
     )
 
     run_pandoc_with_stubbed_tools(project_dir, monkeypatch)
@@ -1573,7 +1573,7 @@ def test_no_comments_filter_restore_prompt_can_restore_default(
         return True
 
     monkeypatch.setattr(
-        continuous, "_confirm_restore_comment_filter", restore_default
+        continuous, "confirm_restore_comment_filter", restore_default
     )
 
     run_pandoc_with_stubbed_tools(project_dir, monkeypatch)
@@ -1597,7 +1597,7 @@ def test_no_comments_filter_restore_prompt_can_keep_filter(
     active_filter.write_text(no_comments_text)
 
     monkeypatch.setattr(
-        continuous, "_confirm_restore_comment_filter", lambda _mode: False
+        continuous, "confirm_restore_comment_filter", lambda _mode: False
     )
 
     run_pandoc_with_stubbed_tools(project_dir, monkeypatch)
@@ -1623,7 +1623,7 @@ def test_no_comments_filter_prompt_only_appears_once_per_session(
 
     monkeypatch.setattr(
         continuous,
-        "_confirm_restore_comment_filter",
+        "confirm_restore_comment_filter",
         keep_comments_hidden,
     )
     comment_filter_session = {}
@@ -1653,7 +1653,7 @@ def test_comment_filter_prompt_uses_clear_button_labels(monkeypatch):
 
     monkeypatch.setattr(continuous.subprocess, "run", fake_run)
 
-    assert continuous._confirm_restore_comment_filter("none") is False
+    assert continuous.confirm_restore_comment_filter("none") is False
 
 
 def test_custom_filter_restore_prompt_can_keep_filter(tmp_path, monkeypatch):
@@ -1663,7 +1663,7 @@ def test_custom_filter_restore_prompt_can_keep_filter(tmp_path, monkeypatch):
     active_filter.write_text("local custom filter\n")
 
     monkeypatch.setattr(
-        continuous, "_confirm_restore_comment_filter", lambda _mode: False
+        continuous, "confirm_restore_comment_filter", lambda _mode: False
     )
 
     run_pandoc_with_stubbed_tools(project_dir, monkeypatch)
@@ -1686,7 +1686,7 @@ def test_custom_filter_restore_prompt_can_restore_default(
         return True
 
     monkeypatch.setattr(
-        continuous, "_confirm_restore_comment_filter", restore_default
+        continuous, "confirm_restore_comment_filter", restore_default
     )
 
     run_pandoc_with_stubbed_tools(project_dir, monkeypatch)
@@ -1896,7 +1896,7 @@ def test_run_pandoc_keeps_no_comments_filter_without_comment_assets(
         "pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool"
     )
     monkeypatch.setattr(
-        continuous, "_confirm_restore_comment_filter", lambda _mode: False
+        continuous, "confirm_restore_comment_filter", lambda _mode: False
     )
 
     def fake_run(_command):
