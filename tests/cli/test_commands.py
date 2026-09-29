@@ -2080,3 +2080,63 @@ def test_historical_image_diff_keeps_both_revisions():
         DiffEntry("image.png", None, None, status="A"),
     )
     assert command[-4:] == ["abc123", "def456", "--", "image.png"]
+
+
+def test_run_pandoc_renders_every_header_author_and_misspelled_tags(
+    tmp_path, monkeypatch
+):
+    # each XXcolor field in the YAML header makes XXcom tags and .XXcom
+    # blocks; a misspelled <XXcomm> is corrected, and an author it names
+    # without a color is set up in the same build (here, XY)
+    markdown_file = tmp_path / "notes.md"
+    html_file = tmp_path / "notes.html"
+    markdown_file.write_text(
+        "---\nJFcolor: '#5aa2ff'\nABcolor: '#ff5aa2'\nRScolor: '#ffb85a'\n"
+        "---\n\n"
+        "Before <JFcom>from JF</JFcom> and <RScom-left>from RS</RScom-left>"
+        " after.\n\n"
+        "Text\n<ABcomm>\n  from AB\n</ABcomm>\nand\n<XYcomm>\n  from XY\n"
+        "</XYcomm>\nend.\n\n"
+        "::: {.ABcom-right}\nblock from AB\n:::\n"
+    )
+    write_minimal_bibliography_and_csl(tmp_path)
+    reviews = []
+
+    def create_xy(filename, colors, legacy):
+        reviews.append(sorted(colors))
+        return {
+            "accepted": True,
+            "replacements": {},
+            "colors": {"XY": "#5affb8"},
+        }
+
+    monkeypatch.setattr(
+        "pydifftools.comment_migration._migration_dialog", create_xy
+    )
+    monkeypatch.setattr(
+        continuous, "show_markdown_fix_dialog", lambda _report: False
+    )
+    monkeypatch.setattr(
+        continuous, "show_markdown_reload_dialog", lambda: None
+    )
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        run_pandoc(str(markdown_file), str(html_file))
+    finally:
+        os.chdir(cwd)
+
+    assert reviews == [["AB", "JF", "RS"]]
+    assert 'XYcolor: "#5affb8"' in markdown_file.read_text()
+    html_content = html_file.read_text()
+    for author, color in [
+        ("JF", "#5aa2ff"),
+        ("AB", "#ff5aa2"),
+        ("RS", "#ffb85a"),
+        ("XY", "#5affb8"),
+    ]:
+        assert f'data-comment-author="{author}"' in html_content
+        assert f"--comment-accent-color: {color}" in html_content
+    assert "comm>" not in html_content
+    assert 'class="comment-left"' in html_content

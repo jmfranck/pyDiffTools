@@ -433,6 +433,10 @@ def run_pandoc(
         break
 
     if automatic_fixes_were_made:
+        # a corrected comment tag (e.g. <XYcomm> -> <XYcom>) can name an
+        # author with no XYcolor yet, so migrate comments again now rather
+        # than on the next save
+        prepare_comment_source(filename)
         show_markdown_reload_dialog()
     # }}}
 
