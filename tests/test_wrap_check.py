@@ -1,5 +1,7 @@
+import os
 import re
 import subprocess
+import sys
 
 import pytest
 
@@ -909,3 +911,29 @@ def test_qt_layout_notice_shows_head_now_and_suggested(tmp_path):
     assert head.startswith("git HEAD:")
     assert re.search(r"^ +3 This script determines .* amplitudes$", now, re.M)
     assert re.search(r"^ +4 spectral lines for", suggested, re.M)
+
+
+def test_qt_fix_windows_create_their_own_application():
+    # cpb shows these windows without a QApplication; constructing the
+    # dialog first aborted the whole process
+    pytest.importorskip("PySide6")
+    script = (
+        "from PySide6.QtWidgets import QDialog\n"
+        "QDialog.exec = lambda self: 0\n"
+        "from pydifftools.continuous import (\n"
+        "    show_markdown_fix_dialog, show_markdown_reload_dialog)\n"
+        "show_markdown_fix_dialog({'fixes': [{'line': 1, 'reason': 'r',\n"
+        "    'before': 'a ', 'after': 'a'}], 'warnings': []})\n"
+        "show_markdown_reload_dialog()\n"
+        "print('shown')\n"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "shown"

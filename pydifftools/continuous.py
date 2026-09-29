@@ -149,10 +149,10 @@ def show_markdown_fix_dialog(report):
     if not fixes and not warnings and not layout:
         return
 
+    # a QApplication must exist before any widget is constructed
+    application = QApplication.instance() or QApplication([])
     dialog = QDialog()
-    dialog._pydifftools_application = (
-        QApplication.instance() or QApplication([])
-    )
+    dialog._pydifftools_application = application
     dialog.setWindowTitle("Markdown source fixes")
     fixed_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
     # {{{ group fixes of one kind onto pages that fill the screen
@@ -372,10 +372,10 @@ def show_markdown_reload_dialog():
         QVBoxLayout,
     )
 
+    # a QApplication must exist before any widget is constructed
+    application = QApplication.instance() or QApplication([])
     dialog = QDialog()
-    dialog._pydifftools_application = (
-        QApplication.instance() or QApplication([])
-    )
+    dialog._pydifftools_application = application
     dialog.setWindowTitle("Reload the Markdown source")
     dialog.resize(440, 150)
     layout = QVBoxLayout(dialog)
