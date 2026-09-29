@@ -1,3 +1,4 @@
+import re
 import subprocess
 
 import pytest
@@ -150,15 +151,92 @@ def test_long_line_fix_splits_at_the_word_after_the_break():
     assert fixed.startswith("for $30\\;\\text{s}$ ($3\\times$\nfor AOT)")
 
 
-def test_trailing_space_after_sentence_is_removed_not_a_blank_line(tmp_path):
+def test_single_trailing_space_is_flagged_and_removed(tmp_path):
+    # from RM_ESR: a sentence ending in a stray space
     path = tmp_path / "source.md"
     path.write_text("It melts near 238&nbsp;K. \nIn contrast, it stays.\n")
 
+    issues = markdown_lint_issues_from_text(path.read_text(), wrapnumber=55)
     autofix_markdown_file(path)
 
+    assert (1, "trailing space") in [
+        (line, message.split(":")[0]) for line, message in issues
+    ]
     fixed = path.read_text()
     assert fixed.startswith("It melts near 238&nbsp;K.\nIn contrast,")
-    assert "\n\n" not in fixed
+    assert " \n" not in fixed
+
+
+def test_double_trailing_space_hard_break_is_allowed():
+    source = "The first line ends here with a break  \nand continues.\n"
+
+    assert markdown_lint_issues_from_text(source, wrapnumber=55) == []
+
+
+@pytest.mark.parametrize(
+    "detached",
+    [
+        # equation markers must sit directly on the closing $$
+        "Intro.\n$$\nx = y\n$$ {#eq:x}\nwhere this holds.\n",
+        "Intro.\n$$\nx = y\n$$\n{#eq:x}\nwhere this holds.\n",
+        # figure markers must sit directly on the closing ) (from eigenmode)
+        "![A caption.](./media/BothProbes_Bfields.png)\n"
+        '{#fig:ProbeMagFieldsDrawing width="4in"}\n',
+        # and must not be split across lines (from RM_ESR)
+        "![A caption for\nspectroscopy.](Figures/simple_oned_CAT16.png)"
+        "{#fig:justSpectraCat16\nwidth=4in}\n",
+    ],
+)
+def test_detached_crossref_marker_is_flagged_and_joined(tmp_path, detached):
+    path = tmp_path / "source.md"
+    path.write_text(detached)
+
+    issues = markdown_lint_issues_from_text(detached, wrapnumber=55)
+    report = autofix_markdown_file(path)
+
+    fixed = path.read_text()
+    assert [message.split(":")[0] for _, message in issues] == [
+        "detached crossref marker"
+    ]
+    assert report["fixes"]
+    assert markdown_lint_issues_from_text(fixed, wrapnumber=55) == []
+    assert re.search(r"(\$\$|\))\{#(eq|fig):[^}\n]*\}", fixed)
+
+
+def test_figure_crossref_marker_is_never_split_from_its_figure(tmp_path):
+    # from RM_ESR: a caption spanning lines, ending in a marker with
+    # attributes; wr and the linter must treat "...){#fig:... }" as one word
+    source = (
+        "![Room temperature ESR of 100 mM TEMPO-SO~4~ RMs with water "
+        "loading $w_0=30$ in isooctane dispersant (blue), single HE "
+        "simulation (orange), multi HE simulation "
+        "(green)](Figures/HE_Easyspin_Simul_100mM.png)\n"
+        "{#fig:HESimul width=5.5in}\n"
+    )
+    path = tmp_path / "source.md"
+    path.write_text(source)
+
+    wr(str(path), 55)
+
+    wrapped = path.read_text()
+    assert (
+        "(green)](Figures/HE_Easyspin_Simul_100mM.png)"
+        "{#fig:HESimul width=5.5in}\n"
+    ) in wrapped
+    assert markdown_lint_issues_from_text(wrapped, wrapnumber=55) == []
+
+
+def test_wr_keeps_equation_marker_on_closing_dollars(tmp_path):
+    path = tmp_path / "source.md"
+    path.write_text(
+        "Intro.\n$$\nx = y\n$$ {#eq:tauFromLinewidth}\nwhere this holds.\n"
+    )
+
+    wr(str(path), 55)
+
+    wrapped = path.read_text()
+    assert "\n$${#eq:tauFromLinewidth}\n" in wrapped
+    assert markdown_lint_issues_from_text(wrapped, wrapnumber=55) == []
 
 
 def test_autofix_fixes_every_line_in_one_pass_from_the_end(tmp_path):

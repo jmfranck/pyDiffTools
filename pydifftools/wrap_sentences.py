@@ -16,6 +16,16 @@ PARAGRAPH_SPLIT = re.compile(r"(\n(?:[ \t]*\n)+)")
 SENTENCE_END = r"[^.!?]{3}[.!?]"
 SENTENCE_SPLIT = re.compile("(" + SENTENCE_END + r")[ \n]")
 SENTENCE_BOUNDARY = re.compile("(" + SENTENCE_END + r")([ \n])")
+# A word is a run of non-space characters, except that an attribute block
+# attached to a figure's closing ")" (or any "{#id ...}" block) stays inside
+# the word, so a break never lands inside a pandoc-crossref marker.
+WORD = re.compile(r"(?:(?<=\))\{[^}]*\}|\{#[^}]*\}|\S)+")
+# A pandoc-crossref marker must directly follow the closing "$$" of its
+# equation or the closing ")" of its figure, and must stay on one line.
+DETACHED_CROSSREF = re.compile(
+    r"(?:(?<!\\)\$\$|\))(?P<gap>[ \t]*\n?[ \t]*)(?=\{#(?:eq|fig):)"
+    r"|(?P<marker>\{#(?:eq|fig):[^}\n]*\n[^}]*\})"
+)
 LATEX_MACRO_SPLIT = re.compile(
     r"(\\(?:begin|end|usepackage|newcommand|section"
     r"|subsection|subsubsection|paragraph|input){[^}]*})"
@@ -584,6 +594,11 @@ def classify_lines(
                     if not equation.endswith("\n"):
                         equation += "\n"
                     equation += "$$"
+                    # keep a pandoc-crossref marker on its closing "$$"
+                    marker = re.match(r"\{#eq:[^}]*\}", content[stop:])
+                    if marker:
+                        equation += marker[0]
+                        stop += marker.end()
                 if stop < len(content):
                     equation += "\n"
                     if content[stop] == "\n":
@@ -686,7 +701,9 @@ def wrap_prose(
         lines = []
         indentation = 0
         for sentence in sentences:
-            words = [word for word in re.split("[ \n]+", sentence) if word]
+            words = [
+                re.sub(r"\s+", " ", word) for word in WORD.findall(sentence)
+            ]
             boundaries = _math_boundaries(words)
             if filetype == "latex":
                 indentation = 0
@@ -794,6 +811,15 @@ def _prepare(filename, cleanoo=False, i=-1):
 def wr(filename, wrapnumber=45, punctuation_slop=20, cleanoo=False, i=-1):
     alltext, filetype, indent_amount, _ = _prepare(filename, cleanoo, i)
     if filetype == "markdown":
+        # reattach detached pandoc-crossref markers before wrapping
+        alltext = DETACHED_CROSSREF.sub(
+            lambda found: (
+                re.sub(r"\s+", " ", found["marker"])
+                if found["marker"]
+                else found[0][: len(found[0]) - len(found["gap"])]
+            ),
+            alltext,
+        )
         result = wrap_blocks(
             markdown_blocks(alltext),
             wrapnumber,
@@ -865,7 +891,7 @@ def check_prose(content, wrapnumber, punctuation_slop, line_start=1):
                 if fragment:
                     # {{{ check line lengths within this sentence fragment
                     words, positions = [], []
-                    for match in re.finditer(r"\S+", fragment):
+                    for match in WORD.finditer(fragment):
                         words.append(match.group())
                         positions.append(frag_offset + match.start())
                     if words:
@@ -987,6 +1013,9 @@ def markdown_lint_issues_from_text(
     prose_content = re.sub(
         r"<!--.*?(?:-->|\Z)", mask_comment, content, flags=re.DOTALL
     )
+    # trailing spaces are reported separately below, and a double space
+    # (a hard line break) must not look like a sentence ending mid-line
+    prose_content = re.sub(r"[ \t]+$", "", prose_content, flags=re.M)
     issues = [
         issue
         for line, width, span in _iter_block_spans(
@@ -998,6 +1027,27 @@ def markdown_lint_issues_from_text(
         (issue["line"], issue["message"])
         for issue in unclosed_markdown_spans(content)
     )
+    # {{{ report single trailing spaces and detached crossref markers
+    fence = None
+    for number, line in enumerate(content.splitlines(), start=1):
+        opening = re.match(r"[ \t]*(\x60{3,}|~{3,})", line)
+        if opening and (fence is None or opening[1].startswith(fence)):
+            fence = None if fence else opening[1]
+        elif fence is None and re.search(r"(?<! ) $", line):
+            issues.append((
+                number,
+                "trailing space: remove the single space at the end of this "
+                "line (two spaces are a deliberate hard line break)",
+            ))
+    for found in DETACHED_CROSSREF.finditer(prose_content):
+        if found["gap"] == "":
+            continue
+        issues.append((
+            prose_content.count("\n", 0, found.start()) + 1,
+            "detached crossref marker: keep the {#eq:...} or {#fig:...} "
+            "marker on one line, directly after the closing $$ or )",
+        ))
+    # }}}
     return sorted(issues)
 
 
@@ -1101,6 +1151,33 @@ def apply_markdown_issue_fix(content, line_number, message):
         raise ValueError(
             f"Markdown issue refers to missing line {line_number}"
         )
+    if message.startswith("detached crossref marker"):
+        # {{{ join the marker onto its "$$" or ")" (this can remove a line)
+        start = sum(len(line) for line in lines[:index])
+        found = next(
+            found
+            for found in DETACHED_CROSSREF.finditer(content, start)
+            if found["gap"] != ""
+        )
+        if found["gap"] is None:
+            span = found.span("marker")
+            joined = re.sub(r"\s+", " ", found["marker"])
+        else:
+            span = found.span("gap")
+            joined = ""
+        before = content[found.start() : found.end()]
+        updated = content[: span[0]] + joined + content[span[1] :]
+        after = updated[
+            found.start() : span[0] + len(joined) + found.end() - span[1]
+        ]
+        return (
+            updated,
+            before,
+            after,
+            "A crossref marker was separated from its equation or figure. "
+            "I joined it back on.",
+        )
+        # }}}
     old_line = lines[index]
     ending = ""
     if old_line.endswith("\r\n"):
@@ -1123,6 +1200,14 @@ def apply_markdown_issue_fix(content, line_number, message):
     else:
         prefix = re.match(r"^[ \t]*", old_line).group()
     # }}}
+    if message.startswith("trailing space:"):
+        lines[index] = old_line[:-1] + ending
+        return (
+            "".join(lines),
+            old_line,
+            old_line[:-1],
+            "A line ended with a single stray space. I removed it.",
+        )
     if message.startswith("line too long:"):
         match = re.search(r"after '(.+?)' \(before '(.+?)'\); move", message)
         if match is None:
@@ -1164,22 +1249,13 @@ def apply_markdown_issue_fix(content, line_number, message):
     else:
         raise ValueError(f"No automatic fix is available for {message!r}")
 
-    if not first.strip():
+    if not first.strip() or not second.strip():
         # a break here would insert a blank line, i.e. a paragraph break
         raise ValueError(
             f"Automatic fix would leave an empty line at {line_number}"
         )
-    if second.strip():
-        lines[index] = first + ending + prefix + second + ending
-        after = first + "\n" + prefix + second
-    else:
-        # only trailing whitespace followed the break, so drop it rather
-        # than adding a blank line
-        lines[index] = first + ending
-        after = first
-        reason = (
-            "A sentence ended with a trailing space. I removed the space."
-        )
+    lines[index] = first + ending + prefix + second + ending
+    after = first + "\n" + prefix + second
     return "".join(lines), old_line, after, reason
 
 
