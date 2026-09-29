@@ -942,7 +942,9 @@ def _iter_classified_spans(text, filetype, line_start=1):
     leaf prose blocks -- both just need the same protected-region
     exclusions wr itself uses.
     """
-    classified = classify_lines(text, filetype, normalize_math=True)
+    # normalizing math can add lines (e.g. splitting "$${#eq:x}"), which
+    # would shift every reported line number after it
+    classified = classify_lines(text, filetype)
     line = line_start
     for wrappable, group in itertools.groupby(classified, key=lambda x: x[0]):
         content = "".join(l for _, l in group)
@@ -1122,19 +1124,24 @@ def apply_markdown_issue_fix(content, line_number, message):
         prefix = re.match(r"^[ \t]*", old_line).group()
     # }}}
     if message.startswith("line too long:"):
-        match = re.search(r"before '([^']+)'", message)
+        match = re.search(r"after '(.+?)' \(before '(.+?)'\); move", message)
         if match is None:
             raise ValueError(
                 f"Cannot find the suggested word in {message!r}"
             )
-        word = re.escape(match.group(1))
-        position = re.search(r"(?<!\S)" + word + r"(?!\S)", old_line)
+        # split at the suggested word that follows wr's break word, since the
+        # same word can appear earlier on the line (e.g. "for ... ($3x$ for")
+        position = re.search(
+            r"(?<!\S)" + re.escape(match.group(1)) + r"[ \t]+("
+            + re.escape(match.group(2)) + r")(?!\S)",
+            old_line,
+        )
         if position is None:
             raise ValueError(
-                f"Cannot find {match.group(1)!r} on Markdown line "
-                f"{line_number}"
+                f"Cannot find {match.group(2)!r} after {match.group(1)!r} on "
+                f"Markdown line {line_number}"
             )
-        split_at = position.start()
+        split_at = position.start(1)
         first = old_line[:split_at].rstrip()
         second = old_line[split_at:].lstrip(" \t")
         reason = (
@@ -1157,9 +1164,22 @@ def apply_markdown_issue_fix(content, line_number, message):
     else:
         raise ValueError(f"No automatic fix is available for {message!r}")
 
-    fixed_line = first + ending + prefix + second + ending
-    lines[index] = fixed_line
-    after = first + "\n" + prefix + second
+    if not first.strip():
+        # a break here would insert a blank line, i.e. a paragraph break
+        raise ValueError(
+            f"Automatic fix would leave an empty line at {line_number}"
+        )
+    if second.strip():
+        lines[index] = first + ending + prefix + second + ending
+        after = first + "\n" + prefix + second
+    else:
+        # only trailing whitespace followed the break, so drop it rather
+        # than adding a blank line
+        lines[index] = first + ending
+        after = first
+        reason = (
+            "A sentence ended with a trailing space. I removed the space."
+        )
     return "".join(lines), old_line, after, reason
 
 
@@ -1168,39 +1188,44 @@ def autofix_markdown_file(filename, wrapnumber=55, punctuation_slop=20):
     with open(filename, encoding="utf-8", newline="") as fp:
         content = fp.read()
     fixes = []
-    for _ in range(1000):
+    # Lint once, fix every flagged line, then lint again, since fixing one
+    # issue at a time re-lints the whole file for every single fix.
+    for _ in range(100):
         issues = markdown_lint_issues_from_text(
             content, wrapnumber=wrapnumber, punctuation_slop=punctuation_slop
         )
-        fixable = next(
-            (
-                issue
-                for issue in issues
-                if not issue[1].startswith(
-                    ("unclosed math:", "unclosed HTML comment:")
-                )
-            ),
-            None,
-        )
-        if fixable is None:
+        fixable = {}
+        for line_number, message in issues:
+            if not message.startswith(
+                ("unclosed math:", "unclosed HTML comment:")
+            ):
+                # a fix only rewrites its own line, so fix one issue per line
+                # per pass and let the next lint catch whatever remains
+                fixable.setdefault(line_number, message)
+        if not fixable:
             break
-        line_number, message = fixable
-        updated, before, after, reason = apply_markdown_issue_fix(
-            content, line_number, message
-        )
-        if updated == content:
-            raise RuntimeError(
-                f"Automatic Markdown fix made no change at line {line_number}"
+        # work from the bottom up so each inserted line break leaves the
+        # line numbers of the remaining issues unchanged
+        pass_fixes = []
+        for line_number in sorted(fixable, reverse=True):
+            updated, before, after, reason = apply_markdown_issue_fix(
+                content, line_number, fixable[line_number]
             )
-        fixes.append(
-            {
-                "line": line_number,
-                "reason": reason,
-                "before": before,
-                "after": after,
-            }
-        )
-        content = updated
+            if updated == content:
+                raise RuntimeError(
+                    "Automatic Markdown fix made no change at line "
+                    f"{line_number}"
+                )
+            pass_fixes.append(
+                {
+                    "line": line_number,
+                    "reason": reason,
+                    "before": before,
+                    "after": after,
+                }
+            )
+            content = updated
+        fixes.extend(reversed(pass_fixes))
     else:
         raise RuntimeError("Too many automatic Markdown fixes were needed.")
 

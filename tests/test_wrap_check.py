@@ -120,6 +120,61 @@ def test_one_reported_long_line_is_fixed_at_the_suggested_word():
     assert "hard to read" in reason
 
 
+def test_lint_line_numbers_survive_labeled_display_math():
+    # normalizing "$${#eq:x}" for wrapping splits it onto two lines, which
+    # must not shift the line numbers reported for later prose
+    source = (
+        "Intro.\n$$\nx = y\n$${#eq:x}\nwhere this sentence ends. "
+        "Another starts.\n"
+    )
+
+    ((line, message),) = markdown_lint_issues_from_text(source, 55)
+
+    assert line == 5
+    assert message.startswith("sentence ends mid-line")
+
+
+def test_long_line_fix_splits_at_the_word_after_the_break():
+    # "for" also starts the line, but wr breaks before the second one
+    source = (
+        "for $30\\;\\text{s}$ ($3\\times$ for AOT) with some more words "
+        "added.\n"
+    )
+    message = (
+        "line too long: wr would break after '($3\\times$' (before 'for'); "
+        "move 'for' onward to the next line, or shorten this sentence"
+    )
+
+    fixed, _, _, _ = apply_markdown_issue_fix(source, 1, message)
+
+    assert fixed.startswith("for $30\\;\\text{s}$ ($3\\times$\nfor AOT)")
+
+
+def test_trailing_space_after_sentence_is_removed_not_a_blank_line(tmp_path):
+    path = tmp_path / "source.md"
+    path.write_text("It melts near 238&nbsp;K. \nIn contrast, it stays.\n")
+
+    autofix_markdown_file(path)
+
+    fixed = path.read_text()
+    assert fixed.startswith("It melts near 238&nbsp;K.\nIn contrast,")
+    assert "\n\n" not in fixed
+
+
+def test_autofix_fixes_every_line_in_one_pass_from_the_end(tmp_path):
+    path = tmp_path / "source.md"
+    paragraph = "First sentence ends here. A second sentence begins.\n"
+    path.write_text("\n".join([paragraph] * 30))
+
+    report = autofix_markdown_file(path)
+
+    fixed = path.read_text()
+    assert len(report["fixes"]) == 30
+    assert [fix["line"] for fix in report["fixes"]] == list(range(1, 60, 2))
+    assert fixed.count("\n\n") == 29
+    assert markdown_lint_issues_from_text(fixed, wrapnumber=55) == []
+
+
 def test_unclosed_math_is_reported_after_fifty_lines():
     short_math = "$$\n" + ("x = y\n" * 48)
     long_math = "$$\n" + ("x = y\n" * 49)
