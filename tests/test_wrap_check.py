@@ -253,6 +253,51 @@ def test_autofix_fixes_every_line_in_one_pass_from_the_end(tmp_path):
     assert markdown_lint_issues_from_text(fixed, wrapnumber=55) == []
 
 
+def test_character_limit_ignores_lines_wr_would_break_sooner():
+    # from RM_ESR: 74 characters, which wr's width-55 rule would break
+    source = (
+        "temperatures not amenable to other methods, as in "
+        "[@Banerjee2009ESREviCoe].\n"
+    )
+
+    assert markdown_lint_issues_from_text(source, 55) != []
+    assert markdown_lint_issues_from_text(source, max_line_length=79) == []
+
+
+@pytest.mark.parametrize("prefix", ["", "- ", "> "])
+def test_character_limit_breaks_at_last_fitting_word(tmp_path, prefix):
+    # from RM_ESR: a sentence that grew past 79 characters
+    line = (
+        prefix + "This script determines the field positions and amplitudes "
+        "of the spectral lines for an entire variable-temperature "
+        "experiment.\n"
+    )
+    path = tmp_path / "source.md"
+    path.write_text(line)
+
+    issues = markdown_lint_issues_from_text(line, max_line_length=79)
+    report = autofix_markdown_file(path, max_line_length=79)
+
+    fixed = path.read_text()
+    assert [message.split(":")[0] for _, message in issues] == [
+        "line over 79 characters"
+    ]
+    assert "79 characters" in report["fixes"][0]["reason"]
+    assert all(len(text) <= 79 for text in fixed.splitlines())
+    assert fixed.replace("\n> ", "\n").split() == line.split()
+    # the first line is filled as far as the limit allows
+    first = fixed.splitlines()[0]
+    next_word = line.split()[len(first.split())]
+    assert len(first) + 1 + len(next_word) > 79
+    assert markdown_lint_issues_from_text(fixed, max_line_length=79) == []
+
+
+def test_character_limit_skips_a_single_unbreakable_word():
+    source = "https://example.org/" + "x" * 90 + "\n"
+
+    assert markdown_lint_issues_from_text(source, max_line_length=79) == []
+
+
 def test_unclosed_math_is_reported_after_fifty_lines():
     short_math = "$$\n" + ("x = y\n" * 48)
     long_math = "$$\n" + ("x = y\n" * 49)

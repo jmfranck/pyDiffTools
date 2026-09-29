@@ -310,7 +310,7 @@ def run_pandoc(
 
     automatic_fixes_were_made = False
     while True:
-        report = autofix_markdown_file(filename, wrapnumber=55)
+        report = autofix_markdown_file(filename, max_line_length=79)
         automatic_fixes_were_made |= bool(report["fixes"])
         if report["fixes"] or report["warnings"]:
             user_says_fixed = show_markdown_fix_dialog(report)

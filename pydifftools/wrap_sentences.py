@@ -1004,9 +1004,13 @@ def _iter_block_spans(blocks, wrapnumber, line_start=1):
 
 
 def markdown_lint_issues_from_text(
-    content, wrapnumber=45, punctuation_slop=20
+    content, wrapnumber=45, punctuation_slop=20, max_line_length=None
 ):
-    """Return Markdown writing issues, including unfinished source spans."""
+    """Return Markdown writing issues, including unfinished source spans.
+
+    With `max_line_length`, a prose line is only too long when it holds
+    more than that many characters, instead of wr's greedy line choice.
+    """
     def mask_comment(match):
         return "".join("\n" if char == "\n" else " " for char in match[0])
 
@@ -1016,13 +1020,30 @@ def markdown_lint_issues_from_text(
     # trailing spaces are reported separately below, and a double space
     # (a hard line break) must not look like a sentence ending mid-line
     prose_content = re.sub(r"[ \t]+$", "", prose_content, flags=re.M)
-    issues = [
-        issue
-        for line, width, span in _iter_block_spans(
-            markdown_blocks(prose_content), wrapnumber
-        )
-        for issue in check_prose(span, width, punctuation_slop, line)
-    ]
+    issues = []
+    prose_lines = prose_content.splitlines()
+    for line, width, span in _iter_block_spans(
+        markdown_blocks(prose_content), wrapnumber
+    ):
+        for issue in check_prose(span, width, punctuation_slop, line):
+            if max_line_length is None or not issue[1].startswith(
+                "line too long:"
+            ):
+                issues.append(issue)
+        if max_line_length is not None:
+            # {{{ flag prose lines longer than the character limit
+            for number in range(line, line + len(span.splitlines())):
+                text = prose_lines[number - 1]
+                # a single unbreakable word cannot be shortened
+                if len(text) > max_line_length and len(
+                    WORD.findall(text)
+                ) > 1:
+                    issues.append((
+                        number,
+                        f"line over {max_line_length} characters: break "
+                        "it at a word boundary",
+                    ))
+            # }}}
     issues.extend(
         (issue["line"], issue["message"])
         for issue in unclosed_markdown_spans(content)
@@ -1208,7 +1229,25 @@ def apply_markdown_issue_fix(content, line_number, message):
             old_line[:-1],
             "A line ended with a single stray space. I removed it.",
         )
-    if message.startswith("line too long:"):
+    if message.startswith("line over "):
+        # {{{ break at the last word boundary that fits the limit
+        limit = int(re.match(r"line over (\d+)", message)[1])
+        gaps = [
+            found.end()
+            for found in WORD.finditer(old_line)
+            if container.end() < found.end() < len(old_line.rstrip())
+        ]
+        fitting = [gap for gap in gaps if gap <= limit]
+        # when even the first word is too long, break right after it
+        split_at = fitting[-1] if fitting else gaps[0]
+        first = old_line[:split_at].rstrip()
+        second = old_line[split_at:].lstrip(" \t")
+        reason = (
+            f"This line was longer than {limit} characters. "
+            "I moved the last words onto a new line."
+        )
+        # }}}
+    elif message.startswith("line too long:"):
         match = re.search(r"after '(.+?)' \(before '(.+?)'\); move", message)
         if match is None:
             raise ValueError(
@@ -1259,7 +1298,9 @@ def apply_markdown_issue_fix(content, line_number, message):
     return "".join(lines), old_line, after, reason
 
 
-def autofix_markdown_file(filename, wrapnumber=55, punctuation_slop=20):
+def autofix_markdown_file(
+    filename, wrapnumber=55, punctuation_slop=20, max_line_length=None
+):
     """Apply safe source line breaks and report unfinished source spans."""
     with open(filename, encoding="utf-8", newline="") as fp:
         content = fp.read()
@@ -1268,7 +1309,10 @@ def autofix_markdown_file(filename, wrapnumber=55, punctuation_slop=20):
     # issue at a time re-lints the whole file for every single fix.
     for _ in range(100):
         issues = markdown_lint_issues_from_text(
-            content, wrapnumber=wrapnumber, punctuation_slop=punctuation_slop
+            content,
+            wrapnumber=wrapnumber,
+            punctuation_slop=punctuation_slop,
+            max_line_length=max_line_length,
         )
         fixable = {}
         for line_number, message in issues:
