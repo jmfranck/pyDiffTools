@@ -1207,8 +1207,8 @@ def apply_markdown_issue_fix(content, line_number, message):
             updated,
             before,
             after,
-            "A crossref marker was separated from its equation or figure. "
-            "I joined it back on.",
+            "One or more crossref markers were separated from their "
+            "equation or figure. I joined them back on.",
         )
         # }}}
     old_line = lines[index]
@@ -1239,7 +1239,8 @@ def apply_markdown_issue_fix(content, line_number, message):
             "".join(lines),
             old_line,
             old_line[:-1],
-            "A line ended with a single stray space. I removed it.",
+            "One or more lines ended with a single stray space. I removed "
+            "those spaces.",
         )
     if message.startswith("line too long:"):
         match = re.search(r"after '(.+?)' \(before '(.+?)'\); move", message)
@@ -1263,8 +1264,8 @@ def apply_markdown_issue_fix(content, line_number, message):
         first = old_line[:split_at].rstrip()
         second = old_line[split_at:].lstrip(" \t")
         reason = (
-            "This line was hard to read because it held too many words. "
-            "I moved the next words onto a new line."
+            "One or more lines were run-on lines, longer than the line "
+            "width. I moved the extra words onto new lines."
         )
     elif message.startswith("sentence ends mid-line"):
         boundary = SENTENCE_BOUNDARY.search(old_line)
@@ -1276,8 +1277,11 @@ def apply_markdown_issue_fix(content, line_number, message):
         first = old_line[: boundary.end(1)].rstrip()
         second = old_line[boundary.end(2) :].lstrip(" \t")
         reason = (
-            "A sentence ended, but the next sentence continued on the same "
-            "source line. I started it on a new line."
+            "One or more sentences started in the middle of a source line. "
+            "Since you can line-break the source wherever you want (only "
+            "double breaks give a new paragraph), you should <b>always "
+            "start sentences on new lines</b>. I started each one on a new "
+            "line."
         )
     else:
         raise ValueError(f"No automatic fix is available for {message!r}")
@@ -1614,15 +1618,15 @@ def autofix_markdown_file(
                 reasons = []
                 if result["linted"]:
                     reasons.append(
-                        "This edit made a line too long or ended a sentence "
-                        "mid-line. I broke it where it keeps the most lines "
-                        "unchanged from git HEAD."
+                        "One or more edits made a line too long or ended a "
+                        "sentence mid-line. I broke those lines where they "
+                        "keep the most lines unchanged from git HEAD."
                     )
                 if result["moved"]:
                     reasons.append(
-                        "This edit moved a line break away from where git "
-                        "HEAD has it. I put it back so the unchanged lines "
-                        "stay unchanged."
+                        "One or more edits moved a line break away from "
+                        "where git HEAD has it. I put those breaks back so "
+                        "the unchanged lines stay unchanged."
                     )
                 fixes.append(
                     {

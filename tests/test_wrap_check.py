@@ -104,7 +104,7 @@ def test_markdown_autofix_inserts_soft_returns(tmp_path):
     assert markdown_lint_issues_from_text(fixed, wrapnumber=55) == []
     assert "First sentence ends here.\nA second sentence" in fixed
     assert any(
-        "moved the next words" in item["reason"]
+        "moved the extra words" in item["reason"]
         for item in report["fixes"]
     )
 
@@ -120,7 +120,7 @@ def test_one_reported_long_line_is_fixed_at_the_suggested_word():
     assert before in source
     assert "\n" in after
     assert after in fixed
-    assert "hard to read" in reason
+    assert "run-on lines" in reason
 
 
 def test_lint_line_numbers_survive_labeled_display_math():
@@ -746,7 +746,7 @@ def test_stray_line_break_in_an_unchanged_line_is_rejoined(tmp_path):
 
     assert path.read_text() == HEAD_PARAGRAPH
     assert numstat(path) == (0, 0)
-    assert "put it back" in report["fixes"][0]["reason"]
+    assert "put those breaks back" in report["fixes"][0]["reason"]
 
 
 def test_one_moved_line_break_is_moved_back(tmp_path):
@@ -937,3 +937,23 @@ def test_qt_fix_windows_create_their_own_application():
 
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "shown"
+
+
+def test_fix_reasons_cover_one_or_more_lines(tmp_path):
+    # one reason heads a whole page of fixes, so it never says "a line"
+    path = tmp_path / "source.md"
+    path.write_text(
+        "First sentence ends here. A second sentence begins.\n"
+        "This line is a run-on line that goes on well past the width.\n"
+        "It ends with a stray space. \n"
+    )
+
+    report = autofix_markdown_file(path, wrapnumber=55)
+
+    reasons = {fix["reason"] for fix in report["fixes"]}
+    assert len(reasons) == 3
+    assert all(reason.startswith("One or more ") for reason in reasons)
+    assert any(
+        "<b>always start sentences on new lines</b>" in reason
+        for reason in reasons
+    )
