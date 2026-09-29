@@ -145,7 +145,8 @@ def show_markdown_fix_dialog(report):
 
     fixes = report["fixes"]
     warnings = report["warnings"]
-    if not fixes and not warnings:
+    layout = report.get("layout", [])
+    if not fixes and not warnings and not layout:
         return
 
     dialog = QDialog()
@@ -196,6 +197,7 @@ def show_markdown_fix_dialog(report):
         records.append(
             {"record_type": "fix", "reason": reason, "fixes": page}
         )
+    records += [{"record_type": "layout", **notice} for notice in layout]
     records += [
         {"record_type": "warning", **warning} for warning in warnings
     ]
@@ -275,6 +277,40 @@ def show_markdown_fix_dialog(report):
             preview.setHtml(
                 "<pre style='font-family:monospace; margin:0'>"
                 + "<br><br>".join(entries)
+                + "</pre>"
+            )
+            # }}}
+            button.setText("Next" if index + 1 < len(records) else "Done")
+        elif record["record_type"] == "layout":
+            heading.setText(
+                "These line breaks differ from git HEAD in "
+                f"{record['moves']} places." + page
+            )
+            details.setText(
+                "Keeping these lines as they are in git HEAD would need "
+                f"{record['moves']} line breaks moved, so I left them as you "
+                "wrote them. If you did not mean to rearrange these lines, "
+                "lay them out as suggested."
+            )
+            line_numbers.setVisible(False)
+            # {{{ show HEAD, the current source and the suggested layout
+            sections = []
+            for title, text, numbered in (
+                ("git HEAD:", record["head"], False),
+                ("Now:", record["current"], True),
+                ("Suggested:", record["suggested"], True),
+            ):
+                rows = [escape(title)]
+                for offset, value in enumerate(text.split("\n")):
+                    number = record["line"] + offset if numbered else ""
+                    rows.append(
+                        f"<span style='color:#666'>{number:>6}</span> "
+                        + escape(value)
+                    )
+                sections.append("<br>".join(rows))
+            preview.setHtml(
+                "<pre style='font-family:monospace; margin:0'>"
+                + "<br><br>".join(sections)
                 + "</pre>"
             )
             # }}}
@@ -369,9 +405,11 @@ def run_pandoc(
 
     automatic_fixes_were_made = False
     while True:
-        report = autofix_markdown_file(filename, wrapnumber=wrapnumber)
+        report = autofix_markdown_file(
+            filename, wrapnumber=wrapnumber, git_head=True
+        )
         automatic_fixes_were_made |= bool(report["fixes"])
-        if report["fixes"] or report["warnings"]:
+        if report["fixes"] or report["warnings"] or report["layout"]:
             user_says_fixed = show_markdown_fix_dialog(report)
             if report["warnings"]:
                 if not user_says_fixed:

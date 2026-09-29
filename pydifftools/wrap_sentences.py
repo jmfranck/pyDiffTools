@@ -1,7 +1,10 @@
+import os
 import re
+import subprocess
 import sys
 import itertools
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 
 from .command_registry import register_command
 
@@ -1289,11 +1292,364 @@ def apply_markdown_issue_fix(content, line_number, message):
     return "".join(lines), old_line, after, reason
 
 
-def autofix_markdown_file(filename, wrapnumber=55, punctuation_slop=20):
-    """Apply safe source line breaks and report unfinished source spans."""
+def autofix_markdown_file(
+    filename, wrapnumber=55, punctuation_slop=20, git_head=False
+):
+    """Apply safe source line breaks and report unfinished source spans.
+
+    With `git_head`, line breaks in the hunks that differ from the file's
+    git HEAD version are first placed to keep that diff small (see
+    "layout" in the returned report for hunks that would need more than
+    one line break moved).
+    """
     with open(filename, encoding="utf-8", newline="") as fp:
         content = fp.read()
     fixes = []
+    layout = []
+    baseline = None
+    if git_head:
+        directory, basename = os.path.split(os.path.abspath(filename))
+        try:
+            with subprocess.Popen(
+                ["git", "-C", directory, "show", "HEAD:./" + basename],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            ) as shown:
+                output = shown.communicate()[0]
+            if shown.returncode == 0:
+                baseline = output.decode("utf-8")
+        except FileNotFoundError:
+            # git is not installed
+            pass
+    if baseline is not None:
+        # {{{ place line breaks in changed hunks to keep the HEAD diff small
+
+        def mask_comment(match):
+            return "".join("\n" if char == "\n" else " " for char in match[0])
+
+        prefix_pattern = re.compile(
+            r"^(?P<quote>(?:[ \t]*>[ \t]?)*)(?P<indent>[ \t]*)"
+            r"(?:(?P<marker>[-+*]|[0-9]+[.)])(?P<space>[ \t]+))?"
+        )
+
+        def line_tokens(text):
+            """Words of each line, after its list or quote prefix."""
+            masked = re.sub(
+                r"<!--.*?(?:-->|\Z)", mask_comment, text, flags=re.DOTALL
+            )
+            result = []
+            start = 0
+            for number, line in enumerate(masked.splitlines(keepends=True)):
+                prefix = prefix_pattern.match(line)
+                result.extend(
+                    (number, start + found.start(), start + found.end())
+                    for found in WORD.finditer(line, prefix.end())
+                )
+                start += len(line)
+            return masked, result
+
+        head_lines = baseline.splitlines(keepends=True)
+        lines = content.splitlines(keepends=True)
+        line_starts = [0]
+        for line in lines:
+            line_starts.append(line_starts[-1] + len(line))
+        masked, tokens = line_tokens(content)
+        prose = [
+            allowed and line.strip() != ""
+            for allowed, line in classify_lines(masked, strict=False)
+        ]
+        prefixes = [prefix_pattern.match(line) for line in lines]
+        continuations = [
+            found["quote"]
+            + found["indent"]
+            + (
+                " " * (len(found["marker"]) + len(found["space"]))
+                if found["marker"]
+                else ""
+            )
+            for found in prefixes
+        ]
+        results = []
+        for operation, i1, i2, j1, j2 in SequenceMatcher(
+            None, head_lines, lines, autojunk=False
+        ).get_opcodes():
+            if operation == "equal" or j1 == j2:
+                continue
+            hunk_start, hunk_end = line_starts[j1], line_starts[j2]
+            hunk_tokens = [token for token in tokens if j1 <= token[0] < j2]
+            head_text = "".join(head_lines[i1:i2])
+            head_masked, head_tokens = line_tokens(head_text)
+            matched = set()
+            for block in SequenceMatcher(
+                None,
+                [head_masked[a:b] for _, a, b in head_tokens],
+                [masked[a:b] for _, a, b in hunk_tokens],
+                autojunk=False,
+            ).get_matching_blocks():
+                matched.update(range(block.b, block.b + block.size))
+            # {{{ find the gaps between prose words where a break may move
+            gaps = []
+            for k in range(len(hunk_tokens) - 1):
+                left_line, _, left_end = hunk_tokens[k]
+                right_line, right_start, _ = hunk_tokens[k + 1]
+                raw = content[left_end:right_start]
+                if not (prose[left_line] and prose[right_line]):
+                    continue
+                if left_line == right_line:
+                    if raw.strip(" \t"):
+                        continue
+                elif (
+                    right_line != left_line + 1
+                    or prefixes[right_line]["marker"]
+                    or prefixes[right_line].group(0)
+                    != continuations[left_line]
+                    or raw.strip(" \t\r\n") != prefixes[right_line][
+                        "quote"
+                    ].strip(" \t")
+                ):
+                    continue
+                gaps.append(
+                    {
+                        "start": left_end,
+                        "stop": right_start,
+                        "newline": "\n" in raw,
+                        "line": left_line,
+                        # breaks between two newly written words are the
+                        # writer's choice; only lint rules move those
+                        "free": k not in matched and k + 1 not in matched,
+                        "sentence": bool(
+                            re.search(
+                                "(" + SENTENCE_END + r")$",
+                                content[max(0, left_end - 4) : left_end],
+                            )
+                        ),
+                    }
+                )
+            # }}}
+            # a hunk this large is a wholesale reflow, not a stray line
+            # break, so leave it to the lint rules alone
+            if not gaps or len(gaps) > 400:
+                continue
+            ending = "\r\n" if "\r\n" in content[hunk_start:hunk_end] else "\n"
+            rendered = {}
+            scores = {}
+
+            def render(flags):
+                """The hunk with each gap a space or a line break, and the
+                (row, column) where each gap starts."""
+                key = tuple(flags)
+                if key not in rendered:
+                    output = []
+                    columns = []
+                    where = [0, 0]  # row and column of the output's end
+
+                    def append(piece):
+                        output.append(piece)
+                        if "\n" in piece:
+                            where[0] += piece.count("\n")
+                            where[1] = len(piece) - piece.rfind("\n") - 1
+                        else:
+                            where[1] += len(piece)
+
+                    position = hunk_start
+                    for gap, flag in zip(gaps, flags):
+                        append(content[position : gap["start"]])
+                        columns.append(tuple(where))
+                        if flag == gap["newline"]:
+                            append(content[gap["start"] : gap["stop"]])
+                        elif flag:
+                            append(ending + continuations[gap["line"]])
+                        else:
+                            append(" ")
+                        position = gap["stop"]
+                    append(content[position:hunk_end])
+                    rendered[key] = ("".join(output), columns)
+                return rendered[key]
+
+            def kept(text):
+                """How many HEAD lines the hunk keeps unchanged.
+
+                Fewer lines alone does not count as closer to HEAD, so
+                rewritten text keeps the writer's line breaks.
+                """
+                if text not in scores:
+                    scores[text] = sum(
+                        block.size
+                        for block in SequenceMatcher(
+                            None,
+                            [line.rstrip() for line in head_text.splitlines()],
+                            [line.rstrip() for line in text.splitlines()],
+                            autojunk=False,
+                        ).get_matching_blocks()
+                    )
+                return scores[text]
+
+            def too_long(flags):
+                """Rendered lines past the width that a gap could break."""
+                text, columns = render(flags)
+                rendered = text.splitlines()
+                return [
+                    number
+                    for number in sorted(
+                        {row for (row, _), flag in zip(columns, flags)
+                         if not flag}
+                    )
+                    if len(rendered[number].rstrip()) > wrapnumber
+                ]
+
+            original = [gap["newline"] for gap in gaps]
+            # {{{ lint first: a break after each sentence, and a break in
+            # each overlong line wherever it keeps the most HEAD lines
+            base = [
+                flag or gap["sentence"] for flag, gap in zip(original, gaps)
+            ]
+            for _ in range(len(gaps)):
+                overlong = too_long(base)
+                if not overlong:
+                    break
+                text, columns = render(base)
+                row = overlong[0]
+                line_text = text.splitlines()[row]
+                prefix = prefix_pattern.match(line_text).group(0)
+                words = WORD.findall(line_text[len(prefix) :])
+                upto = _next_break(
+                    words,
+                    wrapnumber - len(prefix),
+                    punctuation_slop,
+                    _math_boundaries(words),
+                    0,
+                )
+                wr_column = len(prefix) + len(" ".join(words[: upto + 1]))
+                candidates = [
+                    number
+                    for number, ((gap_row, column), flag) in enumerate(
+                        zip(columns, base)
+                    )
+                    if gap_row == row and not flag
+                ]
+                fitting = [
+                    number
+                    for number in candidates
+                    if columns[number][1] <= wrapnumber
+                ] or candidates[:1]
+
+                def with_break(number):
+                    return [
+                        flag or other == number
+                        for other, flag in enumerate(base)
+                    ]
+
+                base = with_break(
+                    min(
+                        fitting,
+                        key=lambda number: (
+                            -kept(render(with_break(number))[0]),
+                            abs(columns[number][1] - wr_column),
+                        ),
+                    )
+                )
+            # }}}
+            # {{{ then join or move breaks next to HEAD's words while that
+            # restores HEAD lines; only the lint rules above may add a break
+            best = list(base)
+            best_kept = kept(render(best)[0])
+            moves = 0
+            for _ in range(len(gaps)):
+                trials = []
+                for number, gap in enumerate(gaps):
+                    if (
+                        not best[number]
+                        or gap["free"]
+                        or gap["sentence"]
+                    ):
+                        continue
+                    joined = list(best)
+                    joined[number] = False
+                    trials.append(joined)
+                    # or slide the break to another gap of the joined line
+                    columns = render(joined)[1]
+                    for other, flag in enumerate(joined):
+                        if (
+                            not flag
+                            and other != number
+                            and columns[other][0] == columns[number][0]
+                        ):
+                            moved = list(joined)
+                            moved[other] = True
+                            trials.append(moved)
+                limit = len(too_long(best))
+                scored = [
+                    (kept(render(trial)[0]), trial)
+                    for trial in trials
+                    if len(too_long(trial)) <= limit
+                ]
+                if not scored:
+                    break
+                trial_kept, trial = max(scored, key=lambda item: item[0])
+                if trial_kept <= best_kept:
+                    break
+                best_kept, best = trial_kept, trial
+                moves += 1
+            # }}}
+            chosen = best if moves == 1 else base
+            results.append(
+                {
+                    "j1": j1,
+                    "j2": j2,
+                    "start": hunk_start,
+                    "stop": hunk_end,
+                    "old": content[hunk_start:hunk_end],
+                    "new": render(chosen)[0],
+                    "linted": base != original,
+                    "moved": moves == 1,
+                    "head": head_text,
+                    "suggested": render(best)[0] if moves > 1 else None,
+                    "moves": moves,
+                }
+            )
+        shift = 0
+        for result in results:
+            line = result["j1"] + 1 + shift
+            if result["new"] != result["old"]:
+                reasons = []
+                if result["linted"]:
+                    reasons.append(
+                        "This edit made a line too long or ended a sentence "
+                        "mid-line. I broke it where it keeps the most lines "
+                        "unchanged from git HEAD."
+                    )
+                if result["moved"]:
+                    reasons.append(
+                        "This edit moved a line break away from where git "
+                        "HEAD has it. I put it back so the unchanged lines "
+                        "stay unchanged."
+                    )
+                fixes.append(
+                    {
+                        "line": line,
+                        "reason": " ".join(reasons),
+                        "before": result["old"].rstrip("\r\n"),
+                        "after": result["new"].rstrip("\r\n"),
+                    }
+                )
+            if result["suggested"] is not None:
+                layout.append(
+                    {
+                        "line": line,
+                        "moves": result["moves"],
+                        "head": result["head"].rstrip("\r\n"),
+                        "current": result["new"].rstrip("\r\n"),
+                        "suggested": result["suggested"].rstrip("\r\n"),
+                    }
+                )
+            shift += result["new"].count("\n") - result["old"].count("\n")
+        for result in reversed(results):
+            content = (
+                content[: result["start"]]
+                + result["new"]
+                + content[result["stop"] :]
+            )
+        # }}}
     # Lint once, fix every flagged line, then lint again, since fixing one
     # issue at a time re-lints the whole file for every single fix.
     for _ in range(100):
@@ -1338,7 +1694,11 @@ def autofix_markdown_file(filename, wrapnumber=55, punctuation_slop=20):
     if fixes:
         with open(filename, "w", encoding="utf-8", newline="") as fp:
             fp.write(content)
-    return {"fixes": fixes, "warnings": unclosed_markdown_spans(content)}
+    return {
+        "fixes": fixes,
+        "warnings": unclosed_markdown_spans(content),
+        "layout": layout,
+    }
 
 
 @register_command(

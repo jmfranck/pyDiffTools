@@ -660,3 +660,252 @@ def test_wrchk_latex_document(tmp_path):
         wrchk(str(path), wrapnumber=30, punctuation_slop=20)
     wr(str(path), wrapnumber=30)
     wrchk(str(path), wrapnumber=30)
+
+
+# {{{ keep line breaks close to git HEAD
+# from RM_ESR, wrapped the way the manuscript already is
+HEAD_PARAGRAPH = (
+    "Existing Python libraries enable rapid development of a script\n"
+    "that estimates the correlation time of these spectra.\n"
+    "This script determines the field positions and amplitudes of the\n"
+    "spectral lines for an entire variable-temperature experiment.\n"
+    "It implements spline-based smoothing of the spectra in order to\n"
+    "minimize the impact of any noise as part of this determination.\n"
+)
+
+
+def committed_source(tmp_path, text):
+    """A content.md committed to a fresh git repository."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    path = tmp_path / "content.md"
+    path.write_text(text)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "content.md"], check=True
+    )
+    subprocess.run(
+        [
+            "git", "-C", str(tmp_path), "-c", "user.name=t",
+            "-c", "user.email=t@example.org", "commit", "-q", "-m", "head",
+        ],
+        check=True,
+    )
+    return path
+
+
+def numstat(path):
+    """(added, removed) lines against git HEAD."""
+    output = subprocess.run(
+        ["git", "-C", str(path.parent), "diff", "--numstat", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.split()
+    return (int(output[0]), int(output[1])) if output else (0, 0)
+
+
+def test_words_appended_past_the_width_become_one_new_line(tmp_path):
+    path = committed_source(tmp_path, HEAD_PARAGRAPH)
+    path.write_text(
+        HEAD_PARAGRAPH.replace(
+            "of these spectra.\n", "of these spectra across all samples.\n"
+        ).replace(
+            "rapid development of a script\n",
+            "rapid development of a script in a few lines\n",
+        )
+    )
+    # the first edit fits; the second pushes a line past 79 characters
+    path.write_text(
+        path.read_text().replace(
+            "of the\nspectral",
+            "of the three hyperfine lines, and of the\nspectral",
+        )
+    )
+
+    report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
+
+    fixed = path.read_text()
+    assert report["layout"] == []
+    assert markdown_lint_issues_from_text(fixed, 79) == []
+    # the HEAD line stays intact and the added words get one new line
+    assert (
+        "This script determines the field positions and amplitudes of the\n"
+        "three hyperfine lines, and of the\n"
+    ) in fixed
+    assert numstat(path) == (3, 2)
+
+
+def test_stray_line_break_in_an_unchanged_line_is_rejoined(tmp_path):
+    path = committed_source(tmp_path, HEAD_PARAGRAPH)
+    path.write_text(
+        HEAD_PARAGRAPH.replace(
+            "development of a script", "development\nof a script"
+        )
+    )
+
+    report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
+
+    assert path.read_text() == HEAD_PARAGRAPH
+    assert numstat(path) == (0, 0)
+    assert "put it back" in report["fixes"][0]["reason"]
+
+
+def test_one_moved_line_break_is_moved_back(tmp_path):
+    path = committed_source(tmp_path, HEAD_PARAGRAPH)
+    path.write_text(
+        HEAD_PARAGRAPH.replace(
+            "amplitudes of the\nspectral lines",
+            "amplitudes of\nthe spectral lines",
+        )
+    )
+
+    autofix_markdown_file(path, wrapnumber=79, git_head=True)
+
+    assert path.read_text() == HEAD_PARAGRAPH
+
+
+def test_joined_head_lines_past_the_width_get_heads_break_back(tmp_path):
+    path = committed_source(tmp_path, HEAD_PARAGRAPH)
+    path.write_text(
+        HEAD_PARAGRAPH.replace("in order to\nminimize", "in order to minimize")
+    )
+
+    autofix_markdown_file(path, wrapnumber=79, git_head=True)
+
+    assert path.read_text() == HEAD_PARAGRAPH
+
+
+def test_two_moved_line_breaks_in_one_hunk_are_only_reported(tmp_path):
+    path = committed_source(tmp_path, HEAD_PARAGRAPH)
+    edited = HEAD_PARAGRAPH.replace(
+        "amplitudes of the\nspectral lines",
+        "amplitudes\nof the spectral lines",
+    ).replace(
+        "variable-temperature experiment.\nIt implements",
+        "variable-temperature experiment.\nIt\nimplements",
+    )
+    path.write_text(edited)
+
+    report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
+
+    assert path.read_text() == edited
+    ((notice),) = report["layout"]
+    assert notice["moves"] == 2
+    assert notice["line"] == 3
+    assert notice["suggested"] + "\n" in HEAD_PARAGRAPH
+
+
+def test_removed_words_keep_their_line_break(tmp_path):
+    path = committed_source(tmp_path, HEAD_PARAGRAPH)
+    edited = HEAD_PARAGRAPH.replace(
+        "development of a script\nthat", "development\nthat"
+    )
+    path.write_text(edited)
+
+    report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
+
+    assert path.read_text() == edited
+    assert report["fixes"] == [] and report["layout"] == []
+
+
+def test_new_paragraph_keeps_the_writers_line_breaks(tmp_path):
+    path = committed_source(tmp_path, HEAD_PARAGRAPH)
+    new_paragraph = (
+        "\nThese estimates\n"
+        "depend only weakly on the choice of smoothing.\n"
+    )
+    path.write_text(HEAD_PARAGRAPH + new_paragraph)
+
+    report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
+
+    assert path.read_text() == HEAD_PARAGRAPH + new_paragraph
+    assert report["fixes"] == [] and report["layout"] == []
+
+
+def test_whole_file_is_still_linted_against_head(tmp_path):
+    # a problem that git HEAD already has still has to be fixed
+    path = committed_source(
+        tmp_path, HEAD_PARAGRAPH.replace("spectra.\n", "spectra. \n")
+    )
+
+    autofix_markdown_file(path, wrapnumber=79, git_head=True)
+
+    assert path.read_text() == HEAD_PARAGRAPH
+
+
+def test_file_outside_git_is_linted_without_head(tmp_path):
+    path = tmp_path / "content.md"
+    path.write_text(
+        HEAD_PARAGRAPH.replace(
+            "development of a script", "development\nof a script"
+        )
+    )
+
+    report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
+
+    assert report["fixes"] == [] and report["layout"] == []
+
+
+# }}}
+
+
+def test_rewritten_sentence_keeps_its_semantic_line_breaks(tmp_path):
+    # from RM_ESR: a rewrite that breaks at each phrase shares words with
+    # HEAD, but joining its lines would not restore any HEAD line
+    head = (
+        "Peric *et al.* also observed that\n"
+        "even similarly sized nitroxide probes can report\n"
+        "different rotational dynamics in bulk water.\n"
+    )
+    rewrite = (
+        "Peric *et al.* also observed that\n"
+        "the rotational dynamics\n"
+        "of different small nitroxide probes\n"
+        "in bulk water\n"
+        "differ significantly.\n"
+    )
+    path = committed_source(tmp_path, head)
+    path.write_text(rewrite)
+
+    report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
+
+    assert path.read_text() == rewrite
+    assert report["fixes"] == [] and report["layout"] == []
+
+
+def test_qt_layout_notice_shows_head_now_and_suggested(tmp_path):
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication, QDialog, QLabel
+    from PySide6.QtWidgets import QPushButton, QTextEdit
+
+    from pydifftools.continuous import show_markdown_fix_dialog
+
+    app = QApplication.instance() or QApplication([])
+    path = committed_source(tmp_path, HEAD_PARAGRAPH)
+    path.write_text(
+        HEAD_PARAGRAPH.replace(
+            "amplitudes of the\nspectral lines",
+            "amplitudes\nof the spectral lines",
+        ).replace(
+            "experiment.\nIt implements", "experiment.\nIt\nimplements"
+        )
+    )
+    report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
+    seen = {}
+
+    def inspect():
+        dialog = next(
+            widget
+            for widget in app.topLevelWidgets()
+            if isinstance(widget, QDialog) and widget.isVisible()
+        )
+        seen["heading"] = dialog.findChildren(QLabel)[0].text()
+        seen["preview"] = dialog.findChild(QTextEdit).toPlainText()
+        dialog.findChild(QPushButton).click()
+
+    QTimer.singleShot(0, inspect)
+    show_markdown_fix_dialog(report)
+
+    assert "differ from git HEAD in 2 places" in seen["heading"]
+    head, now, suggested = seen["preview"].split("\n\n")
+    assert head.startswith("git HEAD:")
+    assert re.search(r"^ +3 This script determines .* amplitudes$", now, re.M)
+    assert re.search(r"^ +4 spectral lines for", suggested, re.M)
