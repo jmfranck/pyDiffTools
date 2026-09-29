@@ -80,6 +80,8 @@ def _most_distant_hue(colors):
     return (start + gap_size / 2) % 360
 
 
+# also used by: tests/test_comment_migration.py, which compiles its Qt
+# script and monkeypatches it (cpb calls it from prepare_comment_source)
 def _migration_dialog(filename, colors, legacy):
     """Ask Qt for all migrations and return decisions without editing files."""
     script = r"""

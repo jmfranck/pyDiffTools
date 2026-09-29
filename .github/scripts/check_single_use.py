@@ -49,6 +49,8 @@ class ModuleAnalyzer(ast.NodeVisitor):
         self.with_alias_definitions = set()
         self.module_variable_uses = defaultdict(list)
         self.top_level_function_definitions = defaultdict(list)
+        # first line of each top-level function, including its decorators
+        self.top_level_function_starts = {}
         self.direct_function_calls = defaultdict(list)
         self.main_guard_direct_calls = defaultdict(list)
         self.imported_function_names = {}
@@ -56,7 +58,8 @@ class ModuleAnalyzer(ast.NodeVisitor):
     def visit_ImportFrom(self, node: ast.ImportFrom):
         for alias in node.names:
             if alias.name != "*":
-                self.imported_function_names[alias.asname or alias.name] = alias.name
+                local_name = alias.asname or alias.name
+                self.imported_function_names[local_name] = alias.name
         self.generic_visit(node)
 
     def _record_target(
@@ -189,14 +192,20 @@ class ModuleAnalyzer(ast.NodeVisitor):
             self.main_guard_depth -= 1
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
-        if self.scope_depth == 0 and self.class_depth == 0:
-            self.top_level_function_definitions[node.name].append(node.lineno)
+        self._record_function(node)
         self._visit_nested_scope(node)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+        self._record_function(node)
+        self._visit_nested_scope(node)
+
+    def _record_function(self, node):
         if self.scope_depth == 0 and self.class_depth == 0:
             self.top_level_function_definitions[node.name].append(node.lineno)
-        self._visit_nested_scope(node)
+            self.top_level_function_starts[node.name] = min(
+                [node.lineno]
+                + [decorator.lineno for decorator in node.decorator_list]
+            )
 
     def visit_Lambda(self, node: ast.Lambda):
         self._visit_nested_scope(node)
@@ -287,10 +296,10 @@ def main(argv: list[str] | None = None) -> int:
 
         analyzer = ModuleAnalyzer()
         analyzer.visit(tree)
-        analyzed.append((path, analyzer, allowed_blocks))
+        analyzed.append((path, analyzer, allowed_blocks, lines))
 
     external_calls = defaultdict(list)
-    for path, analyzer, _ in analyzed:
+    for path, analyzer, _, _ in analyzed:
         for local_name, call_lines in analyzer.direct_function_calls.items():
             original_name = analyzer.imported_function_names.get(local_name)
             if original_name is not None:
@@ -298,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
                     (str(path), line) for line in call_lines
                 )
 
-    for path, analyzer, allowed_blocks in analyzed:
+    for path, analyzer, allowed_blocks, lines in analyzed:
         for (
             name,
             definition_lines,
@@ -350,6 +359,19 @@ def main(argv: list[str] | None = None) -> int:
                 name == "main"
                 and call_lines
                 == analyzer.main_guard_direct_calls.get(name, [])
+            ):
+                continue
+            # A comment block directly above the function (or its
+            # decorators) that says where else it is "also used by" (e.g.
+            # another module or a test that calls or monkeypatches it)
+            # marks a deliberate entry point.
+            comment_lines = []
+            line_idx = analyzer.top_level_function_starts[name] - 2
+            while line_idx >= 0 and lines[line_idx].strip().startswith("#"):
+                comment_lines.insert(0, lines[line_idx].strip()[1:])
+                line_idx -= 1
+            if "also used by" in " ".join(
+                " ".join(comment_lines).lower().split()
             ):
                 continue
             definition_line = definition_lines[0]
@@ -408,7 +430,10 @@ def main(argv: list[str] | None = None) -> int:
                 "**NOTE** I'm a little more worried about this error message "
                 "vs. the variable one.  If you want the function to be "
                 "accessible outside the module, you don't want to do this, "
-                "and we should discuss ← (JMF)."
+                "and we should discuss ← (JMF).\n"
+                "Once that is agreed, put a comment directly above the "
+                "function that says where else it is 'also used by' (e.g. "
+                "'# also used by: tests/test_x.py, which monkeypatches it')."
             )
         )
     report_lines.append("")

@@ -93,7 +93,7 @@ def test_live_eigenmode_copy(tmp_path, monkeypatch):
     monkeypatch.setattr(continuous, "FORWARD_SEARCH_PORT", 0)
     monkeypatch.setattr(continuous, "Observer", Mock)
     monkeypatch.setattr(
-        continuous, "_confirm_restore_comment_filter", lambda _mode: True
+        continuous, "confirm_restore_comment_filter", lambda _mode: True
     )
     monkeypatch.setattr(continuous, "zotero_notice", lambda: None)
     monkeypatch.setattr(

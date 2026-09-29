@@ -126,6 +126,8 @@ def normalized_text(value):
     return "".join(char for char in text if char.isalnum())
 
 
+# also used by: tests/test_bibliography.py, which checks these duplicate
+# rules directly (cpb calls it from zotero.recover_bibliography)
 def duplicate_reason(existing, incoming):
     """Identify likely duplicates for human review using Pandoc CSL records.
 
@@ -218,6 +220,8 @@ def markdown_ast(text, renames=None):
     return tree
 
 
+# also used by: tests/test_bibliography.py, which checks citation rewriting
+# directly (cpb calls it from zotero.recover_bibliography)
 def rewrite_citations(markdown, renames):
     """Replace citation tokens, accepting edits only when Pandoc confirms them.
 
@@ -249,6 +253,8 @@ def rewrite_citations(markdown, renames):
     return text.encode("utf-8")
 
 
+# also used by: tests/test_bibliography.py, which checks the all-or-nothing
+# replacement directly (cpb calls it from zotero.recover_bibliography)
 def replace_bibliography_files(changes):
     """Stage validated replacements and roll back if a later replacement fails.
 

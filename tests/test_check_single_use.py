@@ -43,3 +43,35 @@ def test_single_use_function_is_reported(tmp_path):
 
     assert result.returncode == 1
     assert "helper" in result.stdout
+
+
+def test_also_used_by_comment_marks_a_deliberate_entry_point(tmp_path):
+    implementation = tmp_path / "implementation.py"
+    implementation.write_text(
+        "import functools\n\n"
+        "# also used by: tests/test_implementation.py, which calls it\n"
+        "# directly and monkeypatches it\n"
+        "@functools.cache\n"
+        "def helper():\n    return 1\n\n"
+        "value = helper()\n"
+    )
+
+    result = run_checker(implementation)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_other_comments_above_a_function_do_not_exempt_it(tmp_path):
+    implementation = tmp_path / "implementation.py"
+    implementation.write_text(
+        "# used only here\n\n"
+        "# a helper that is also\n"
+        "def helper():\n    return 1\n\n"
+        "value = helper()\n"
+    )
+
+    result = run_checker(implementation)
+
+    assert result.returncode == 1
+    assert "helper" in result.stdout
+    assert "also used by" in result.stdout

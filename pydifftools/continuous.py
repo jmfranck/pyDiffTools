@@ -65,6 +65,9 @@ def _comment_filter_mode(path, packaged_filters=None):
 
 
 # Kept separate so its prompt choices can be unit-tested.
+# also used by: tests/test_wrap_check.py and tests/cli/test_commands.py,
+# which call it directly or monkeypatch it to answer the prompt (cpb calls
+# it from run_pandoc)
 def confirm_restore_comment_filter(active_mode):
     if active_mode == "none":
         message = (
@@ -130,6 +133,8 @@ sys.exit(1)
     raise RuntimeError("pydifft cpb filter dialog failed.")
 
 
+# also used by: tests/test_wrap_check.py, which drives this window directly
+# (cpb calls it from run_pandoc)
 def show_markdown_fix_dialog(report):
     """Show automatic fixes and any source edits that still need a user."""
     from html import escape
@@ -366,6 +371,8 @@ def show_markdown_fix_dialog(report):
     return user_says_fixed
 
 
+# also used by: tests/test_wrap_check.py, which drives this window directly
+# (cpb calls it from run_pandoc)
 def show_markdown_reload_dialog():
     """Ask the user to reload a source file changed by automatic fixes."""
     from PySide6.QtWidgets import (

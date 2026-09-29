@@ -40,6 +40,8 @@ def close_browser_window(browser):
         pass
 
 
+# also used by: notebook/fast_build.py (qmdb's forward search), besides
+# cpb in continuous.py; tests/test_continuous_shutdown.py monkeypatches it
 def forward_search_in_browser(browser, search_text):
     # Reuse the same browser-side find logic across cpb and qmdb.
     if browser is None or not search_text:
