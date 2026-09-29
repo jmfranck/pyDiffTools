@@ -13,11 +13,14 @@ def test_hue_picker_starts_at_seed_and_fills_largest_hue_gap():
     assert _most_distant_hue(["#ff0000", "#00ff00"]) == pytest.approx(240)
 
 
-def test_migration_dialog_builds_qt_script_and_decodes_result(monkeypatch):
+def test_migration_dialog_builds_qt_script_and_decodes_result(
+    tmp_path, monkeypatch
+):
     captured = {}
 
     def fake_run(command, **_kwargs):
         captured["script"] = command[2]
+        captured["command"] = command
         compile(command[2], "<comment migration dialog>", "exec")
         return type(
             "Completed",
@@ -27,11 +30,17 @@ def test_migration_dialog_builds_qt_script_and_decodes_result(monkeypatch):
 
     monkeypatch.setattr(comment_migration.subprocess, "run", fake_run)
 
-    result = _migration_dialog("<ABcom>note</ABcom>", {}, False)
+    path = tmp_path / "notes.md"
+    path.write_text("<ABcom>note</ABcom>", encoding="utf-8")
+    result = _migration_dialog(str(path), {}, False)
 
     assert result == {"accepted": True}
     assert "QColor.fromHsv" in captured["script"]
     assert "QComboBox" in captured["script"]
+    # the document is passed by filename, since large files exceed the argv
+    # limit
+    assert captured["command"][4] == str(path)
+    assert "<ABcom>" not in captured["command"][3]
 
 
 def test_prepare_migrates_legacy_tags_and_div_classes(tmp_path, monkeypatch):

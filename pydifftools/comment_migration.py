@@ -78,7 +78,7 @@ def _most_distant_hue(colors):
     return (start + gap_size / 2) % 360
 
 
-def _migration_dialog(text, colors, legacy):
+def _migration_dialog(filename, colors, legacy):
     """Ask Qt for all migrations and return decisions without editing files."""
     script = r"""
 import colorsys
@@ -95,6 +95,8 @@ from PySide6.QtWidgets import (
 )
 
 payload = json.loads(sys.argv[1])
+with open(sys.argv[2], encoding="utf-8", newline="") as fp:
+    text = fp.read()
 colors = payload["colors"]
 app = QApplication(sys.argv[:1])
 result = {"accepted": True, "replacements": {}, "colors": {}}
@@ -201,9 +203,9 @@ legacy = payload["legacy"]
 if legacy:
     initials = ask_legacy_initials()
     legacy_occurrences = len(re.findall(
-        r"</?comment(?:-(?:left|right))?>", payload["text"], re.I
+        r"</?comment(?:-(?:left|right))?>", text, re.I
     )) + len(re.findall(
-        r"\.comment-(?:left|right)(?=[\s}])", payload["text"], re.I
+        r"\.comment-(?:left|right)(?=[\s}])", text, re.I
     ))
     if initials is None:
         result["accepted"] = False
@@ -222,12 +224,12 @@ if legacy:
 if result["accepted"]:
     authors = sorted(set(
         initials.upper() for initials in re.findall(
-            r"</?([A-Za-z]{2})com(?:-(?:left|right))?>", payload["text"], re.I
+            r"</?([A-Za-z]{2})com(?:-(?:left|right))?>", text, re.I
         )
     ) | set(
         initials.upper() for initials in re.findall(
             r"\.([A-Za-z]{2})com(?:-(?:left|right))?(?=[\s}])",
-            payload["text"], re.I
+            text, re.I
         )
     ))
     if result["replacements"].get("legacy"):
@@ -279,8 +281,10 @@ if result["accepted"]:
 print(json.dumps(result))
 """
     completed = subprocess.run(
+        # the dialog reads the document from its file, since the text of a
+        # large document exceeds the operating system's argument limit
         [sys.executable, "-c", textwrap.dedent(script),
-         json.dumps({"text": text, "colors": colors, "legacy": legacy})],
+         json.dumps({"colors": colors, "legacy": legacy}), filename],
         capture_output=True, text=True,
     )
     if completed.returncode:
@@ -319,7 +323,7 @@ def prepare_comment_source(filename):
     }
     if not has_legacy and authors.issubset(colors):
         return original
-    decisions = _migration_dialog(original, colors, has_legacy)
+    decisions = _migration_dialog(filename, colors, has_legacy)
     if not decisions.get("accepted"):
         raise RuntimeError("cpb comment migration was canceled")
     updated = original
