@@ -132,7 +132,7 @@ def show_markdown_fix_dialog(report):
     from html import escape
 
     from PySide6.QtCore import Qt
-    from PySide6.QtGui import QFontDatabase
+    from PySide6.QtGui import QFontDatabase, QFontMetrics
     from PySide6.QtWidgets import (
         QApplication,
         QDialog,
@@ -145,14 +145,7 @@ def show_markdown_fix_dialog(report):
 
     fixes = report["fixes"]
     warnings = report["warnings"]
-    records = [
-        {"record_type": "fix", **fix}
-        for fix in fixes
-    ] + [
-        {"record_type": "warning", **warning}
-        for warning in warnings
-    ]
-    if not records:
+    if not fixes and not warnings:
         return
 
     dialog = QDialog()
@@ -160,7 +153,53 @@ def show_markdown_fix_dialog(report):
         QApplication.instance() or QApplication([])
     )
     dialog.setWindowTitle("Markdown source fixes")
-    dialog.resize(760, 480)
+    fixed_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+    # {{{ group fixes of one kind onto pages that fill the screen
+    screen_height = dialog.screen().availableGeometry().height()
+    dialog.resize(900, int(screen_height * 0.85))
+    # leave room for the heading, explanation, button and margins
+    page_rows = max(
+        3,
+        int(
+            (screen_height * 0.85 - 120)
+            / QFontMetrics(fixed_font).lineSpacing()
+        ),
+    )
+    groups = {}
+    for fix in fixes:
+        groups.setdefault(fix["reason"], []).append(fix)
+    records = []
+    for reason, group in groups.items():
+        page = []
+        rows = 0
+        for fix in sorted(group, key=lambda fix: fix["line"]):
+            # a blank line separates each fix from the one before it, and a
+            # fix that only drops trailing spaces shows just its old line
+            fix_rows = (
+                len(fix["before"].splitlines() or [""])
+                + (
+                    0
+                    if fix["after"] == fix["before"].rstrip()
+                    else len(fix["after"].splitlines() or [""])
+                )
+                + (1 if page else 0)
+            )
+            if page and rows + fix_rows > page_rows:
+                records.append(
+                    {"record_type": "fix", "reason": reason, "fixes": page}
+                )
+                page = []
+                rows = 0
+                fix_rows -= 1
+            page.append(fix)
+            rows += fix_rows
+        records.append(
+            {"record_type": "fix", "reason": reason, "fixes": page}
+        )
+    records += [
+        {"record_type": "warning", **warning} for warning in warnings
+    ]
+    # }}}
     layout = QVBoxLayout(dialog)
     heading = QLabel()
     heading.setWordWrap(True)
@@ -175,14 +214,10 @@ def show_markdown_fix_dialog(report):
         Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight
     )
     line_numbers.setStyleSheet("color: #666; padding-right: 8px;")
-    line_numbers.setFont(
-        QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-    )
+    line_numbers.setFont(fixed_font)
     preview = QTextEdit()
     preview.setReadOnly(True)
-    preview.setFont(
-        QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-    )
+    preview.setFont(fixed_font)
     preview_row.addWidget(line_numbers)
     preview_row.addWidget(preview, 1)
     layout.addLayout(preview_row, 1)
@@ -194,37 +229,60 @@ def show_markdown_fix_dialog(report):
 
     def show_record():
         record = records[index]
-        line = record["line"]
+        page = (
+            f" (page {index + 1} of {len(records)})"
+            if len(records) > 1
+            else ""
+        )
         if record["record_type"] == "fix":
-            heading.setText("I fixed this source line automatically.")
+            count = len(record["fixes"])
+            heading.setText(
+                "I fixed this source line automatically." + page
+                if count == 1
+                else f"I fixed these {count} source lines automatically."
+                + page
+            )
             details.setText(record["reason"])
-            before_lines = record["before"].splitlines() or [""]
-            after_lines = record["after"].splitlines() or [""]
-            source_html = ""
-            numbers = []
-            if "\n" in record["after"]:
-                after_html = "<br>↳ ".join(
-                    escape(value)
-                    for value in record["after"].split("\n")
-                )
-                source_html = (
-                    "<pre style='font-family:monospace; margin:0'>"
-                    + "Before:<br>"
-                    + "<br>".join(escape(value) for value in before_lines)
-                    + "<br><br>After:<br>"
-                    + after_html
-                    + "</pre>"
-                )
-                numbers = [""] + list(
-                    range(line, line + len(before_lines))
-                )
-                numbers += ["", ""]
-                numbers += list(range(line, line + len(after_lines)))
-            line_numbers.setText("<br>".join(str(value) for value in numbers))
-            preview.setHtml(source_html)
+            line_numbers.setVisible(False)
+            # {{{ show each fix as numbered before (−) and after (+) lines
+            entries = []
+            for fix in record["fixes"]:
+                rows = []
+                for offset, value in enumerate(
+                    fix["before"].splitlines() or [""]
+                ):
+                    stripped = value.rstrip(" ")
+                    rows.append(
+                        f"<span style='color:#666'>{fix['line'] + offset:>6}"
+                        "</span> − "
+                        + escape(stripped)
+                        # make stray trailing spaces visible
+                        + "<span style='background:#fbb'>·</span>"
+                        * (len(value) - len(stripped))
+                    )
+                for offset, value in enumerate(
+                    []
+                    if fix["after"] == fix["before"].rstrip()
+                    else fix["after"].split("\n")
+                ):
+                    rows.append(
+                        f"<span style='color:#666'>{fix['line'] + offset:>6}"
+                        "</span> "
+                        + ("+ " if offset == 0 else "↳ ")
+                        + escape(value)
+                    )
+                entries.append("<br>".join(rows))
+            preview.setHtml(
+                "<pre style='font-family:monospace; margin:0'>"
+                + "<br><br>".join(entries)
+                + "</pre>"
+            )
+            # }}}
             button.setText("Next" if index + 1 < len(records) else "Done")
         else:
-            heading.setText("This source span is not closed.")
+            line = record["line"]
+            heading.setText("This source span is not closed." + page)
+            line_numbers.setVisible(True)
             if record["kind"] == "math":
                 delimiter = record["delimiter"]
                 details.setText(

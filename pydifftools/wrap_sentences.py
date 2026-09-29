@@ -1190,10 +1190,15 @@ def apply_markdown_issue_fix(content, line_number, message):
         else:
             span = found.span("gap")
             joined = ""
-        before = content[found.start() : found.end()]
         updated = content[: span[0]] + joined + content[span[1] :]
+        # report the whole source lines around the join
+        line_start = content.rfind("\n", 0, found.start()) + 1
+        line_end = content.find("\n", max(found.end(), span[1]))
+        if line_end == -1:
+            line_end = len(content)
+        before = content[line_start:line_end]
         after = updated[
-            found.start() : span[0] + len(joined) + found.end() - span[1]
+            line_start : line_end - (span[1] - span[0]) + len(joined)
         ]
         return (
             updated,

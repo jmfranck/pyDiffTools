@@ -423,11 +423,6 @@ def test_qt_fix_and_reload_windows_show_source_changes(tmp_path):
         )
         seen["preview"] = dialog.findChild(QTextEdit).toPlainText()
         seen["button"] = dialog.findChild(QPushButton).text()
-        seen["line_gutter"] = next(
-            label
-            for label in dialog.findChildren(QLabel)
-            if "#666" in label.styleSheet()
-        ).text()
         seen["heading"] = dialog.findChildren(QLabel)[0].text()
         dialog.findChild(QPushButton).click()
 
@@ -435,7 +430,7 @@ def test_qt_fix_and_reload_windows_show_source_changes(tmp_path):
     show_markdown_fix_dialog(report)
     assert "↳ collection of words" in seen["preview"]
     assert seen["button"] == "Done"
-    assert "1" in seen["line_gutter"]
+    assert re.search(r"^ +1 − This deliberately", seen["preview"], re.M)
     assert "line 1" not in seen["heading"].lower()
 
     def inspect_reload_window():
@@ -452,6 +447,70 @@ def test_qt_fix_and_reload_windows_show_source_changes(tmp_path):
     QTimer.singleShot(0, inspect_reload_window)
     show_markdown_reload_dialog()
     assert seen["reload_button"] == "I've reloaded"
+
+
+def test_qt_fix_window_groups_fixes_of_one_kind_onto_full_pages(tmp_path):
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication, QDialog, QPushButton
+    from PySide6.QtWidgets import QLabel, QTextEdit
+
+    from pydifftools.continuous import show_markdown_fix_dialog
+
+    app = QApplication.instance() or QApplication([])
+    # from RM_ESR: many stray trailing spaces plus one other kind of fix
+    source_path = tmp_path / "content.md"
+    source_path.write_text(
+        "".join(f"Sentence number {j} ends here. \n" for j in range(60))
+        + "\n$$\nx = y\n$$ {#eq:tauFromLinewidth}\n"
+    )
+    report = autofix_markdown_file(source_path)
+    assert len(report["fixes"]) == 61
+    pages = []
+
+    def inspect_page():
+        dialog = next(
+            widget
+            for widget in app.topLevelWidgets()
+            if isinstance(widget, QDialog)
+            and widget.isVisible()
+            and widget.windowTitle() == "Markdown source fixes"
+        )
+        preview = dialog.findChild(QTextEdit).toPlainText()
+        pages.append(
+            {
+                "heading": dialog.findChildren(QLabel)[0].text(),
+                "details": dialog.findChildren(QLabel)[1].text(),
+                "entries": preview.split("\n\n"),
+            }
+        )
+        button = dialog.findChild(QPushButton)
+        if button.text() == "Next":
+            QTimer.singleShot(0, inspect_page)
+        button.click()
+
+    QTimer.singleShot(0, inspect_page)
+    show_markdown_fix_dialog(report)
+
+    trailing = [page for page in pages if "stray space" in page["details"]]
+    crossref = [page for page in pages if "crossref" in page["details"]]
+    # one kind per page, many fixes per page, and every fix shown once
+    assert len(trailing) + len(crossref) == len(pages)
+    assert len(crossref) == 1
+    assert 1 < len(trailing) < 60
+    assert all(len(page["entries"]) > 5 for page in trailing[:-1])
+    assert sum(len(page["entries"]) for page in trailing) == 60
+    assert f"(page 1 of {len(pages)})" in pages[0]["heading"]
+    # a trailing-space entry is just the numbered line with its stray space
+    # made visible, while other fixes also show the line after the fix
+    assert re.fullmatch(
+        r" +1 − Sentence number 0 ends here\.·", trailing[0]["entries"][0]
+    )
+    assert re.fullmatch(
+        r" +64 − \$\$ \{#eq:tauFromLinewidth\}\n +64 \+ "
+        r"\$\$\{#eq:tauFromLinewidth\}",
+        crossref[0]["entries"][0],
+    )
 
 
 def test_qt_unclosed_math_window_bolds_source_and_requests_confirmation():
