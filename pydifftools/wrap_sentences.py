@@ -658,18 +658,29 @@ def _next_break(words, wrapnumber, punctuation_slop, boundaries, offset):
     Shared by wrap_prose (which then emits that line) and check_prose
     (which replays the same choice to see if a source line agrees).
     """
+    # counts[j] - 1 is the length of the line holding words[: j + 1]
     counts = list(itertools.accumulate(len(word) + 1 for word in words))
-    upto = min(range(len(counts)), key=lambda j: abs(counts[j] - wrapnumber))
+    if counts[-1] - 1 <= wrapnumber:
+        # the rest fits, so there is nothing to break
+        return len(words) - 1
+    # the last word that fits within the width (or the first word, if even
+    # that is too long)
+    upto = max(
+        [j for j, count in enumerate(counts) if count - 1 <= wrapnumber]
+        or [0]
+    )
+    # prefer to end the line on a clause (comma, paren, dash, ...) or at an
+    # inline-math boundary within punctuation_slop characters of that break
     candidates = [
         j
-        for j, word in enumerate(words)
-        if (len(word) > 1 and word[-1] in ",;:)-") or offset + j in boundaries
+        for j, word in enumerate(words[: upto + 1])
+        if (
+            (len(word) > 1 and word[-1] in ",;:)-")
+            or offset + j in boundaries
+        )
+        and counts[upto] - counts[j] < punctuation_slop
     ]
-    if candidates:
-        punct = min(candidates, key=lambda j: abs(counts[j] - wrapnumber))
-        if punct < upto and upto - punct < punctuation_slop:
-            upto = punct
-    return upto
+    return max(candidates) if candidates else upto
 
 
 def wrap_prose(
@@ -805,6 +816,11 @@ def _prepare(filename, cleanoo=False, i=-1):
         "filename": "Input file to wrap. Use '-' to read from stdin.",
         "cleanoo": "Strip LibreOffice markup before wrapping.",
         "i": "Indentation level for wrapped lines.",
+        "wrapnumber": "Maximum line width in characters.",
+        "punctuation_slop": (
+            "End a line early on a clause (comma, paren, dash, ...) when "
+            "that is within this many characters of the widest break."
+        ),
     },
     filename_extensions={"filename": [".md", ".tex"]},
 )
@@ -920,7 +936,16 @@ def check_prose(content, wrapnumber, punctuation_slop, line_start=1):
                                 and not breaks_after[actual_end]
                             ):
                                 actual_end += 1
-                            if actual_end > wr_end:
+                            line_length = (
+                                positions[actual_end]
+                                + len(words[actual_end])
+                                - positions[fragment_offset]
+                            )
+                            # only a line that exceeds the width is too long
+                            if (
+                                actual_end > wr_end
+                                and line_length > wrapnumber
+                            ):
                                 overflow = words[wr_end + 1]
                                 issue_line = para_line + stripped.count(
                                     "\n", 0, positions[actual_end]
@@ -1004,13 +1029,9 @@ def _iter_block_spans(blocks, wrapnumber, line_start=1):
 
 
 def markdown_lint_issues_from_text(
-    content, wrapnumber=45, punctuation_slop=20, max_line_length=None
+    content, wrapnumber=45, punctuation_slop=20
 ):
-    """Return Markdown writing issues, including unfinished source spans.
-
-    With `max_line_length`, a prose line is only too long when it holds
-    more than that many characters, instead of wr's greedy line choice.
-    """
+    """Return Markdown writing issues, including unfinished source spans."""
     def mask_comment(match):
         return "".join("\n" if char == "\n" else " " for char in match[0])
 
@@ -1020,30 +1041,13 @@ def markdown_lint_issues_from_text(
     # trailing spaces are reported separately below, and a double space
     # (a hard line break) must not look like a sentence ending mid-line
     prose_content = re.sub(r"[ \t]+$", "", prose_content, flags=re.M)
-    issues = []
-    prose_lines = prose_content.splitlines()
-    for line, width, span in _iter_block_spans(
-        markdown_blocks(prose_content), wrapnumber
-    ):
-        for issue in check_prose(span, width, punctuation_slop, line):
-            if max_line_length is None or not issue[1].startswith(
-                "line too long:"
-            ):
-                issues.append(issue)
-        if max_line_length is not None:
-            # {{{ flag prose lines longer than the character limit
-            for number in range(line, line + len(span.splitlines())):
-                text = prose_lines[number - 1]
-                # a single unbreakable word cannot be shortened
-                if len(text) > max_line_length and len(
-                    WORD.findall(text)
-                ) > 1:
-                    issues.append((
-                        number,
-                        f"line over {max_line_length} characters: break "
-                        "it at a word boundary",
-                    ))
-            # }}}
+    issues = [
+        issue
+        for line, width, span in _iter_block_spans(
+            markdown_blocks(prose_content), wrapnumber
+        )
+        for issue in check_prose(span, width, punctuation_slop, line)
+    ]
     issues.extend(
         (issue["line"], issue["message"])
         for issue in unclosed_markdown_spans(content)
@@ -1229,25 +1233,7 @@ def apply_markdown_issue_fix(content, line_number, message):
             old_line[:-1],
             "A line ended with a single stray space. I removed it.",
         )
-    if message.startswith("line over "):
-        # {{{ break at the last word boundary that fits the limit
-        limit = int(re.match(r"line over (\d+)", message)[1])
-        gaps = [
-            found.end()
-            for found in WORD.finditer(old_line)
-            if container.end() < found.end() < len(old_line.rstrip())
-        ]
-        fitting = [gap for gap in gaps if gap <= limit]
-        # when even the first word is too long, break right after it
-        split_at = fitting[-1] if fitting else gaps[0]
-        first = old_line[:split_at].rstrip()
-        second = old_line[split_at:].lstrip(" \t")
-        reason = (
-            f"This line was longer than {limit} characters. "
-            "I moved the last words onto a new line."
-        )
-        # }}}
-    elif message.startswith("line too long:"):
+    if message.startswith("line too long:"):
         match = re.search(r"after '(.+?)' \(before '(.+?)'\); move", message)
         if match is None:
             raise ValueError(
@@ -1298,9 +1284,7 @@ def apply_markdown_issue_fix(content, line_number, message):
     return "".join(lines), old_line, after, reason
 
 
-def autofix_markdown_file(
-    filename, wrapnumber=55, punctuation_slop=20, max_line_length=None
-):
+def autofix_markdown_file(filename, wrapnumber=55, punctuation_slop=20):
     """Apply safe source line breaks and report unfinished source spans."""
     with open(filename, encoding="utf-8", newline="") as fp:
         content = fp.read()
@@ -1309,10 +1293,7 @@ def autofix_markdown_file(
     # issue at a time re-lints the whole file for every single fix.
     for _ in range(100):
         issues = markdown_lint_issues_from_text(
-            content,
-            wrapnumber=wrapnumber,
-            punctuation_slop=punctuation_slop,
-            max_line_length=max_line_length,
+            content, wrapnumber=wrapnumber, punctuation_slop=punctuation_slop
         )
         fixable = {}
         for line_number, message in issues:
@@ -1358,8 +1339,9 @@ def autofix_markdown_file(
 @register_command(
     "check wrapping and sentence-break rules (for markdown or latex).",
     "check that a file already obeys wr's wrapping rules -- without\n"
-    "rewriting anything. Reports a source line as too long if it holds\n"
-    "more words than wr's own greedy choice would put there, and\n"
+    "rewriting anything. Reports a source line as too long if it is\n"
+    "longer than --wrapnumber characters (and suggests the break wr would\n"
+    "use, which favors ending on a clause a few words early), and\n"
     "reports a sentence that ends in the middle of a source line\n"
     "instead of at a line break. Prints 'file:line: message' for each\n"
     "violation and exits non-zero if any are found. Takes the same\n"

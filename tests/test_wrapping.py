@@ -423,7 +423,8 @@ def test_nested_containers_keep_terms_items_and_paragraphs_separate():
     result = wrap_blocks(markdown_blocks(source), 25)
     assert result.startswith("Term\n:   first definition\n")
     assert "\n    - a nested item with\n" in result
-    assert "\n      > a nested quotation\n" in result
+    # the quotation is 17 wide, so wr never lets it run past that
+    assert "\n      > a nested\n" in result
     assert "\n:   a second definition\n" in result
     assert "\n\nOutside prose" in result
     assert wrap_blocks(markdown_blocks(result), 25) == result

@@ -303,6 +303,7 @@ def run_pandoc(
     comments_to_margin=False,
     no_comments=False,
     comment_filter_session=None,
+    wrapnumber=79,
 ):
     # {{{ automatically fix Markdown source and request edits for
     # unfinished spans
@@ -310,7 +311,7 @@ def run_pandoc(
 
     automatic_fixes_were_made = False
     while True:
-        report = autofix_markdown_file(filename, max_line_length=79)
+        report = autofix_markdown_file(filename, wrapnumber=wrapnumber)
         automatic_fixes_were_made |= bool(report["fixes"])
         if report["fixes"] or report["warnings"]:
             user_says_fixed = show_markdown_fix_dialog(report)
@@ -789,10 +790,14 @@ class Handler(FileSystemEventHandler):
         "no_comments": (
             "Render the HTML without comment tags or comment div blocks."
         ),
+        "wrapnumber": (
+            "Maximum source line width; the automatic Markdown fixes break "
+            "only lines longer than this."
+        ),
     },
     filename_extensions={"filename": ".md"},
 )
-def cpb(filename, comments_to_margin=False, no_comments=False):
+def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
     source_path = os.path.normpath(os.path.abspath(filename))
     source_dir = os.path.dirname(source_path)
     html_file = filename.rsplit(".", 1)[0] + ".html"
@@ -836,6 +841,7 @@ def cpb(filename, comments_to_margin=False, no_comments=False):
             comments_to_margin=comments_to_margin,
             no_comments=no_comments,
             comment_filter_session=comment_filter_session,
+            wrapnumber=wrapnumber,
         )
         append_autorefresh(html_file)
         notice = zotero_notice()
@@ -971,6 +977,7 @@ def cpb(filename, comments_to_margin=False, no_comments=False):
                                 comments_to_margin=comments_to_margin,
                                 no_comments=no_comments,
                                 comment_filter_session=comment_filter_session,
+                                wrapnumber=wrapnumber,
                             )
                             append_autorefresh(html_file)
                         except Exception as exc:

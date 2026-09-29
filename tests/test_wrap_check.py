@@ -253,49 +253,66 @@ def test_autofix_fixes_every_line_in_one_pass_from_the_end(tmp_path):
     assert markdown_lint_issues_from_text(fixed, wrapnumber=55) == []
 
 
-def test_character_limit_ignores_lines_wr_would_break_sooner():
-    # from RM_ESR: 74 characters, which wr's width-55 rule would break
+def test_only_lines_longer_than_the_width_are_too_long():
+    # from RM_ESR: short lines ending on a clause used to be flagged, since
+    # wr broke at a comma or paren even when the rest of the line fit
     source = (
-        "temperatures not amenable to other methods, as in "
-        "[@Banerjee2009ESREviCoe].\n"
+        "(see @fig:CaldararuTau) indicates that\n"
+        "This is especially true, given that a comparison\n"
     )
 
-    assert markdown_lint_issues_from_text(source, 55) != []
-    assert markdown_lint_issues_from_text(source, max_line_length=79) == []
+    assert markdown_lint_issues_from_text(source, 55) == []
+    assert markdown_lint_issues_from_text(source, 79) == []
+    assert [
+        message.split(":")[0]
+        for _, message in markdown_lint_issues_from_text(source, 40)
+    ] == ["line too long"]
 
 
-@pytest.mark.parametrize("prefix", ["", "- ", "> "])
-def test_character_limit_breaks_at_last_fitting_word(tmp_path, prefix):
-    # from RM_ESR: a sentence that grew past 79 characters
+def test_long_line_breaks_early_on_a_nearby_clause(tmp_path):
+    # from RM_ESR: several clauses on one line that grew past 79
     line = (
-        prefix + "This script determines the field positions and amplitudes "
-        "of the spectral lines for an entire variable-temperature "
-        "experiment.\n"
+        "Finally, it estimates the rotational correlation time, "
+        "*via* the classic Kivelson equation, as a function of temperature.\n"
     )
     path = tmp_path / "source.md"
     path.write_text(line)
 
-    issues = markdown_lint_issues_from_text(line, max_line_length=79)
-    report = autofix_markdown_file(path, max_line_length=79)
+    report = autofix_markdown_file(path, wrapnumber=79)
 
     fixed = path.read_text()
-    assert [message.split(":")[0] for _, message in issues] == [
-        "line over 79 characters"
-    ]
-    assert "79 characters" in report["fixes"][0]["reason"]
+    assert fixed.split() == line.split()
     assert all(len(text) <= 79 for text in fixed.splitlines())
-    assert fixed.replace("\n> ", "\n").split() == line.split()
-    # the first line is filled as far as the limit allows
-    first = fixed.splitlines()[0]
-    next_word = line.split()[len(first.split())]
-    assert len(first) + 1 + len(next_word) > 79
-    assert markdown_lint_issues_from_text(fixed, max_line_length=79) == []
+    # the widest break is after "classic" (72 characters); "time," is 18
+    # characters before that, within the slop, so the line ends on it
+    assert fixed.splitlines()[0].endswith("rotational correlation time,")
+    assert len(report["fixes"]) == 1
 
 
-def test_character_limit_skips_a_single_unbreakable_word():
-    source = "https://example.org/" + "x" * 90 + "\n"
+def test_clause_far_before_the_width_does_not_force_an_early_break():
+    line = (
+        "Finally, it estimates the rotational correlation time of the "
+        "probe and many other ordinary words here.\n"
+    )
 
-    assert markdown_lint_issues_from_text(source, max_line_length=79) == []
+    first = wrap_prose(line, 79).splitlines()[0]
+
+    assert first.startswith("Finally, it estimates")
+    assert len(first) > 70
+
+
+@pytest.mark.parametrize("width", [20, 45, 55, 79])
+def test_wr_never_runs_past_the_width(width):
+    text = (
+        "This script determines the field positions, and amplitudes, of the "
+        "spectral lines (for an entire variable-temperature experiment) -- "
+        "and it implements spline-based smoothing of the spectra.\n"
+    )
+
+    wrapped = wrap_prose(text, width)
+
+    assert all(len(line) <= width for line in wrapped.splitlines())
+    assert markdown_lint_issues_from_text(wrapped, width) == []
 
 
 def test_unclosed_math_is_reported_after_fifty_lines():
@@ -416,7 +433,7 @@ def test_qt_fix_and_reload_windows_show_source_changes(tmp_path):
 
     QTimer.singleShot(0, inspect_fix_window)
     show_markdown_fix_dialog(report)
-    assert "↳ of words" in seen["preview"]
+    assert "↳ collection of words" in seen["preview"]
     assert seen["button"] == "Done"
     assert "1" in seen["line_gutter"]
     assert "line 1" not in seen["heading"].lower()
