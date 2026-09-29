@@ -2,6 +2,17 @@ import os
 import shutil
 import subprocess
 
+# callbacks that run before any dialog needs the user; cpb registers one
+# that closes its live preview, so issues are dealt with before it reopens
+dialog_callbacks = []
+
+
+def prepare_for_dialog():
+    """Let watch commands close their preview before a dialog appears."""
+    for callback in list(dialog_callbacks):
+        callback()
+
+
 def browser_window_is_alive(browser):
     # Keep all browser liveness checks in one place so watch commands share
     # the same shutdown behavior when a user closes the browser window.

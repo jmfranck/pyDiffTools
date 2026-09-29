@@ -64,9 +64,9 @@ class BibEntry:
         return f"@{self.kind}{{{key or self.key},\n{body}\n}}"
 
 
-def bib_entries(text):
-    """Index entry spans and raw fields without reserializing them."""
-    entries = {}
+def bib_entry_list(text):
+    """Every entry's span and raw fields in order, including repeated keys."""
+    entries = []
     position = 0
     while position < len(text):
         position = scan_bibtex(text, position, "@")
@@ -106,9 +106,17 @@ def bib_entries(text):
                 raise ValueError(f"duplicate BibTeX field {name} in {key}")
             fields[name] = body[offset:boundary].strip()
             offset = boundary + 1
-        if key in entries:
-            raise ValueError(f"duplicate BibTeX key {key}")
-        entries[key] = BibEntry(start, end + 1, kind, key, fields)
+        entries.append(BibEntry(start, end + 1, kind, key, fields))
+    return entries
+
+
+def bib_entries(text):
+    """Index entry spans and raw fields without reserializing them."""
+    entries = {}
+    for entry in bib_entry_list(text):
+        if entry.key in entries:
+            raise ValueError(f"duplicate BibTeX key {entry.key}")
+        entries[entry.key] = entry
     return entries
 
 

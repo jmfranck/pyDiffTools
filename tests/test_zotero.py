@@ -260,18 +260,20 @@ def test_update_failure_preserves_original(
         bibliography.chmod(stat.S_IREAD | stat.S_IWRITE)
 
 
-def test_notice_is_informational_and_does_not_wait(monkeypatch):
+@pytest.mark.real_notice
+def test_notice_is_informational_and_waits_for_ok(monkeypatch):
     monkeypatch.setattr(zotero, "urlopen", Mock(side_effect=URLError("off")))
     launch = Mock()
-    monkeypatch.setattr(subprocess, "Popen", launch)
-    assert zotero_notice() is launch.return_value
+    monkeypatch.setattr(zotero.subprocess, "run", launch)
+    zotero_notice()
+    # subprocess.run returns only once the window is dismissed
     args = launch.call_args.args[0]
     assert "QMessageBox.information" in args[2]
     assert "will still build" in args[3]
     assert "don't have to update" in args[3]
-    launch.return_value.wait.assert_not_called()
 
 
+@pytest.mark.real_notice
 def test_ready_zotero_needs_no_notice(monkeypatch):
     response = {
         "jsonrpc": "2.0",
@@ -284,9 +286,9 @@ def test_ready_zotero_needs_no_notice(monkeypatch):
         lambda *_a, **_k: io.BytesIO(json.dumps(response).encode()),
     )
     launch = Mock()
-    monkeypatch.setattr(subprocess, "Popen", launch)
+    monkeypatch.setattr(zotero.subprocess, "run", launch)
     assert call_zotero("api.ready", []) == response["result"]
-    assert zotero_notice() is None
+    zotero_notice()
     launch.assert_not_called()
 
 
@@ -352,3 +354,110 @@ def test_no_single_bib_target_keeps_preview_without_lookup(
     assert html.is_file()
     lookup.assert_not_called()
     assert before == {name: (tmp_path / name).read_bytes() for name in files}
+
+
+DUPLICATED = (
+    # from RM_ESR: references.bib held budil1996nonlinear twice, so cpb
+    # silently skipped adding citations that Zotero does have
+    "@article{budil1996nonlinear,\n  title = {Nonlinear-least-squares},\n"
+    "  volume = {120}\n}\n\n"
+    "@book{kept,title={Kept}}\n\n"
+    "@article{budil1996nonlinear,\n  title = {Nonlinear-Least-Squares},\n"
+    "  year = 1996\n}\n"
+)
+
+
+@pytest.mark.parametrize(
+    "decision, entry",
+    [
+        (
+            {"action": "existing"},
+            "@article{budil1996nonlinear,\n  title = {Nonlinear-least-"
+            "squares},\n  volume = {120}\n}",
+        ),
+        (
+            {"action": "incoming"},
+            "@article{budil1996nonlinear,\n  title = {Nonlinear-Least-"
+            "Squares},\n  year = 1996\n}",
+        ),
+        (
+            {
+                "action": "merge",
+                "key": "budil1996nonlinear",
+                "kind": "article",
+                "fields": {
+                    "title": "{Nonlinear-Least-Squares}",
+                    "volume": "{120}",
+                    "year": "1996",
+                },
+            },
+            "@article{budil1996nonlinear,\n  title = {Nonlinear-Least-"
+            "Squares},\n  volume = {120},\n  year = 1996\n}",
+        ),
+    ],
+)
+def test_duplicate_key_in_bibliography_is_reviewed_then_recovered(
+    monkeypatch, bibliography, local_api, notices, decision, entry
+):
+    bibliography.write_text(DUPLICATED)
+    reviews = []
+
+    def review(matches, incoming, source, mode="zotero"):
+        reviews.append((matches, incoming, source, mode))
+        return {"existing_key": matches[0]["key"], **decision}
+
+    monkeypatch.setattr(zotero, "review_duplicate", review)
+
+    assert recover_bibliography(bibliography, ["Hoult1976SigRatNuc"]) == [
+        "Hoult1976SigRatNuc"
+    ]
+
+    ((matches, incoming, source, mode),) = reviews
+    assert mode == "bibliography" and source == "references.bib"
+    assert matches[0]["fields"]["volume"] == "{120}"
+    assert incoming["fields"]["year"] == "1996"
+    text = bibliography.read_text()
+    # one entry is left, where the first one was, and nothing else moves
+    assert text.startswith(entry + "\n\n@book{kept,title={Kept}}\n")
+    assert text.count("budil1996nonlinear") == 1
+    assert "@article{Hoult1976SigRatNuc," in text
+    assert notices == []
+
+
+def test_duplicate_key_left_in_bibliography_is_reported(
+    monkeypatch, bibliography, local_api, notices
+):
+    bibliography.write_text(DUPLICATED)
+    original = bibliography.read_bytes()
+    monkeypatch.setattr(
+        zotero,
+        "review_duplicate",
+        lambda *_args, **_kwargs: {"action": "skip"},
+    )
+
+    assert recover_bibliography(bibliography, ["Hoult1976SigRatNuc"]) == []
+
+    assert bibliography.read_bytes() == original
+    (notice,) = notices
+    assert "Hoult1976SigRatNuc" in notice
+    assert "duplicate BibTeX key budil1996nonlinear" in notice
+    assert "Choose one of the two entries" in notice
+
+
+def test_citations_zotero_lacks_are_reported(
+    bibliography, local_api, notices
+):
+    keys = ["Hoult1976SigRatNuc", "Guinness2024SepDetCha"]
+
+    assert recover_bibliography(bibliography, keys) == keys[:1]
+
+    (notice,) = notices
+    assert notice.startswith("I added Hoult1976SigRatNuc from Zotero")
+    assert "still missing: Guinness2024SepDetCha" in notice
+
+
+def test_citations_already_present_need_no_notice(
+    bibliography, local_api, notices
+):
+    assert recover_bibliography(bibliography, ["old"]) == []
+    assert notices == []

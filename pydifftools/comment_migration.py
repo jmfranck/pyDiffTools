@@ -11,6 +11,8 @@ import textwrap
 
 import yaml
 
+from .browser_lifecycle import prepare_for_dialog
+
 _FRONT_MATTER_RE = re.compile(
     r"\A(\ufeff?---[ \t]*\r?\n)(.*?)(\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$))",
     re.DOTALL,
@@ -280,6 +282,7 @@ if result["accepted"]:
 
 print(json.dumps(result))
 """
+    prepare_for_dialog()
     completed = subprocess.run(
         # the dialog reads the document from its file, since the text of a
         # large document exceeds the operating system's argument limit

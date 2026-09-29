@@ -3,7 +3,6 @@ import os
 import threading
 import time
 from pathlib import Path
-from unittest.mock import Mock
 
 import pytest
 from selenium import webdriver
@@ -307,27 +306,85 @@ def test_cpb_initial_build_failure_does_not_open_chrome(monkeypatch, tmp_path):
     assert chrome_calls == []
 
 
-def test_cpb_notice_does_not_prevent_preview_or_repeat_on_rebuild(
+def test_cpb_notice_comes_before_the_first_build_and_not_on_rebuild(
     monkeypatch, tmp_path
 ):
     source = tmp_path / "content.md"
     source.write_text("before\n")
-    runtime = install_cpb_runtime(monkeypatch)
-    notice = Mock()
-    notice.poll.return_value = None
-    notify = Mock(return_value=notice)
-    monkeypatch.setattr(continuous, "zotero_notice", notify)
+    events = []
+    runtime = install_cpb_runtime(
+        monkeypatch, build_hook=lambda number, _text: events.append(number)
+    )
+    monkeypatch.setattr(
+        continuous, "zotero_notice", lambda: events.append("notice")
+    )
 
     def editor():
         source.write_text("after\n")
         assert runtime["browser"].refreshed.wait(timeout=2)
 
     run_cpb_with_editor(source, runtime["browser"], editor)
-    assert runtime["builds"] == ["before\n", "after\n"]
-    notify.assert_called_once_with()
-    notice.terminate.assert_called_once_with()
-    notice.wait.assert_called_once_with()
+    # the notice waits for OK, so it is dealt with before Pandoc runs
+    assert events == ["notice", 1, 2]
     assert_clean_polling_shutdown(runtime)
+
+
+def test_cpb_closes_preview_for_a_rebuild_dialog_and_reopens_it(
+    monkeypatch, tmp_path
+):
+    source = tmp_path / "content.md"
+    source.write_text("before\n")
+    browsers = []
+    open_during_dialog = []
+
+    def build_hook(number, _text):
+        if number == 2:
+            # a dialog in the rebuild (e.g. source fixes or citations)
+            continuous.prepare_for_dialog()
+            open_during_dialog.append(
+                [not browser.closed for browser in browsers]
+            )
+
+    runtime = install_cpb_runtime(monkeypatch, build_hook=build_hook)
+
+    def new_chrome():
+        browsers.append(FakeBrowser())
+        return browsers[-1]
+
+    monkeypatch.setattr(webdriver, "Chrome", new_chrome)
+    errors = []
+
+    def edit_then_close():
+        try:
+            deadline = time.monotonic() + 2
+            while not browsers and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert browsers[0].loaded.wait(timeout=2)
+            source.write_text("after\n")
+            while len(browsers) < 2 and time.monotonic() < deadline + 2:
+                time.sleep(0.01)
+            assert browsers[1].loaded.wait(timeout=2)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            for browser in browsers:
+                browser.close()
+
+    editor = threading.Thread(target=edit_then_close, daemon=True)
+    editor.start()
+    continuous.cpb(str(source))
+    editor.join(timeout=2)
+    if errors:
+        raise errors[0]
+
+    assert runtime["builds"] == ["before\n", "after\n"]
+    # Chrome was closed while the dialog needed the user, then reopened on
+    # the rebuilt page instead of being refreshed
+    assert open_during_dialog == [[False]]
+    assert browsers[0].quit_calls == 1
+    assert browsers[0].refresh_calls == 0
+    assert len(browsers) == 2
+    assert continuous.dialog_callbacks == []
 
 
 def test_cpb_listener_acknowledges_before_initial_build_finishes(

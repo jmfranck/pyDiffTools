@@ -21,20 +21,49 @@ from PySide6.QtWidgets import (
 class DuplicateDialog(QDialog):
     """Choose an entry or merge fields; default to existing values and key."""
 
-    def __init__(self, matches, incoming, source):
+    def __init__(self, matches, incoming, source, mode="zotero"):
         super().__init__()
         self.matches = matches
         self.incoming = incoming
         self.decision = None
-        self.setWindowTitle("pydifft cpb — Possible duplicate citation")
         self.resize(1000, 650)
         layout = QVBoxLayout(self)
-        explanation = QLabel(
-            f"Review the imported citation for {source}.\n"
-            "Keeping or merging a duplicate also replaces @UNCHOSEN with "
-            "@CHOSEN in this Markdown file. Other documents are not edited.\n"
-            "For a merge, choose each field below, including the citation key."
-        )
+        if mode == "bibliography":
+            # {{{ two entries in the bibliography share one citation key
+            self.setWindowTitle("pydifft cpb — Duplicate citation key")
+            text = (
+                f"{source} defines @{incoming['key']} twice, so no missing "
+                "citations can be added until one entry is chosen.\n"
+                "Keep one entry, or merge them field by field; the other "
+                "entry is removed from the bibliography."
+            )
+            self.labels = ["First entry", "Second entry"]
+            actions = [
+                ("Keep first", "existing"),
+                ("Keep second", "incoming"),
+                ("Merge selected fields", "merge"),
+                ("Leave both (add no citations)", "skip"),
+            ]
+            # }}}
+        else:
+            self.setWindowTitle("pydifft cpb — Possible duplicate citation")
+            text = (
+                f"Review the imported citation for {source}.\n"
+                "Keeping or merging a duplicate also replaces @UNCHOSEN with "
+                "@CHOSEN in this Markdown file. Other documents are not "
+                "edited.\n"
+                "For a merge, choose each field below, including the citation "
+                "key."
+            )
+            self.labels = ["Existing", "Zotero"]
+            actions = [
+                ("Keep existing", "existing"),
+                ("Keep Zotero", "incoming"),
+                ("Merge selected fields", "merge"),
+                ("Not a duplicate: keep both", "both"),
+                ("Skip this import", "skip"),
+            ]
+        explanation = QLabel(text)
         explanation.setWordWrap(True)
         layout.addWidget(explanation)
         self.match_selector = QComboBox()
@@ -44,7 +73,16 @@ class DuplicateDialog(QDialog):
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(
-            ["Field", "Existing bibliography", "Zotero", "Merge uses"]
+            [
+                "Field",
+                (
+                    "Existing bibliography"
+                    if mode == "zotero"
+                    else self.labels[0]
+                ),
+                self.labels[1],
+                "Merge uses",
+            ]
         )
         self.table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch
@@ -52,13 +90,7 @@ class DuplicateDialog(QDialog):
         layout.addWidget(self.table)
         buttons = QHBoxLayout()
         self.buttons = {}
-        for label, action in [
-            ("Keep existing", "existing"),
-            ("Keep Zotero", "incoming"),
-            ("Merge selected fields", "merge"),
-            ("Not a duplicate: keep both", "both"),
-            ("Skip this import", "skip"),
-        ]:
+        for label, action in actions:
             button = QPushButton(label)
             button.setAutoDefault(False)
             button.clicked.connect(
@@ -94,9 +126,9 @@ class DuplicateDialog(QDialog):
                 self.table.setItem(row, column, cell)
             selector = QComboBox()
             if name in self.left:
-                selector.addItem("Existing", self.left[name])
+                selector.addItem(self.labels[0], self.left[name])
             if name in self.right:
-                selector.addItem("Zotero", self.right[name])
+                selector.addItem(self.labels[1], self.right[name])
             self.table.setCellWidget(row, 3, selector)
             self.selectors[name] = selector
         self.table.resizeRowsToContents()

@@ -23,7 +23,9 @@ from .comment_migration import prepare_comment_source
 from .browser_lifecycle import (
     browser_window_is_alive,
     close_browser_window,
+    dialog_callbacks,
     forward_search_in_browser,
+    prepare_for_dialog,
 )
 from .forward_search import (
     CPB_FORWARD_SEARCH_PORT,
@@ -112,6 +114,7 @@ if box.clickedButton() is restore_button:
     sys.exit(0)
 sys.exit(1)
 """
+    prepare_for_dialog()
     result = subprocess.run(
         [sys.executable, "-c", prompt_script, message, default_choice],
         capture_output=True,
@@ -148,6 +151,7 @@ def show_markdown_fix_dialog(report):
     layout = report.get("layout", [])
     if not fixes and not warnings and not layout:
         return
+    prepare_for_dialog()
 
     # a QApplication must exist before any widget is constructed
     application = QApplication.instance() or QApplication([])
@@ -372,6 +376,7 @@ def show_markdown_reload_dialog():
         QVBoxLayout,
     )
 
+    prepare_for_dialog()
     # a QApplication must exist before any widget is constructed
     application = QApplication.instance() or QApplication([])
     dialog = QDialog()
@@ -909,7 +914,6 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
         daemon=True,
     )
     chrome = None
-    notice = None
     observer = None
     observer_started = False
     socket_thread_started = False
@@ -924,6 +928,9 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
         # orphaned browser session. Remember the source version from before
         # the build so an edit during a slow Pandoc run remains pending.
         source_missing = object()
+        # every dialog is dealt with (OK pressed) before Pandoc runs or
+        # Chrome opens
+        zotero_notice()
         prepare_comment_source(filename)
         initial_source_stat = os.stat(source_path)
         handled_signature = (
@@ -940,7 +947,6 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
             wrapnumber=wrapnumber,
         )
         append_autorefresh(html_file)
-        notice = zotero_notice()
 
         # Selenium is deliberately initialized once, after the first
         # successful build. Nothing in recovery constructs a browser.
@@ -992,6 +998,16 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
         # immediately after Chrome loads can become polling's initial snapshot
         # and never be reported as a change.
         chrome.get("file://" + os.path.abspath(html_file))
+
+        def close_for_dialog():
+            # a rebuild needs the user, so close the preview while the
+            # issues are dealt with; it reopens once the rebuild is done
+            nonlocal chrome
+            if chrome is not None:
+                close_browser_window(chrome)
+                chrome = None
+
+        dialog_callbacks.append(close_for_dialog)
         rebuild_pending = False
         stable_signature = None
         stable_since = None
@@ -1102,18 +1118,26 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
                                 traceback.print_exc()
                         else:
                             handled_signature = attempted_signature
-                            if not browser_window_is_alive(chrome):
-                                break
-                            try:
-                                chrome.refresh()
-                            except WebDriverException:
-                                print(
-                                    "pydifft cpb: Chrome is no longer "
-                                    "available; stopping without reopening "
-                                    "it.",
-                                    file=sys.stderr,
-                                )
-                                break
+                            if chrome is not None:
+                                if not browser_window_is_alive(chrome):
+                                    break
+                                try:
+                                    chrome.refresh()
+                                except WebDriverException:
+                                    print(
+                                        "pydifft cpb: Chrome is no longer "
+                                        "available; stopping without "
+                                        "reopening it.",
+                                        file=sys.stderr,
+                                    )
+                                    break
+                        if chrome is None:
+                            # {{{ reopen the preview a dialog closed
+                            chrome = webdriver.Chrome()
+                            chrome.get(
+                                "file://" + os.path.abspath(html_file)
+                            )
+                            # }}}
             # }}}
             time.sleep(MAIN_LOOP_INTERVAL_SECONDS)
     except KeyboardInterrupt:
@@ -1127,10 +1151,7 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
         if socket_thread_started:
             socket_thread.join()
         close_browser_window(chrome)
-        if notice is not None:
-            if notice.poll() is None:
-                notice.terminate()
-            notice.wait()
+        dialog_callbacks.clear()
 
 
 if __name__ == "__main__":
