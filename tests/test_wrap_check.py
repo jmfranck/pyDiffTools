@@ -957,3 +957,41 @@ def test_fix_reasons_cover_one_or_more_lines(tmp_path):
         "<b>always start sentences on new lines</b>" in reason
         for reason in reasons
     )
+
+
+@pytest.mark.parametrize(
+    "typed, fixed",
+    [
+        # from RM_ESR: typed as <JFcomm>, which the comment filter ignores
+        ("JFcomm", "JFcom"),
+        ("RScomment-left", "RScom-left"),
+        ("jfComm-right", "jfcom-right"),
+    ],
+)
+def test_misspelled_comment_tags_are_corrected(tmp_path, typed, fixed):
+    path = tmp_path / "source.md"
+    path.write_text(
+        f"Some text\n<{typed}>\n  fill in question marks\n</{typed}>\n"
+        "more.\n"
+    )
+
+    issues = markdown_lint_issues_from_text(path.read_text(), 79)
+    report = autofix_markdown_file(path, wrapnumber=79)
+
+    assert [message.split(":")[0] for _, message in issues] == [
+        "misspelled comment tag"
+    ] * 2
+    assert path.read_text() == (
+        f"Some text\n<{fixed}>\n  fill in question marks\n</{fixed}>\n"
+        "more.\n"
+    )
+    assert report["fixes"][0]["reason"].startswith("One or more ")
+
+
+def test_correct_comment_tags_and_code_are_left_alone():
+    source = (
+        "<JFcom>\nnote\n</JFcom>\n<comment>\nold\n</comment>\n"
+        "\x60\x60\x60\n<JFcomm>\n\x60\x60\x60\n"
+    )
+
+    assert markdown_lint_issues_from_text(source, 79) == []

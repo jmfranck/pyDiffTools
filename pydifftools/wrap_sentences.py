@@ -29,6 +29,11 @@ DETACHED_CROSSREF = re.compile(
     r"(?:(?<!\\)\$\$|\))(?P<gap>[ \t]*\n?[ \t]*)(?=\{#(?:eq|fig):)"
     r"|(?P<marker>\{#(?:eq|fig):[^}\n]*\n[^}]*\})"
 )
+# Comment tags are two initials and "com" (<JFcom>, <JFcom-left>, ...); the
+# comment filter passes a misspelling such as <JFcomm> through as raw HTML.
+MISSPELLED_COMMENT_TAG = re.compile(
+    r"<(/?)([A-Za-z]{2})comm(?:ent)?(-left|-right)?>", re.IGNORECASE
+)
 LATEX_MACRO_SPLIT = re.compile(
     r"(\\(?:begin|end|usepackage|newcommand|section"
     r"|subsection|subsubsection|paragraph|input){[^}]*})"
@@ -1055,17 +1060,28 @@ def markdown_lint_issues_from_text(
         (issue["line"], issue["message"])
         for issue in unclosed_markdown_spans(content)
     )
-    # {{{ report single trailing spaces and detached crossref markers
+    # {{{ report single trailing spaces, misspelled comment tags and
+    # detached crossref markers
     fence = None
     for number, line in enumerate(content.splitlines(), start=1):
         opening = re.match(r"[ \t]*(\x60{3,}|~{3,})", line)
         if opening and (fence is None or opening[1].startswith(fence)):
             fence = None if fence else opening[1]
-        elif fence is None and re.search(r"(?<! ) $", line):
+            continue
+        if fence is not None:
+            continue
+        if re.search(r"(?<! ) $", line):
             issues.append((
                 number,
                 "trailing space: remove the single space at the end of this "
                 "line (two spaces are a deliberate hard line break)",
+            ))
+        misspelled = MISSPELLED_COMMENT_TAG.search(line)
+        if misspelled:
+            issues.append((
+                number,
+                f"misspelled comment tag: {misspelled[0]} should be "
+                f"<{misspelled[1]}{misspelled[2]}com{misspelled[3] or ''}>",
             ))
     for found in DETACHED_CROSSREF.finditer(prose_content):
         if found["gap"] == "":
@@ -1233,6 +1249,20 @@ def apply_markdown_issue_fix(content, line_number, message):
     else:
         prefix = re.match(r"^[ \t]*", old_line).group()
     # }}}
+    if message.startswith("misspelled comment tag:"):
+        fixed = MISSPELLED_COMMENT_TAG.sub(
+            lambda found: f"<{found[1]}{found[2]}com{found[3] or ''}>",
+            old_line,
+        )
+        lines[index] = fixed + ending
+        return (
+            "".join(lines),
+            old_line,
+            fixed,
+            "One or more comment tags were misspelled, so they would not "
+            "show as comments. A comment tag is two initials and com, as in "
+            "&lt;JFcom&gt;. I corrected them.",
+        )
     if message.startswith("trailing space:"):
         lines[index] = old_line[:-1] + ending
         return (
