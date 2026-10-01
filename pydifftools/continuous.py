@@ -75,19 +75,24 @@ def confirm_restore_comment_filter(active_mode):
             "but you ran without the --no-comments flag.\n\n"
             "Note that you have not locally edited the filter relative to "
             "the library default.\n\n"
-            "Do you want to show comments, or continue with no comments?"
+            "Do you want to update the filter and comment styles to the "
+            "library versions and show comments, or keep no comments?"
         )
         default_choice = "restore"
+        update_label = "update filter and styles; show comments"
+        keep_label = "keep no comments"
     elif active_mode == "custom":
         message = (
-            "The current lua filter does not match the pyDiffTools library "
-            "default or the no-comments filter, but you ran without the "
-            "--no-comments flag.\n\n"
-            "Note that this looks like a locally edited filter.\n\n"
-            "Do you want to show comments using the library default, or "
-            "continue with no comments?"
+            "The current lua filter differs from the pyDiffTools library "
+            "filters, but you ran without the --no-comments flag. It may be "
+            "an older distributed filter or a local edit.\n\n"
+            "Do you want to update the filter and comment styles to the "
+            "library versions and show comments, or keep the current "
+            "filter and styles?"
         )
         default_choice = "keep"
+        update_label = "update filter and styles; show comments"
+        keep_label = "keep current filter"
     else:
         raise ValueError(
             "Comment filter restore prompt is only valid for custom or "
@@ -102,12 +107,8 @@ box = QMessageBox()
 box.setWindowTitle("pydifft cpb")
 box.setIcon(QMessageBox.Icon.Question)
 box.setText(sys.argv[1])
-keep_button = box.addButton(
-    "no comments", QMessageBox.ButtonRole.RejectRole
-)
-restore_button = box.addButton(
-    "show comments", QMessageBox.ButtonRole.AcceptRole
-)
+keep_button = box.addButton(sys.argv[3], QMessageBox.ButtonRole.RejectRole)
+restore_button = box.addButton(sys.argv[4], QMessageBox.ButtonRole.AcceptRole)
 if sys.argv[2] == "restore":
     box.setDefaultButton(restore_button)
 else:
@@ -119,7 +120,10 @@ sys.exit(1)
 """
     prepare_for_dialog()
     result = subprocess.run(
-        [sys.executable, "-c", prompt_script, message, default_choice],
+        [
+            sys.executable, "-c", prompt_script, message, default_choice,
+            keep_label, update_label,
+        ],
         capture_output=True,
         text=True,
     )
@@ -530,6 +534,10 @@ def run_pandoc(
                     shutil.copy2(
                         packaged_filters["default"], active_filter
                     )
+                    shutil.copy2(
+                        os.path.join(package_dir, "comments.css"),
+                        os.path.join(source_dir, "comments.css"),
+                    )
                     effective_filter_mode = "default"
                 else:
                     effective_filter_mode = active_mode
@@ -581,7 +589,10 @@ def run_pandoc(
         # }}}
         # Only copy the comment UI assets when comments should be rendered.
         if effective_filter_mode != "none":
-            for asset_name in ["comments.css", "comment_toggle.js"]:
+            for asset_name in [
+                "comments.css", "comments_author_colors.css",
+                "comment_toggle.js",
+            ]:
                 target_path = os.path.join(source_dir, asset_name)
                 if not os.path.exists(target_path):
                     shutil.copy2(

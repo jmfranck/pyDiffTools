@@ -1,0 +1,20 @@
+/* Keep comment pointer triangles in sync with per-author bubble colors. */
+span.comment-pin > span.comment-right::before,
+.comment-overlay.comment-right::before {
+  border-color: transparent var(--comment-accent-color, #5aa0ff) transparent transparent;
+}
+
+span.comment-pin > span.comment-right::after,
+.comment-overlay.comment-right::after {
+  border-color: transparent var(--comment-accent-background-color, #eaf3ff) transparent transparent;
+}
+
+span.comment-pin > span.comment-left::before,
+.comment-overlay.comment-left::before {
+  border-color: transparent transparent transparent var(--comment-accent-color, #5aa0ff);
+}
+
+span.comment-pin > span.comment-left::after,
+.comment-overlay.comment-left::after {
+  border-color: transparent transparent transparent var(--comment-accent-background-color, #eaf3ff);
+}

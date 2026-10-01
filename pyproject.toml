@@ -44,6 +44,7 @@ pydifftools = [
     "diff-doc.js",
     "xml2xlsx.vbs",
     "comments.css",
+    "comments_author_colors.css",
     "comment_tags.lua",
     "comment_tags_margin.lua",
     "comment_tags_no_comments.lua",

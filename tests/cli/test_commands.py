@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -1393,6 +1394,7 @@ def test_run_pandoc_copies_comment_assets_when_comment_tags_present(
     run_pandoc(str(markdown_file), str(html_file))
 
     assert (project_dir / "comments.css").exists()
+    assert (project_dir / "comments_author_colors.css").exists()
     assert (project_dir / "comment_tags.lua").exists()
     assert (project_dir / "comment_toggle.js").exists()
 
@@ -1419,6 +1421,7 @@ def test_run_pandoc_copies_comment_assets_for_comment_div_blocks(
     run_pandoc(str(markdown_file), str(html_file))
 
     assert (project_dir / "comments.css").exists()
+    assert (project_dir / "comments_author_colors.css").exists()
     assert (project_dir / "comment_tags.lua").exists()
     assert (project_dir / "comment_toggle.js").exists()
 
@@ -1443,7 +1446,9 @@ def test_run_pandoc_renders_author_tags_and_divs_with_header_color(tmp_path):
     html_content = html_file.read_text()
     assert 'data-comment-author="JF"' in html_content
     assert "--comment-accent-color: #d455aa" in html_content
+    assert "--comment-accent-background-color: #f9e9f4" in html_content
     assert 'class="comment-left"' in html_content
+    assert "comments_author_colors.css" in html_content
 
 
 def test_no_comments_filter_removes_author_tags_and_blocks(tmp_path):
@@ -1612,6 +1617,8 @@ def test_no_comments_filter_restore_prompt_can_restore_default(
     active_filter.write_text(
         (package_dir / "comment_tags_no_comments.lua").read_text()
     )
+    css_file = project_dir / "comments.css"
+    css_file.write_text("old local stylesheet\n")
     prompt_calls = []
 
     def restore_default(active_mode):
@@ -1628,6 +1635,7 @@ def test_no_comments_filter_restore_prompt_can_restore_default(
     assert active_filter.read_text() == (
         package_dir / "comment_tags.lua"
     ).read_text()
+    assert css_file.read_text() == (package_dir / "comments.css").read_text()
 
 
 def test_no_comments_filter_restore_prompt_can_keep_filter(
@@ -1641,6 +1649,8 @@ def test_no_comments_filter_restore_prompt_can_keep_filter(
         package_dir / "comment_tags_no_comments.lua"
     ).read_text()
     active_filter.write_text(no_comments_text)
+    css_file = project_dir / "comments.css"
+    css_file.write_text("keep local stylesheet\n")
 
     monkeypatch.setattr(
         continuous, "confirm_restore_comment_filter", lambda _mode: False
@@ -1649,6 +1659,7 @@ def test_no_comments_filter_restore_prompt_can_keep_filter(
     run_pandoc_with_stubbed_tools(project_dir, monkeypatch)
 
     assert active_filter.read_text() == no_comments_text
+    assert css_file.read_text() == "keep local stylesheet\n"
 
 
 def test_no_comments_filter_prompt_only_appears_once_per_session(
@@ -1692,9 +1703,12 @@ def test_no_comments_filter_prompt_only_appears_once_per_session(
 def test_comment_filter_prompt_uses_clear_button_labels(monkeypatch):
     def fake_run(command, **_kwargs):
         prompt_script = command[2]
-        assert prompt_script.index('"no comments"') < prompt_script.index(
-            '"show comments"'
-        )
+        assert "sys.argv[3]" in prompt_script
+        assert "sys.argv[4]" in prompt_script
+        assert command[5:] == [
+            "keep no comments",
+            "update filter and styles; show comments",
+        ]
         return subprocess.CompletedProcess(command, 1)
 
     monkeypatch.setattr(continuous.subprocess, "run", fake_run)
@@ -2085,9 +2099,9 @@ def test_historical_image_diff_keeps_both_revisions():
 def test_run_pandoc_renders_every_header_author_and_misspelled_tags(
     tmp_path, monkeypatch
 ):
-    # each XXcolor field in the YAML header makes XXcom tags and .XXcom
-    # blocks; a misspelled <XXcomm> is corrected, and an author it names
-    # without a color is set up in the same build (here, XY)
+    # Each author color in the YAML header enables matching tags and block
+    # classes; a misspelled tag is corrected, and an author it names without
+    # a color is set up in the same build (here, XY).
     markdown_file = tmp_path / "notes.md"
     html_file = tmp_path / "notes.html"
     markdown_file.write_text(
@@ -2130,13 +2144,17 @@ def test_run_pandoc_renders_every_header_author_and_misspelled_tags(
     assert reviews == [["AB", "JF", "RS"]]
     assert 'XYcolor: "#5affb8"' in markdown_file.read_text()
     html_content = html_file.read_text()
-    for author, color in [
-        ("JF", "#5aa2ff"),
-        ("AB", "#ff5aa2"),
-        ("RS", "#ffb85a"),
-        ("XY", "#5affb8"),
+    for author, color, background in [
+        ("JF", "#5aa2ff", "#eaf3ff"),
+        ("AB", "#ff5aa2", "#ffeaf3"),
+        ("RS", "#ffb85a", "#fff6ea"),
+        ("XY", "#5affb8", "#eafff6"),
     ]:
-        assert f'data-comment-author="{author}"' in html_content
-        assert f"--comment-accent-color: {color}" in html_content
+        assert re.search(
+            rf"<(?:span|div)\b(?=[^>]*data-comment-author=\"{author}\")"
+            rf"(?=[^>]*--comment-accent-color: {re.escape(color)};)"
+            rf"(?=[^>]*background-color: {re.escape(background)};)[^>]*>",
+            html_content,
+        )
     assert "comm>" not in html_content
     assert 'class="comment-left"' in html_content

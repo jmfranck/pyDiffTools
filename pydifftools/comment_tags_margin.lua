@@ -35,6 +35,24 @@ local OPENERS = {
 }
 local AUTHOR_COLORS = {}
 
+local function author_color_style(color)
+  local red = tonumber(color:sub(2, 3), 16)
+  local green = tonumber(color:sub(4, 5), 16)
+  local blue = tonumber(color:sub(6, 7), 16)
+  local function tint(component)
+    return math.floor(component * 0.13 + 255 * 0.87 + 0.5)
+  end
+  local background = string.format(
+    "#%02x%02x%02x", tint(red), tint(green), tint(blue)
+  )
+  return string.format(
+    "--comment-accent-color: %s; "
+      .. "--comment-accent-background-color: %s; "
+      .. "border-color: %s; background-color: %s;",
+    color, background, color, background
+  )
+end
+
 local comment_id = 0
 local function next_id()
   comment_id = comment_id + 1
@@ -69,7 +87,7 @@ local function make_inline_comment(side, content_inlines, spec)
           ["data-comment-author"] = spec and spec.author or nil,
           ["style"] = "font-size: 6pt;"
             .. (spec and spec.color
-              and (" --comment-accent-color: " .. spec.color .. ";") or ""),
+              and (" " .. author_color_style(spec.color)) or ""),
         }
       )
     )
@@ -101,7 +119,7 @@ local function make_block_overlay(side, id, content_blocks, spec)
         ["data-comment-author"] = spec and spec.author or nil,
         ["style"] = "font-size: 6pt;"
           .. (spec and spec.color
-            and (" --comment-accent-color: " .. spec.color .. ";") or ""),
+            and (" " .. author_color_style(spec.color)) or ""),
       }
     )
   )
@@ -441,7 +459,7 @@ function Div(el)
       if #style > 0 and not style:match(";%s*$") then
         style = style .. ";"
       end
-      el.attributes.style = style .. "--comment-accent-color: " .. color .. ";"
+      el.attributes.style = style .. author_color_style(color)
       el.attributes["data-comment-author"] = author
     end
   end
