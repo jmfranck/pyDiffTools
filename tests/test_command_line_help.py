@@ -1,4 +1,5 @@
 import time
+import importlib.metadata
 
 import pytest
 from selenium.common.exceptions import SessionNotCreatedException
@@ -21,6 +22,23 @@ def test_root_help_mentions_subcommand_help_hint(capsys):
     out = capsys.readouterr().out
     assert "***" in out
     assert "--help <subcommand>" in out
+
+
+@pytest.mark.parametrize("flag", ["--ver", "--version"])
+def test_version_flag_prints_current_version_without_update_check(
+    monkeypatch, capsys, flag
+):
+    monkeypatch.setattr(
+        command_line.update_check,
+        "check_update",
+        lambda *_args, **_kwargs: pytest.fail("unexpected update check"),
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        command_line.main([flag])
+    assert excinfo.value.code == 0
+    assert capsys.readouterr().out.strip() == importlib.metadata.version(
+        "pyDiffTools"
+    )
 
 
 def test_help_then_subcommand_shows_subcommand_options(capsys):

@@ -11,6 +11,7 @@ import nbformat
 import difflib
 import shutil
 import importlib.util
+import importlib.metadata
 from pathlib import Path
 from . import (
     match_spaces,
@@ -879,6 +880,12 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         is_root_parser=True,
     )
+    parser.add_argument(
+        "--ver",
+        "--version",
+        action="version",
+        version=importlib.metadata.version("pyDiffTools"),
+    )
     parser.epilog = _subcommand_help_hint(parser.prog)
     parser._pydifft_subparsers = {}
     subparsers = parser.add_subparsers(dest="command")
@@ -913,6 +920,9 @@ def build_parser():
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
+    if argv and argv[0] in ("--ver", "--version"):
+        build_parser().parse_args(argv)
+        return
     # Run the PyPI update check once per UTC day so users see a notice but
     # startup stays fast when offline. The date is stored in the
     # PYDIFFTOOLS_UPDATE_CHECK_LAST_RAN_UTC_DATE environment variable.
