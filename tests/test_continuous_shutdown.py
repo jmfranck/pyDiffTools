@@ -40,6 +40,8 @@ class FakeBrowser:
         self.refresh_threads = []
         self.quit_calls = 0
         self.refresh_error = False
+        self.scroll_position = 0
+        self.scroll_restored = threading.Event()
 
     @property
     def window_handles(self):
@@ -47,6 +49,15 @@ class FakeBrowser:
 
     def get(self, _url):
         self.loaded.set()
+
+    def execute_script(self, script, *args):
+        assert not self.closed
+        assert self.loaded.is_set()
+        if script == "return window.scrollY;":
+            return self.scroll_position
+        assert script == "window.scrollTo(0, arguments[0]);"
+        self.scroll_position = args[0]
+        self.scroll_restored.set()
 
     def refresh(self):
         self.refresh_calls += 1
@@ -329,8 +340,9 @@ def test_cpb_notice_comes_before_the_first_build_and_not_on_rebuild(
     assert_clean_polling_shutdown(runtime)
 
 
+@pytest.mark.parametrize("scroll_positions", [(840, 0), (0, 1280)])
 def test_cpb_closes_preview_for_a_rebuild_dialog_and_reopens_it(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, scroll_positions
 ):
     source = tmp_path / "content.md"
     source.write_text("before\n")
@@ -338,7 +350,7 @@ def test_cpb_closes_preview_for_a_rebuild_dialog_and_reopens_it(
     open_during_dialog = []
 
     def build_hook(number, _text):
-        if number == 2:
+        if number > 1:
             # a dialog in the rebuild (e.g. source fixes or citations)
             continuous.prepare_for_dialog()
             open_during_dialog.append(
@@ -360,10 +372,17 @@ def test_cpb_closes_preview_for_a_rebuild_dialog_and_reopens_it(
             while not browsers and time.monotonic() < deadline:
                 time.sleep(0.01)
             assert browsers[0].loaded.wait(timeout=2)
-            source.write_text("after\n")
-            while len(browsers) < 2 and time.monotonic() < deadline + 2:
-                time.sleep(0.01)
-            assert browsers[1].loaded.wait(timeout=2)
+            for index, position in enumerate(scroll_positions):
+                browsers[index].scroll_position = position
+                source.write_text(f"after {index + 1}\n")
+                deadline = time.monotonic() + 2
+                while (
+                    len(browsers) < index + 2
+                    and time.monotonic() < deadline
+                ):
+                    time.sleep(0.01)
+                assert browsers[index + 1].scroll_restored.wait(timeout=2)
+                assert browsers[index + 1].scroll_position == position
         except BaseException as exc:
             errors.append(exc)
         finally:
@@ -377,13 +396,13 @@ def test_cpb_closes_preview_for_a_rebuild_dialog_and_reopens_it(
     if errors:
         raise errors[0]
 
-    assert runtime["builds"] == ["before\n", "after\n"]
+    assert runtime["builds"] == ["before\n", "after 1\n", "after 2\n"]
     # Chrome was closed while the dialog needed the user, then reopened on
     # the rebuilt page instead of being refreshed
-    assert open_during_dialog == [[False]]
-    assert browsers[0].quit_calls == 1
-    assert browsers[0].refresh_calls == 0
-    assert len(browsers) == 2
+    assert open_during_dialog == [[False], [False, False]]
+    assert all(browser.quit_calls == 1 for browser in browsers)
+    assert all(browser.refresh_calls == 0 for browser in browsers)
+    assert len(browsers) == 3
     assert continuous.dialog_callbacks == []
 
 

@@ -961,6 +961,7 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
         daemon=True,
     )
     chrome = None
+    scroll_position = 0
     observer = None
     observer_started = False
     socket_thread_started = False
@@ -1052,8 +1053,12 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
         def close_for_dialog():
             # a rebuild needs the user, so close the preview while the
             # issues are dealt with; it reopens once the rebuild is done
-            nonlocal chrome
+            nonlocal chrome, scroll_position
             if chrome is not None:
+                # sessionStorage does not survive quitting Chrome.
+                scroll_position = chrome.execute_script(
+                    "return window.scrollY;"
+                )
                 close_browser_window(chrome)
                 chrome = None
 
@@ -1188,6 +1193,10 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
                             chrome = launch_chrome(webdriver)
                             chrome.get(
                                 "file://" + os.path.abspath(html_file)
+                            )
+                            chrome.execute_script(
+                                "window.scrollTo(0, arguments[0]);",
+                                scroll_position,
                             )
                             # }}}
             # }}}
