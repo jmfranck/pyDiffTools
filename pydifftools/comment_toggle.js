@@ -34,7 +34,7 @@
   }
 
   function positionComments() {
-    const useMobileFlow = window.matchMedia("(max-width: 900px)").matches;
+    const useMobileFlow = window.matchMedia("(max-width: 600px)").matches;
     // Inline comment bubbles are absolutely positioned relative to a zero-width
     // pin. We nudge overlapping bubbles so adjacent <comment> tags visibly
     // separate, and we raise the bubbles so the pointer aims at the source point.

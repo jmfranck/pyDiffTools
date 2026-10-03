@@ -4,9 +4,10 @@ html {
 }
 body {
   margin: 0 auto;
-  max-width: 36em;
-  padding-left: 50px;
-  padding-right: 50px;
+  /* Keep 75% of the previous side margins and give the rest to the text. */
+  max-width: calc(27em + 25%);
+  padding-left: 37.5px;
+  padding-right: 37.5px;
   padding-top: 50px;
   padding-bottom: 50px;
   hyphens: auto;
@@ -311,7 +312,7 @@ span.comment-pin > span.comment-left::after {
 }
 
 /* ---------- Mobile fallback ---------- */
-@media (max-width: 900px) {
+@media (max-width: 600px) {
   div.comment-right,
   div.comment-left,
   span.comment-pin > span.comment-right,
