@@ -1591,20 +1591,20 @@ def test_comment_filter_mode_switches_to_margin_and_back(
     project_dir.mkdir()
     active_filter = project_dir / "comment_tags.lua"
     inactive_filter = project_dir / "comment_tags.lua.inactive"
-    active_filter.write_text("normal filter\n")
+    package_dir = Path(continuous.__file__).resolve().parent
+    normal_filter = (package_dir / "comment_tags.lua").read_text()
+    active_filter.write_text(normal_filter)
 
     run_pandoc_with_stubbed_tools(
         project_dir, monkeypatch, comments_to_margin=True
     )
     active_margin = active_filter.read_text()
     assert continuous.MARGIN_COMMENTS_FILTER_MARKER in active_margin
-    assert inactive_filter.read_text() == "normal filter\n"
+    assert not inactive_filter.exists()
 
     run_pandoc_with_stubbed_tools(project_dir, monkeypatch)
-    assert active_filter.read_text() == "normal filter\n"
-    assert (
-        continuous.MARGIN_COMMENTS_FILTER_MARKER in inactive_filter.read_text()
-    )
+    assert active_filter.read_text() == normal_filter
+    assert not inactive_filter.exists()
 
 
 def test_no_comments_filter_restore_prompt_can_restore_default(
@@ -1697,7 +1697,10 @@ def test_no_comments_filter_prompt_only_appears_once_per_session(
     )
 
     assert prompt_calls == ["none"]
-    assert comment_filter_session == {"show_comments": False}
+    assert comment_filter_session == {
+        "show_comments": False,
+        "no_comments_sha256": continuous._comment_filter_digest(active_filter),
+    }
 
 
 def test_comment_filter_prompt_uses_clear_button_labels(monkeypatch):
@@ -1705,7 +1708,7 @@ def test_comment_filter_prompt_uses_clear_button_labels(monkeypatch):
         prompt_script = command[2]
         assert "sys.argv[3]" in prompt_script
         assert "sys.argv[4]" in prompt_script
-        assert command[5:] == [
+        assert command[5:7] == [
             "keep no comments",
             "update filter and styles; show comments",
         ]
@@ -1773,13 +1776,10 @@ def test_comment_filter_mode_restores_repo_default_when_inactive_missing(
     run_pandoc_with_stubbed_tools(project_dir, monkeypatch)
 
     assert active_filter.exists()
-    assert inactive_filter.exists()
+    assert not inactive_filter.exists()
     assert (
         continuous.MARGIN_COMMENTS_FILTER_MARKER
         not in active_filter.read_text()
-    )
-    assert (
-        continuous.MARGIN_COMMENTS_FILTER_MARKER in inactive_filter.read_text()
     )
 
 

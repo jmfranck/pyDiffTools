@@ -48,6 +48,7 @@ pydifftools = [
     "comment_tags.lua",
     "comment_tags_margin.lua",
     "comment_tags_no_comments.lua",
+    "comment_filter_history.json",
     "comment_toggle.js",
 ]
 "pydifftools.flowchart" = [

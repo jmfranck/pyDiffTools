@@ -1,0 +1,145 @@
+{
+  "comment_tags.lua": {
+    "2a0ffaf315c28059d7e8fb67388dd38275f78eb911b640dfb567763bbf63e089": {
+      "commit": "73d51e080667e0b4cf8a13146a615e2866207e04",
+      "mode": "margin",
+      "path": "pydifftools/comment_tags_margin.lua"
+    },
+    "2c16914eb312e46715316ec896c0952483c0f70c519ef3a3d022f28b3047ca54": {
+      "commit": "016080494be7e90d49f94b0f0aeb88c47dc9241a",
+      "mode": "margin",
+      "path": "pydifftools/comment_tags_margin.lua"
+    },
+    "380c20c350751b7e9a107b8855d4f3c1c022daf410dadd1842cffbb5d6b20cd6": {
+      "commit": "697bbdd00d3215c46216669f419014f0d41da526",
+      "mode": "margin",
+      "path": "pydifftools/comment_tags_margin.lua"
+    },
+    "54ab119b5a0868f5349bdf224ec134be59c81b925e7d35b6a1d9173eca2671fa": {
+      "commit": "308647bb0cd7dc153c945703862503eea6a3da9b",
+      "mode": "margin",
+      "path": "pydifftools/comment_tags_margin.lua"
+    },
+    "5a6a27bfb21a0b674adb10b7dcc5b9bf1b34152256391ed77b354dc666e944cf": {
+      "commit": "697bbdd00d3215c46216669f419014f0d41da526",
+      "mode": "none",
+      "path": "pydifftools/comment_tags_no_comments.lua"
+    },
+    "5ffa678cca561170bdaa83ae0d06d6197f3781cb4be01033a5d6c03c4dbcedc3": {
+      "commit": "268d61dac16384984a395bef0067100ac763cb3d",
+      "mode": "none",
+      "path": "pydifftools/comment_tags_no_comments.lua"
+    },
+    "a994853143e845328e43c642b9445202b115ec07762fe85d30763006d71f7389": {
+      "commit": "308647bb0cd7dc153c945703862503eea6a3da9b",
+      "mode": "default",
+      "path": "pydifftools/comment_tags.lua"
+    },
+    "aecfb5915c837c724b0d9a7c9404166103da912fe2cb99834b48073b8d637ca1": {
+      "commit": "e2eb0fba6cb03884889a257f776a3f64c3a3185e",
+      "mode": "default",
+      "path": "pydifftools/comment_tags.lua"
+    },
+    "ba2f1e784187a3bb8dc110d1065b23bc3dd9f5993db988542009c105ee3fb925": {
+      "commit": "016080494be7e90d49f94b0f0aeb88c47dc9241a",
+      "mode": "default",
+      "path": "pydifftools/comment_tags.lua"
+    },
+    "d0f1a6f876382334184f3b0a1341159c827845efcccfb6d5cd06a70207660e1a": {
+      "commit": "697bbdd00d3215c46216669f419014f0d41da526",
+      "mode": "default",
+      "path": "pydifftools/comment_tags.lua"
+    },
+    "deea0b807c92875c8a450875ac10a7df841ffa76350f320140ee1dcb5c1445fb": {
+      "commit": "73d51e080667e0b4cf8a13146a615e2866207e04",
+      "mode": "default",
+      "path": "pydifftools/comment_tags.lua"
+    },
+    "fcebc0022c806cec34b467086116428cc1f48e5b23225bf5a9561f273cd7218b": {
+      "commit": "308647bb0cd7dc153c945703862503eea6a3da9b",
+      "mode": "none",
+      "path": "pydifftools/comment_tags_no_comments.lua"
+    },
+    "ffc14453e371f701d2a49e9a0cc29746b589372d0066c42f0c5c18f8953286f7": {
+      "commit": "7d2847f50b5f261c4128a89d858391f8a8c76f0c",
+      "mode": "default",
+      "path": "pydifftools/comment_tags.lua"
+    }
+  },
+  "comment_toggle.js": {
+    "1f19e86fa7bc272b15dfd4feae155ae2cb328d28fe38476306d8200329126de4": {
+      "commit": "60e573de785f3ad10043e6ccc7fe14b4c0292019",
+      "mode": "shared",
+      "path": "pydifftools/comment_toggle.js"
+    },
+    "34d3a67a4f79aa0711c434a8d315aa74fcb5aad95b6cbc23ba19c4a29e9dd66f": {
+      "commit": "9a4a907da65467eecc1595035b215e34be742441",
+      "mode": "shared",
+      "path": "pydifftools/comment_toggle.js"
+    },
+    "617107e0c5c58b1b1b15b8a2485860eb1345536974ba76caa625fa2b809516ce": {
+      "commit": "7e84fc03bb8daf6e1081a3ec3f93ceb934088687",
+      "mode": "shared",
+      "path": "pydifftools/comment_toggle.js"
+    },
+    "c9129af481db475469341bb2a8b6b2ba3739bddd8dc1f8601b43168519d51172": {
+      "commit": "e2eb0fba6cb03884889a257f776a3f64c3a3185e",
+      "mode": "shared",
+      "path": "pydifftools/comment_toggle.js"
+    },
+    "d3b405f1158b80455c998b375939e7daecbb0b7f33c8406823bc350b20096ecd": {
+      "commit": "016080494be7e90d49f94b0f0aeb88c47dc9241a",
+      "mode": "shared",
+      "path": "pydifftools/comment_toggle.js"
+    }
+  },
+  "comments.css": {
+    "0ad0f6ce759b071bf3e5568fb97f327db7678cbb203c2b93550b0ca32f1dd44c": {
+      "commit": "7e84fc03bb8daf6e1081a3ec3f93ceb934088687",
+      "mode": "shared",
+      "path": "pydifftools/comments.css"
+    },
+    "1ca5a5d10356bdf194fc05f0eab2aa4f1741d0e6d50418caa15b66f9da28c5ec": {
+      "commit": "8245633092781d39638f6cbf90c91090a7cccd8f",
+      "mode": "shared",
+      "path": "pydifftools/comments.css"
+    },
+    "998852f3328d0c2fb717b441e8804baf9047c1fbe5377a237e162465c37d13e3": {
+      "commit": "60e573de785f3ad10043e6ccc7fe14b4c0292019",
+      "mode": "shared",
+      "path": "pydifftools/comments.css"
+    },
+    "a1bb5ffd9d5a8d1a1867db36fe179c6f1070378c3719b4c68e3eebfda07a4805": {
+      "commit": "e2eb0fba6cb03884889a257f776a3f64c3a3185e",
+      "mode": "shared",
+      "path": "pydifftools/comments.css"
+    },
+    "a9a0686877e33d4fd640a8f513af7ff750ace05387e95e3a7fb292a94585e771": {
+      "commit": "73d51e080667e0b4cf8a13146a615e2866207e04",
+      "mode": "shared",
+      "path": "pydifftools/comments.css"
+    },
+    "ac1c93065a777c4f185293be2baac9011ad5d5014f67e4947b21aa353d6609cc": {
+      "commit": "9a4a907da65467eecc1595035b215e34be742441",
+      "mode": "shared",
+      "path": "pydifftools/comments.css"
+    },
+    "d730a992c3b6570e0a1c26b2fe351338a1b0ac7d6a8e17ace0a5292b92ba6ff5": {
+      "commit": "518379efe37292e5d3d9b5dfa687c0842b5e9c1d",
+      "mode": "shared",
+      "path": "pydifftools/comments.css"
+    },
+    "ea39254a85879468c2c47cf30267602afff0328ba9ae3acbe236af6501061502": {
+      "commit": "016080494be7e90d49f94b0f0aeb88c47dc9241a",
+      "mode": "shared",
+      "path": "pydifftools/comments.css"
+    }
+  },
+  "comments_author_colors.css": {
+    "a5e409852c32f3e80482b111c96bd6d87b37a0e3750a33d5f4f499bd6af849fe": {
+      "commit": "697bbdd00d3215c46216669f419014f0d41da526",
+      "mode": "shared",
+      "path": "pydifftools/comments_author_colors.css"
+    }
+  }
+}

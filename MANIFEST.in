@@ -8,6 +8,7 @@ include pydifftools/comments_author_colors.css
 include pydifftools/comment_tags.lua
 include pydifftools/comment_tags_margin.lua
 include pydifftools/comment_tags_no_comments.lua
+include pydifftools/comment_filter_history.json
 include pydifftools/comment_toggle.js
 include pydifftools/flowchart/svg-pan-zoom.min.js
 include pydifftools/flowchart/wgrph_view.js

@@ -233,6 +233,7 @@ jobs:
 
       - name: Build sdist and wheel
         run: |
+          python .github/scripts/update_comment_filter_history.py
           python -m pip install -U pip build
           python -m build  # builds both sdist and wheel by default
           ls -l dist

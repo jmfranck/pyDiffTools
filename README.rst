@@ -63,6 +63,27 @@ included are (listed in order of fun/utility):
   matching color. New authors choose a hue in a Qt picker; ``cpb`` adds their
   ``XXcolor`` field to the header.
 
+  ``cpb`` manages ``comment_tags.lua``, the comment stylesheets and
+  ``comment_toggle.js`` beside the Markdown source. A packaged SHA-256
+  catalog covers current and historical helpers from Git, including the
+  normal, margin and no-comment Lua variants. Known older files trigger an
+  update offer; unrecognized files are treated as possible local edits.
+  Updating removes generated helpers from Git tracking without deleting
+  the working copies, and adds them to ``.gitignore``. Keeping local edits
+  or Git tracking requires a second confirmation. An ignored
+  ``.pydifft-comment-filter.json`` records the approved file hashes; changing
+  any helper causes another prompt. Keeping known older versions applies
+  only to the current ``cpb`` session.
+
+  ``--no-comments`` selects the no-comment Lua variant. Running without
+  that flag when the on-disk Lua matches a current or historical no-comment
+  version asks whether to show comments. The selection uses the files'
+  contents, without active/inactive swapping or remembered mode settings.
+  Existing ``.inactive`` copies are migrated, preserving unique local
+  edits in ignored recovery files. Maintainers refresh the catalog with
+  ``python .github/scripts/update_comment_filter_history.py``; the release
+  workflow also refreshes it before building distributions.
+
   Declare a single local ``.bib`` file with ``bibliography: references.bib``
   in the Markdown YAML header; relative paths are resolved beside the
   Markdown file. Without that declaration, ``cpb`` uses a single adjacent

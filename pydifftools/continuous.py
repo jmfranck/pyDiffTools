@@ -1,6 +1,7 @@
 """Continuous Pandoc build utility that requires geckodriver."""
 
 import json
+import hashlib
 import time
 import subprocess
 import sys
@@ -50,6 +51,30 @@ NO_COMMENTS_FILTER_MARKER = (
 )
 
 
+def _comment_filter_digest(path):
+    # Normalize line endings so a Windows checkout is still a known version.
+    content = Path(path).read_bytes().replace(b"\r\n", b"\n").replace(
+        b"\r", b"\n"
+    )
+    return hashlib.sha256(content).hexdigest()
+
+
+def _comment_filter_git(source_dir, *args):
+    """Run Git for managed filters without requiring a repository."""
+    command = ["git", "-C", str(source_dir), *args]
+    try:
+        with subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True,
+        ) as process:
+            stdout, stderr = process.communicate()
+            return subprocess.CompletedProcess(
+                command, process.returncode, stdout, stderr
+            )
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(command, 1, "", "Git not installed")
+
+
 def _comment_filter_mode(path, packaged_filters=None):
     if not os.path.exists(path):
         return "missing"
@@ -60,12 +85,15 @@ def _comment_filter_mode(path, packaged_filters=None):
             "margin": os.path.join(package_dir, "comment_tags_margin.lua"),
             "none": os.path.join(package_dir, "comment_tags_no_comments.lua"),
         }
-    with open(path, encoding="utf-8") as fp:
-        filter_text = fp.read()
+    digest = _comment_filter_digest(path)
     for mode in ["default", "margin", "none"]:
-        with open(packaged_filters[mode], encoding="utf-8") as fp:
-            if filter_text == fp.read():
-                return mode
+        if digest == _comment_filter_digest(packaged_filters[mode]):
+            return mode
+    history_path = Path(__file__).with_name("comment_filter_history.json")
+    history = json.loads(history_path.read_text(encoding="utf-8"))
+    if digest in history["comment_tags.lua"]:
+        mode = history["comment_tags.lua"][digest]["mode"]
+        return "outdated" if mode == "default" else "outdated-" + mode
     return "custom"
 
 
@@ -78,30 +106,57 @@ def confirm_restore_comment_filter(active_mode):
         message = (
             "The current lua filter is the one that does not show comments, "
             "but you ran without the --no-comments flag.\n\n"
-            "Note that you have not locally edited the filter relative to "
-            "the library default.\n\n"
+            "Its hash matches a current or historical distributed "
+            "no-comment filter.\n\n"
             "Do you want to update the filter and comment styles to the "
-            "library versions and show comments, or keep no comments?"
+            "library versions and show comments, or keep no comments? "
+            "Updating also untracks the generated helpers and ignores "
+            "them in Git."
         )
         default_choice = "restore"
         update_label = "update filter and styles; show comments"
         keep_label = "keep no comments"
     elif active_mode == "custom":
         message = (
-            "The current lua filter differs from the pyDiffTools library "
-            "filters, but you ran without the --no-comments flag. It may be "
-            "an older distributed filter or a local edit.\n\n"
-            "Do you want to update the filter and comment styles to the "
-            "library versions and show comments, or keep the current "
-            "filter and styles?"
+            "One or more comment helper files (Lua, CSS or JavaScript) "
+            "do not match any current or historical package version. "
+            "They appear to be locally modified.\n\n"
+            "Update the helpers to the library versions for the selected "
+            "comment mode, or keep the current files?"
         )
-        default_choice = "keep"
-        update_label = "update filter and styles; show comments"
-        keep_label = "keep current filter"
+        default_choice = "restore"
+        update_label = "update filter and styles; untrack and ignore"
+        keep_label = "keep current helper files"
+    elif active_mode == "outdated":
+        message = (
+            "One or more comment helpers match known older versions "
+            "from the pyDiffTools Git history. Updating is recommended "
+            "to get the current comment-tag behavior and fixes.\n\n"
+            "Replace it and the comment styles with the library versions?"
+        )
+        default_choice = "restore"
+        update_label = "update filter and styles; untrack and ignore"
+        keep_label = "keep older helpers for this session"
+    elif active_mode == "tracked":
+        message = (
+            "Comment helper files are tracked by Git. These generated "
+            "files should normally be managed by pyDiffTools.\n\n"
+            "The recommended choice removes it from Git tracking, adds "
+            "it to .gitignore, and uses the current library version. "
+            "The working copy stays on disk."
+        )
+        default_choice = "restore"
+        update_label = "let pyDiffTools manage; untrack and ignore"
+        keep_label = "keep current helpers tracked by Git"
     else:
         raise ValueError(
-            "Comment filter restore prompt is only valid for custom or "
-            f"no-comments filters, not {active_mode!r}"
+            "Comment filter restore prompt is only valid for custom, "
+            f"outdated, tracked or no-comments filters, not {active_mode!r}"
+        )
+    if active_mode in {"custom", "outdated"}:
+        message += (
+            "\n\nIf it is tracked by Git, updating also removes it from "
+            "tracking and adds it to .gitignore."
         )
     prompt_script = """
 import sys
@@ -112,22 +167,52 @@ box = QMessageBox()
 box.setWindowTitle("pydifft cpb")
 box.setIcon(QMessageBox.Icon.Question)
 box.setText(sys.argv[1])
-keep_button = box.addButton(sys.argv[3], QMessageBox.ButtonRole.RejectRole)
+keep_button = box.addButton(sys.argv[3], QMessageBox.ButtonRole.ActionRole)
 restore_button = box.addButton(sys.argv[4], QMessageBox.ButtonRole.AcceptRole)
+cancel_button = box.addButton("cancel", QMessageBox.ButtonRole.RejectRole)
+box.setEscapeButton(cancel_button)
 if sys.argv[2] == "restore":
     box.setDefaultButton(restore_button)
 else:
     box.setDefaultButton(keep_button)
-box.exec()
-if box.clickedButton() is restore_button:
-    sys.exit(0)
-sys.exit(1)
+while True:
+    box.exec()
+    if box.clickedButton() is restore_button:
+        sys.exit(0)
+    if box.clickedButton() is not keep_button:
+        sys.exit(2)
+    if sys.argv[5] == "none":
+        sys.exit(1)
+    confirmation = QMessageBox()
+    confirmation.setWindowTitle("Keep this comment filter?")
+    confirmation.setIcon(QMessageBox.Icon.Warning)
+    confirmation.setText(
+        "Are you really sure you want to keep this filter instead of "
+        "letting pyDiffTools manage it? It may lack current comment-tag "
+        "fixes. If it is tracked by Git, it will remain tracked.\\n\\n"
+        "For local modifications or a current tracked filter, approval "
+        "is recorded in .pydifft-comment-filter.json beside your source "
+        "file. You will be asked again if any helper changes. Known older "
+        "versions are kept only for this session."
+    )
+    go_back = confirmation.addButton(
+        "go back", QMessageBox.ButtonRole.RejectRole
+    )
+    keep_local = confirmation.addButton(
+        ("keep older helpers for this session" if sys.argv[5] == "outdated"
+         else "keep local helpers and stop asking"),
+        QMessageBox.ButtonRole.AcceptRole
+    )
+    confirmation.setDefaultButton(go_back)
+    confirmation.exec()
+    if confirmation.clickedButton() is keep_local:
+        sys.exit(1)
 """
     prepare_for_dialog()
     result = subprocess.run(
         [
             sys.executable, "-c", prompt_script, message, default_choice,
-            keep_label, update_label,
+            keep_label, update_label, active_mode,
         ],
         capture_output=True,
         text=True,
@@ -136,6 +221,8 @@ sys.exit(1)
         return True
     if result.returncode == 1:
         return False
+    if result.returncode == 2:
+        return None
     stderr = result.stderr.strip()
     if stderr:
         raise RuntimeError(f"pydifft cpb filter dialog failed: {stderr}")
@@ -562,8 +649,17 @@ def run_pandoc(
     source_dir = os.path.dirname(os.path.abspath(filename))
     with open(filename, encoding="utf-8") as fp:
         markdown_text = fp.read()
+    helper_names = [
+        "comment_tags.lua", "comments.css", "comments_author_colors.css",
+        "comment_toggle.js",
+    ]
+    selected_comment_filter = None
     if (
-        re.search(
+        any(
+            os.path.exists(os.path.join(source_dir, name))
+            for name in [*helper_names, "comment_tags.lua.inactive"]
+        )
+        or re.search(
             r"</?[A-Za-z]{2}com(?:-(?:left|right))?>",
             markdown_text,
             re.IGNORECASE,
@@ -579,111 +675,227 @@ def run_pandoc(
         or "comment-right" in markdown_text
         or "comment-left" in markdown_text
     ):
-        # Keep the active comment filter in the markdown directory so pandoc
-        # picks it up alongside other user-supplied project filters.
-        # {{{ select the active comment_tags.lua filter
-        package_dir = os.path.dirname(os.path.abspath(__file__))
-        active_filter = os.path.join(source_dir, "comment_tags.lua")
-        inactive_filter = os.path.join(
-            source_dir, "comment_tags.lua.inactive"
-        )
+        # {{{ Manage one local filter, recognize history and approved edits
+        package_dir = Path(__file__).resolve().parent
+        local_filter = Path(source_dir) / "comment_tags.lua"
+        legacy_filter = Path(source_dir) / "comment_tags.lua.inactive"
+        approval_path = Path(source_dir) / ".pydifft-comment-filter.json"
         packaged_filters = {
-            "default": os.path.join(package_dir, "comment_tags.lua"),
-            "margin": os.path.join(package_dir, "comment_tags_margin.lua"),
-            "none": os.path.join(package_dir, "comment_tags_no_comments.lua"),
+            "default": package_dir / "comment_tags.lua",
+            "margin": package_dir / "comment_tags_margin.lua",
+            "none": package_dir / "comment_tags_no_comments.lua",
         }
-        active_mode = _comment_filter_mode(active_filter, packaged_filters)
-        inactive_mode = _comment_filter_mode(inactive_filter, packaged_filters)
-
-        if comment_filter_mode == "default":
-            if active_mode == "default":
-                effective_filter_mode = "default"
-            elif active_mode in {"none", "custom"}:
-                if (
-                    comment_filter_session is not None
-                    and "show_comments" in comment_filter_session
-                ):
-                    show_comments = comment_filter_session["show_comments"]
-                else:
-                    # {{{ ask whether to restore comments after detecting a
-                    # locally changed comment filter
-                    show_comments = confirm_restore_comment_filter(
-                        active_mode
-                    )
-                    # }}}
-                    if comment_filter_session is not None:
-                        comment_filter_session["show_comments"] = (
-                            show_comments
-                        )
-                if show_comments:
-                    shutil.copy2(
-                        packaged_filters["default"], active_filter
-                    )
-                    shutil.copy2(
-                        os.path.join(package_dir, "comments.css"),
-                        os.path.join(source_dir, "comments.css"),
-                    )
-                    effective_filter_mode = "default"
-                else:
-                    effective_filter_mode = active_mode
-            elif active_mode == "margin":
-                if inactive_mode in {"default", "custom"}:
-                    temp_filter = active_filter + ".swap_tmp"
-                    os.replace(active_filter, temp_filter)
-                    os.replace(inactive_filter, active_filter)
-                    os.replace(temp_filter, inactive_filter)
-                    effective_filter_mode = inactive_mode
-                else:
-                    os.replace(active_filter, inactive_filter)
-                    shutil.copy2(
-                        packaged_filters["default"], active_filter
-                    )
-                    effective_filter_mode = "default"
-            elif active_mode == "missing":
-                if inactive_mode in {"default", "custom"}:
-                    os.replace(inactive_filter, active_filter)
-                    effective_filter_mode = inactive_mode
-                else:
-                    shutil.copy2(
-                        packaged_filters["default"], active_filter
-                    )
-                    effective_filter_mode = "default"
+        history = json.loads(
+            (package_dir / "comment_filter_history.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        known_modes = {
+            digest: item["mode"]
+            for digest, item in history["comment_tags.lua"].items()
+        }
+        known_modes.update({
+            _comment_filter_digest(file): mode
+            for mode, file in packaged_filters.items()
+        })
+        original_mode = _comment_filter_mode(local_filter, packaged_filters)
+        legacy_mode = _comment_filter_mode(legacy_filter, packaged_filters)
+        # Recover a user's normal filter from the former swap scheme once.
+        if original_mode in {
+            "missing", "margin", "none", "outdated-margin", "outdated-none",
+        } and legacy_mode in {"default", "custom", "outdated"}:
+            shutil.copy2(legacy_filter, local_filter)
+        elif original_mode == "missing":
+            shutil.copy2(packaged_filters["default"], local_filter)
+        local_mode = _comment_filter_mode(local_filter, packaged_filters)
+        local_digest = _comment_filter_digest(local_filter)
+        helper_digests = {
+            name: _comment_filter_digest(Path(source_dir) / name)
+            for name in helper_names if (Path(source_dir) / name).exists()
+        }
+        try:
+            approval = json.loads(approval_path.read_text(encoding="utf-8"))
+            if not isinstance(approval, dict):
+                approval = {}
+        except (OSError, ValueError):
+            approval = {}
+        tracked = _comment_filter_git(
+            source_dir, "ls-files", "-z", "--", *helper_names,
+            "comment_tags.lua.inactive",
+        )
+        tracked_files = (
+            tracked.stdout.rstrip("\0").split("\0")
+            if tracked.returncode == 0 and tracked.stdout else []
+        )
+        keep_tracked = (
+            any(name in tracked_files for name in helper_names)
+            and approval.get("keep_tracked") is True
+        )
+        approved = (
+            approval.get("files") == helper_digests
+            and (not tracked_files or keep_tracked)
+            and not local_mode.startswith("outdated")
+        )
+        effective_filter_mode = comment_filter_mode
+        previous_mode = (
+            "none" if original_mode.endswith("none") else local_mode
+        )
+        replace_styles = False
+        if comment_filter_mode == "default" and previous_mode in {
+            "none", "outdated-none",
+        }:
+            if (
+                comment_filter_session is not None
+                and comment_filter_session.get("no_comments_sha256")
+                == local_digest
+            ):
+                show_comments = comment_filter_session["show_comments"]
             else:
-                shutil.copy2(packaged_filters["default"], active_filter)
-                effective_filter_mode = "default"
+                show_comments = confirm_restore_comment_filter("none")
+                if show_comments is None:
+                    raise RuntimeError("Comment filter selection cancelled.")
+            if show_comments:
+                replace_styles = True
+                keep_tracked = False
+            else:
+                effective_filter_mode = "none"
+        prompt_mode = None
+        helper_states = [local_mode]
+        for name, digest in helper_digests.items():
+            if name == "comment_tags.lua":
+                continue
+            current = _comment_filter_digest(package_dir / name)
+            helper_states.append(
+                "current" if digest == current else
+                "outdated" if digest in history[name] else "custom"
+            )
+        # Approvals cover the actual files, never a remembered rendering mode.
+        approved &= not replace_styles and not any(
+            state.startswith("outdated") for state in helper_states
+        )
+        keep_local = approved
+        if not approved and not replace_styles:
+            if "custom" in helper_states:
+                prompt_mode = "custom"
+            elif any(state.startswith("outdated") for state in helper_states):
+                prompt_mode = "outdated"
+            elif tracked_files:
+                prompt_mode = "tracked"
+        if prompt_mode is not None:
+            if (
+                comment_filter_session is not None
+                and comment_filter_session.get("files") == helper_digests
+            ):
+                update = comment_filter_session["update_filter"]
+            else:
+                update = confirm_restore_comment_filter(prompt_mode)
+                if update is None:
+                    raise RuntimeError("Comment filter update cancelled.")
+                if comment_filter_session is not None:
+                    comment_filter_session.update(
+                        files=helper_digests, update_filter=update,
+                    )
+            keep_local = not update
+            keep_tracked = keep_local and any(
+                name in tracked_files for name in helper_names
+            )
+            replace_styles |= update
+        # Update the index only for the generated project copies, never other
+        # Lua filters or the package's authoritative sources.
+        untrack = [
+            name for name in tracked_files
+            if name == "comment_tags.lua.inactive" or not keep_tracked
+        ]
+        if untrack:
+            result = _comment_filter_git(
+                source_dir, "rm", "--cached", "--", *untrack
+            )
+            if result.returncode:
+                raise RuntimeError(
+                    "Cannot stop tracking the managed comment filter: "
+                    + result.stderr.strip()
+                )
+            print("cpb: removed generated comment filters from Git tracking.")
+        ignore_path = Path(source_dir) / ".gitignore"
+        ignore_text = (
+            ignore_path.read_text(encoding="utf-8")
+            if ignore_path.exists() else ""
+        )
+        patterns = [
+            "/comment_tags.lua.inactive", "/.pydifft-comment-filter.json",
+            "/.pydifft-comment-filter-backup.*",
+        ]
+        if not keep_tracked:
+            patterns.extend("/" + name for name in helper_names)
+        additions = [
+            p for p in patterns if p not in ignore_text.splitlines()
+        ]
+        if additions:
+            if ignore_text and not ignore_text.endswith("\n"):
+                ignore_text += "\n"
+            ignore_path.write_text(
+                ignore_text + "\n".join(additions) + "\n",
+                encoding="utf-8",
+            )
+        if keep_local:
+            local_render_mode = known_modes.get(local_digest, "default")
+            selected_comment_filter = (
+                local_filter if local_render_mode == effective_filter_mode
+                else packaged_filters[effective_filter_mode]
+            )
         else:
-            effective_filter_mode = comment_filter_mode
-            if active_mode == comment_filter_mode:
-                pass
-            elif active_mode in {"default", "custom"}:
-                os.replace(active_filter, inactive_filter)
-                shutil.copy2(
-                    packaged_filters[comment_filter_mode], active_filter
+            desired_filter = packaged_filters[effective_filter_mode]
+            if local_digest != _comment_filter_digest(desired_filter):
+                shutil.copy2(desired_filter, local_filter)
+            selected_comment_filter = local_filter
+            approval_path.unlink(missing_ok=True)
+        # Retire legacy swap files, retaining unique local edits as ignored
+        # recovery copies rather than discarding them.
+        if legacy_filter.exists():
+            legacy_digest = _comment_filter_digest(legacy_filter)
+            if (
+                legacy_mode == "custom"
+                and legacy_digest != _comment_filter_digest(local_filter)
+            ):
+                backup = Path(source_dir) / (
+                    ".pydifft-comment-filter-backup." + legacy_digest
+                )
+                legacy_filter.replace(backup)
+                print(f"cpb: preserved a former local filter in {backup}")
+            else:
+                legacy_filter.unlink()
+        if comment_filter_session is not None:
+            if effective_filter_mode == "none":
+                comment_filter_session.update(
+                    no_comments_sha256=_comment_filter_digest(
+                        selected_comment_filter
+                    ), show_comments=False,
                 )
             else:
-                if active_mode == "missing" and inactive_mode not in {
-                    "default",
-                    "custom",
-                }:
-                    shutil.copy2(
-                        packaged_filters["default"], inactive_filter
-                    )
-                shutil.copy2(
-                    packaged_filters[comment_filter_mode], active_filter
-                )
+                comment_filter_session.pop("no_comments_sha256", None)
+                comment_filter_session.pop("show_comments", None)
+        for asset_name in helper_names[1:]:
+            target_path = Path(source_dir) / asset_name
+            if effective_filter_mode != "none" or target_path.exists():
+                if not target_path.exists() or not keep_local:
+                    shutil.copy2(package_dir / asset_name, target_path)
+        final_digests = {
+            name: _comment_filter_digest(Path(source_dir) / name)
+            for name in helper_names if (Path(source_dir) / name).exists()
+        }
+        if (
+            keep_local and prompt_mode is not None
+            and comment_filter_session is not None
+        ):
+            comment_filter_session["files"] = final_digests
+        if keep_local and not any(
+            state.startswith("outdated") for state in helper_states
+        ):
+            approval_path.write_text(json.dumps({
+                "files": final_digests,
+                "keep_tracked": keep_tracked,
+            }, indent=2) + "\n", encoding="utf-8")
         # }}}
-        # Only copy the comment UI assets when comments should be rendered.
-        if effective_filter_mode != "none":
-            for asset_name in [
-                "comments.css", "comments_author_colors.css",
-                "comment_toggle.js",
-            ]:
-                target_path = os.path.join(source_dir, asset_name)
-                if not os.path.exists(target_path):
-                    shutil.copy2(
-                        os.path.join(package_dir, asset_name),
-                        target_path,
-                    )
     # {{{ select the declared bibliography before adjacent-file discovery
     bibliography_declared = False
     bibliography_paths = []
@@ -783,7 +995,13 @@ def run_pandoc(
     for css_file in localfiles["css"]:
         command.extend(["--css", os.path.join(source_dir, css_file)])
     for lua_file in localfiles["lua"]:
-        command.extend(["--lua-filter", os.path.join(source_dir, lua_file)])
+        lua_path = os.path.join(source_dir, lua_file)
+        if (
+            lua_file == "comment_tags.lua"
+            and selected_comment_filter is not None
+        ):
+            lua_path = str(selected_comment_filter)
+        command.extend(["--lua-filter", lua_path])
     # {{{ render, recover missing citations, and rebuild at most once
     with tempfile.TemporaryDirectory(prefix="pydifft-citations-") as temp_dir:
         diagnostic_path = Path(temp_dir) / "pandoc.json"
@@ -1017,8 +1235,7 @@ class Handler(FileSystemEventHandler):
     help={
         "filename": "Markdown or TeX file to watch for changes",
         "comments_to_margin": (
-            "Temporarily replace comment_tags.lua with the special margin "
-            "comments filter for printing."
+            "Use the margin-comments Lua filter for printing."
         ),
         "no_comments": (
             "Render the HTML without comment tags or comment div blocks."
