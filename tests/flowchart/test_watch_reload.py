@@ -49,13 +49,17 @@ def test_reload_preserves_view(tmp_path):
 
 
 def test_watch_html_uses_block_embed(tmp_path):
-    html = _watch_html("/graph.svg", False)
+    html = _watch_html(
+        "/graph.svg", False, source_jump_url="http://127.0.0.1:1234/jump"
+    )
     assert "#svg-view{display:block;width:100%;height:100%;}" in html
     assert "id='svg-view'" in html
     for button in ("home", "zoom-in", "zoom-out", "box-zoom"):
         assert f"id='wgrph-{button}'" in html
     assert "<script src='/svg-pan-zoom.min.js'></script>" in html
     assert "<script src='/wgrph_view.js'></script>" in html
+    assert "window.pydifftSourceJumpEndpoint" in html
+    assert "<script src='/source_jump.js'></script>" in html
     assert "type='image/svg+xml'" in html
     assert "<a href='/?d=1'>date-ordered</a>" in html
     assert "<a href='/?p=1'>exclude completed</a>" in html

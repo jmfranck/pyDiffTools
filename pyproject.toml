@@ -53,6 +53,7 @@ pydifftools = [
 "pydifftools.flowchart" = [
     "svg-pan-zoom.min.js",
     "wgrph_view.js",
+    "source_jump.js",
 ]
 
 [tool.black]

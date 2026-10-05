@@ -34,6 +34,7 @@ from .forward_search import (
     drain_forward_search_queue,
     serve_forward_search,
 )
+from .source_jump import SourceJumpServer
 
 FORWARD_SEARCH_PORT = CPB_FORWARD_SEARCH_PORT
 POLL_INTERVAL_SECONDS = 0.1
@@ -802,7 +803,7 @@ def run_pandoc(
     return
 
 
-def append_autorefresh(html_file):
+def append_autorefresh(html_file, source_jump_url=None):
     with open(html_file, "r", encoding="utf-8") as fp:
         all_data = fp.read()
     all_data = all_data.replace(
@@ -867,6 +868,29 @@ position
 </head>
     """,
     )
+    if source_jump_url:
+        all_data = re.sub(
+            r'\s*<script id="pydifft-source-jump-config">.*?</script>'
+            r'\s*<script id="pydifft-source-jump">.*?</script>',
+            "",
+            all_data,
+            flags=re.DOTALL,
+        )
+        source_jump_js = (
+            Path(__file__).parent / "flowchart" / "source_jump.js"
+        ).read_text(encoding="utf-8")
+        source_jump_scripts = (
+            '<script id="pydifft-source-jump-config">'
+            "window.pydifftSourceJumpEndpoint = "
+            + json.dumps(source_jump_url)
+            + ";</script>"
+            '<script id="pydifft-source-jump">'
+            + source_jump_js
+            + "</script>"
+        )
+        all_data = all_data.replace(
+            "</head>", source_jump_scripts + "</head>", 1
+        )
     with open(html_file, "w", encoding="utf-8") as fp:
         fp.write(all_data)
 
@@ -939,6 +963,7 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
     observer = None
     observer_started = False
     socket_thread_started = False
+    source_jump_server = None
 
     try:
         # Bind and serve before any build or browser work. This makes the fixed
@@ -968,7 +993,9 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
             comment_filter_session=comment_filter_session,
             wrapnumber=wrapnumber,
         )
-        append_autorefresh(html_file)
+        source_jump_server = SourceJumpServer(source_path)
+        source_jump_server.start()
+        append_autorefresh(html_file, source_jump_server.url)
 
         # Selenium is deliberately initialized once, after the first
         # successful build. Nothing in recovery constructs a browser.
@@ -1113,7 +1140,9 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
                                 comment_filter_session=comment_filter_session,
                                 wrapnumber=wrapnumber,
                             )
-                            append_autorefresh(html_file)
+                            append_autorefresh(
+                                html_file, source_jump_server.url
+                            )
                         except Exception as exc:
                             exception_filename = getattr(exc, "filename", None)
                             missing_source = isinstance(
@@ -1167,6 +1196,8 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
     finally:
         stop_event.set()
         forward_search_server.close()
+        if source_jump_server is not None:
+            source_jump_server.stop()
         if observer_started:
             observer.stop()
             observer.join()

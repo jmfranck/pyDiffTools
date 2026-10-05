@@ -120,6 +120,29 @@
       },
       true
     );
+    svgDoc.addEventListener(
+      'contextmenu',
+      function (evt) {
+        const node = evt.target.closest
+          ? evt.target.closest('g.node[data-source-name]')
+          : null;
+        if (!node) {
+          return;
+        }
+        evt.preventDefault();
+        const bounds = embed.getBoundingClientRect();
+        window.parent.document.dispatchEvent(
+          new window.parent.CustomEvent('pydifft-source-context', {
+            detail: {
+              phrase: node.getAttribute('data-source-name'),
+              clientX: bounds.left + evt.clientX,
+              clientY: bounds.top + evt.clientY,
+            },
+          })
+        );
+      },
+      true
+    );
     // }}}
 
     // {{{ Zoom-to-rectangle mode

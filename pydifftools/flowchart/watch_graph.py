@@ -1,5 +1,6 @@
 import subprocess
 import html
+import json
 import sys
 import time
 import shutil
@@ -27,6 +28,7 @@ from pydifftools.browser_lifecycle import (
     browser_window_is_alive,
     close_browser_window,
 )
+from pydifftools.source_jump import SourceJumpServer
 from .comparison import PlanComparison
 from .graph import EmptyGraphYamlError, endpoint_projects, write_dot_from_yaml
 
@@ -117,6 +119,8 @@ def _svg_set_stroke(shape, color, stroke_width=None):
             )
 
 
+# also used by: tests/flowchart/test_watch_reload.py, which verifies
+# query modes
 def _watch_view_state_from_params(params):
     # Treat each GET query as the full requested mode so navigation links can
     # reliably switch back to the overview without depending on prior state.
@@ -138,12 +142,15 @@ def _watch_view_state_from_params(params):
     return order_by_date, target_task, filter_completed
 
 
+# also used by: tests/flowchart/test_watch_reload.py, which verifies
+# preview HTML
 def _watch_html(
     svg_url,
     order_by_date,
     target_task=None,
     filter_completed=False,
     comparison=None,
+    source_jump_url=None,
 ):
     # {{{ Build links for the other preview views
     links = []
@@ -213,7 +220,14 @@ def _watch_html(
         "</p>"
         "<script src='/svg-pan-zoom.min.js'></script>"
         "<script src='/wgrph_view.js'></script>"
-        "</body></html>"
+        + (
+            "<script>window.pydifftSourceJumpEndpoint = "
+            + json.dumps(source_jump_url)
+            + ";</script><script src='/source_jump.js'></script>"
+            if source_jump_url
+            else ""
+        )
+        + "</body></html>"
     )
 
 
@@ -322,6 +336,17 @@ def build_graph(
     ET.register_namespace("xlink", xlink_ns)
     link_marker = "__WGRPH_TASK_LINK__:"
     for group in svg_root.iter(f"{namespace}g"):
+        if group.attrib.get("class") == "node":
+            title = next(
+                (
+                    child.text.strip()
+                    for child in group
+                    if child.tag == f"{namespace}title" and child.text
+                ),
+                None,
+            )
+            if title:
+                group.set("data-source-name", title)
         if "class" not in group.attrib or group.attrib["class"] != "node":
             continue
         for index, child in enumerate(list(group)):
@@ -712,6 +737,7 @@ class FlowchartPreviewServer:
         self.host = host
         self.httpd = None
         self.server_thread = None
+        self.source_jump_server = None
         self.base_url = None
         self.svg_url = None
 
@@ -730,6 +756,13 @@ class FlowchartPreviewServer:
                     )
                     return
                 if parsed.path in ("/svg-pan-zoom.min.js", "/wgrph_view.js"):
+                    _send_preview_response(
+                        self,
+                        (Path(__file__).parent / parsed.path[1:]).read_bytes(),
+                        "text/javascript; charset=utf-8",
+                    )
+                    return
+                if parsed.path == "/source_jump.js":
                     _send_preview_response(
                         self,
                         (Path(__file__).parent / parsed.path[1:]).read_bytes(),
@@ -786,6 +819,7 @@ class FlowchartPreviewServer:
                     event_handler.state["target_task"],
                     event_handler.state["filter_completed"],
                     event_handler.comparison,
+                    self_outer.source_jump_server.url,
                 )
                 body_bytes = body.encode("utf-8")
                 _send_preview_response(
@@ -797,7 +831,17 @@ class FlowchartPreviewServer:
             def log_message(self, format, *args):
                 return
 
-        self.httpd = http.server.ThreadingHTTPServer((self.host, 0), Handler)
+        self.source_jump_server = SourceJumpServer(event_handler.yaml_file)
+        self.source_jump_server.start()
+        self_outer = self
+        try:
+            self.httpd = http.server.ThreadingHTTPServer(
+                (self.host, 0), Handler
+            )
+        except Exception:
+            self.source_jump_server.stop()
+            self.source_jump_server = None
+            raise
         self.httpd.daemon_threads = True
         port = self.httpd.server_address[1]
         self.base_url = f"http://{self.host}:{port}/"
@@ -825,8 +869,13 @@ class FlowchartPreviewServer:
             self.httpd.server_close()
         if self.server_thread is not None:
             self.server_thread.join(timeout=1.0)
+        if self.source_jump_server is not None:
+            self.source_jump_server.stop()
+            self.source_jump_server = None
 
 
+# also used by: pydifftools.command_registry, which dispatches registered
+# commands
 @register_command(
     "Watch a flowchart YAML file, rebuild DOT/SVG output, and open the"
     " preview",
