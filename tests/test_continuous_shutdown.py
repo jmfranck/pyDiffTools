@@ -77,6 +77,7 @@ class FakeBrowser:
 def install_cpb_runtime(monkeypatch, build_hook=None):
     builds = []
     build_threads = []
+    build_options = []
     browser = FakeBrowser()
     chrome_calls = []
     native_observers = []
@@ -91,13 +92,14 @@ def install_cpb_runtime(monkeypatch, build_hook=None):
         source_text = Path(filename).read_text()
         builds.append(source_text)
         build_threads.append(threading.current_thread())
+        build_options.append(_kwargs)
         if build_hook is not None:
             build_hook(len(builds), source_text)
         Path(html_file).write_text(
             "<html><head></head><body>" + source_text + "</body></html>"
         )
 
-    def fake_chrome():
+    def fake_chrome(**_kwargs):
         chrome_calls.append(True)
         return browser
 
@@ -123,6 +125,7 @@ def install_cpb_runtime(monkeypatch, build_hook=None):
         "browser": browser,
         "builds": builds,
         "build_threads": build_threads,
+        "build_options": build_options,
         "chrome_calls": chrome_calls,
         "native_observers": native_observers,
         "polling_observers": polling_observers,
@@ -130,7 +133,7 @@ def install_cpb_runtime(monkeypatch, build_hook=None):
     }
 
 
-def run_cpb_with_editor(source, browser, editor):
+def run_cpb_with_editor(source, browser, editor, **options):
     editor_errors = []
 
     def edit_then_close():
@@ -144,7 +147,7 @@ def run_cpb_with_editor(source, browser, editor):
 
     editor_thread = threading.Thread(target=edit_then_close, daemon=True)
     editor_thread.start()
-    continuous.cpb(str(source))
+    continuous.cpb(str(source), **options)
     editor_thread.join(timeout=2)
     assert not editor_thread.is_alive()
     if editor_errors:
@@ -197,7 +200,10 @@ def test_cpb_waits_through_vim_style_save(monkeypatch, tmp_path, capsys):
 
 
 @pytest.mark.parametrize("save_style", ["in_place", "atomic_replace"])
-def test_cpb_rebuilds_common_save_styles(monkeypatch, tmp_path, save_style):
+@pytest.mark.parametrize("distance", [0, 9, 20])
+def test_cpb_rebuilds_common_save_styles(
+    monkeypatch, tmp_path, save_style, distance,
+):
     source = tmp_path / "content.md"
     source.write_text("before\n")
     runtime = install_cpb_runtime(monkeypatch)
@@ -211,9 +217,14 @@ def test_cpb_rebuilds_common_save_styles(monkeypatch, tmp_path, save_style):
             replacement.replace(source)
         assert runtime["browser"].refreshed.wait(timeout=2)
 
-    run_cpb_with_editor(source, runtime["browser"], editor)
+    run_cpb_with_editor(source, runtime["browser"], editor,
+                        wrapnumber=72, trailing_dependent_phrase=distance)
 
     assert runtime["builds"] == ["before\n", "after\n"]
+    assert [options["trailing_dependent_phrase"]
+            for options in runtime["build_options"]] == [distance, distance]
+    assert [options["wrapnumber"]
+            for options in runtime["build_options"]] == [72, 72]
     assert runtime["browser"].refresh_calls == 1
     assert_clean_polling_shutdown(runtime)
 
@@ -359,7 +370,7 @@ def test_cpb_closes_preview_for_a_rebuild_dialog_and_reopens_it(
 
     runtime = install_cpb_runtime(monkeypatch, build_hook=build_hook)
 
-    def new_chrome():
+    def new_chrome(**_kwargs):
         browsers.append(FakeBrowser())
         return browsers[-1]
 

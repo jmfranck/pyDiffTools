@@ -308,6 +308,21 @@ def test_wmatch_fallback_width_and_long_word(tmp_path):
     assert long_word in new.read_text()
 
 
+def test_wmatch_restores_large_reference_reflow(tmp_path):
+    old = tmp_path / "old.md"
+    new = tmp_path / "new.md"
+    reference = "".join(
+        f"Stable component {number} remains unchanged.\n"
+        for number in range(100)
+    )
+    old.write_text(reference)
+    new.write_text(" ".join(reference.splitlines()) + "\n")
+
+    run([str(old), str(new)])
+
+    assert new.read_text() == reference
+
+
 def test_wmatch_deletion_that_joins_long_lines(tmp_path):
     old = tmp_path / "old.md"
     new = tmp_path / "new.md"
@@ -322,8 +337,9 @@ def test_wmatch_deletion_that_joins_long_lines(tmp_path):
     old.write_text(context + before + " REMOVE\n" + after + "\n")
     new.write_text(context + before + " " + after + "\n")
     run([str(old), str(new)])
-    assert new.read_text() == context + wrap_prose(
-        before + " " + after + "\n", 40
+    # Restore the complete unchanged reference line before wrapping the edit.
+    assert new.read_text() == (
+        context + wrap_prose(before + "\n", 40) + after + "\n"
     )
 
 

@@ -33,9 +33,38 @@ def launch_chrome(webdriver, **kwargs):
             "do not match; retrying with the driver version check disabled.",
             file=sys.stderr,
         )
-        kwargs["service"] = Service(service_args=["--disable-build-check"])
+        service = kwargs.get("service")
+        kwargs["service"] = Service(
+            executable_path=service.path if service else None,
+            service_args=[
+                *(service.service_args if service else []),
+                "--disable-build-check",
+            ],
+        )
         return webdriver.Chrome(**kwargs)
         # }}}
+
+
+def start_chrome():
+    """Use an installed driver without an online Selenium Manager lookup."""
+    # Keep Selenium imports lazy, as in the watch commands.
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+
+    driver_path = shutil.which("chromedriver")
+    if driver_path:
+        options = webdriver.ChromeOptions()
+        # Debian's driver defaults to Chromium even if Chrome is installed;
+        # retain Selenium Manager's preference for Google Chrome.
+        browser_path = shutil.which("google-chrome") or shutil.which(
+            "google-chrome-stable"
+        )
+        if browser_path:
+            options.binary_location = browser_path
+        return launch_chrome(
+            webdriver, service=Service(driver_path), options=options
+        )
+    return launch_chrome(webdriver)
 
 
 def prepare_for_dialog():

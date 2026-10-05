@@ -110,7 +110,7 @@ def test_live_eigenmode_copy(tmp_path, monkeypatch):
         },
     )
     browser = Mock(window_handles=[])
-    monkeypatch.setattr(webdriver, "Chrome", lambda: browser)
+    monkeypatch.setattr(webdriver, "Chrome", lambda **_kwargs: browser)
     try:
         command_line.main(["cpb", source.name])
         assert (

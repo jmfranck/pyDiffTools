@@ -47,6 +47,9 @@ from .notebook.fast_build import (
 )
 
 from .command_registry import _COMMAND_SPECS, register_command
+from .wrapping_options import (
+    DEFAULT_WIDTH, DEFAULT_TRAILING_DEPENDENT_PHRASE, WRAPPING_ARGUMENTS,
+)
 
 _ARGCOMPLETE_SPEC = importlib.util.find_spec("argcomplete")
 if (
@@ -367,9 +370,19 @@ def gvr(arguments):
 @register_command(
     "match whitespace",
     filename_extensions={"arguments": [".md", ".tex"]},
+    argument_options={
+        **WRAPPING_ARGUMENTS,
+        "arguments": {
+            "nargs": 2, "metavar": ("REFERENCE", "FILE"),
+            "help": "Reference file and current file to reflow.",
+        },
+    },
 )
-def wmatch(arguments):
-    match_spaces.run(arguments)
+def wmatch(
+    arguments, wrapnumber=DEFAULT_WIDTH,
+    trailing_dependent_phrase=DEFAULT_TRAILING_DEPENDENT_PHRASE,
+):
+    match_spaces.run(arguments, wrapnumber, trailing_dependent_phrase)
 
 
 @register_command("split conflict")
@@ -969,6 +982,16 @@ def main(argv=None):
             parser._pydifft_subparsers[subcommand].print_help()
             return
     namespace = parser.parse_args(argv)
+    # Shared wrapping arguments are validated identically for each command.
+    if hasattr(namespace, "wrapnumber") and namespace.wrapnumber < 1:
+        parser._pydifft_subparsers[namespace.command].error(
+            "--wrapnumber must be at least 1"
+        )
+    if getattr(namespace, "trailing_dependent_phrase",
+               getattr(namespace, "punctuation_slop", 0)) < 0:
+        parser._pydifft_subparsers[namespace.command].error(
+            "--trailing-dependent-phrase must be nonnegative"
+        )
     if (
         namespace.command == "cpb"
         and namespace.comments_to_margin

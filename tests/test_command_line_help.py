@@ -150,3 +150,111 @@ def test_root_error_mentions_subcommand_help_hint(capsys):
     err = capsys.readouterr().err
     assert "***" in err
     assert "--help <subcommand>" in err
+
+
+@pytest.mark.parametrize(
+    "command, paths",
+    [
+        ("cpb", ["notes.md"]),
+        ("wmatch", ["old.md", "new.md"]),
+        ("wr", ["notes.md"]),
+        ("wrchk", ["notes.md"]),
+    ],
+)
+@pytest.mark.parametrize("before_paths", [False, True])
+def test_wrapping_commands_share_option_definitions(
+    command, paths, before_paths
+):
+    parser = command_line.build_parser()
+    options = ["--wrapnumber", "72", "--trailing-dependent-phrase", "9"]
+    arguments = options + paths if before_paths else paths + options
+    namespace = parser.parse_args([command, *arguments])
+    assert namespace.wrapnumber == 72
+    assert (
+        getattr(
+            namespace,
+            "trailing_dependent_phrase",
+            getattr(namespace, "punctuation_slop", None),
+        )
+        == 9
+    )
+    actions = {
+        action.dest: action
+        for action in parser._pydifft_subparsers[command]._actions
+    }
+    phrase = actions.get(
+        "trailing_dependent_phrase", actions.get("punctuation_slop")
+    )
+    assert phrase.default == 20
+    assert "--trailing-dependent-phrase" in phrase.option_strings
+
+
+@pytest.mark.parametrize(
+    "command, paths",
+    [
+        ("cpb", ["notes.md"]),
+        ("wmatch", ["old.md", "new.md"]),
+        ("wr", ["notes.md"]),
+        ("wrchk", ["notes.md"]),
+    ],
+)
+@pytest.mark.parametrize(
+    "options",
+    [
+        ["--wrapnumber", "0"],
+        ["--trailing-dependent-phrase", "-1"],
+    ],
+)
+def test_wrapping_commands_reject_invalid_limits(command, paths, options):
+    with pytest.raises(SystemExit) as error:
+        command_line.main([command, *options, *paths])
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize("distance", [0, 19, 20])
+def test_wmatch_cli_applies_shared_dependent_phrase_option(tmp_path, distance):
+    old, new = tmp_path / "old.md", tmp_path / "new.md"
+    prefix = "These measurements characterize the dynamics,"
+    text = prefix + " short phrase.\n"
+    old.write_text("Earlier statement.\n")
+    new.write_text(text)
+    command_line.main(
+        [
+            "wmatch",
+            str(old),
+            str(new),
+            "--wrapnumber",
+            str(len(prefix) + 20),
+            "--trailing-dependent-phrase",
+            str(distance),
+        ]
+    )
+    expected = prefix + "\nshort phrase.\n" if distance == 20 else text
+    assert new.read_text() == expected
+
+
+def test_cpb_build_passes_dependent_phrase_option_to_source_lint(monkeypatch):
+    from pydifftools import continuous, wrap_sentences
+
+    calls = []
+
+    def capture_fix_options(filename, **options):
+        calls.append((filename, options))
+        raise RuntimeError("options captured")
+
+    monkeypatch.setattr(
+        wrap_sentences, "autofix_markdown_file", capture_fix_options
+    )
+    with pytest.raises(RuntimeError, match="options captured"):
+        continuous.run_pandoc(
+            "notes.md",
+            "notes.html",
+            wrapnumber=72,
+            trailing_dependent_phrase=9,
+        )
+    assert calls == [
+        (
+            "notes.md",
+            {"wrapnumber": 72, "git_head": True, "punctuation_slop": 9},
+        )
+    ]

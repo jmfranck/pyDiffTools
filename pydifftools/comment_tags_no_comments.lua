@@ -166,9 +166,13 @@ local function detect_block_opener(block)
   end
 
   if para_like_t(block) then
-    for k, opener_spec in pairs(OPENERS) do
-      local found, before, after = split_inline_block_at_tag(block, k)
-      if found then
+    -- Scan the paragraph once, regardless of the number of authors.
+    local content = block.content
+    for index = 1, #content do
+      local tag = raw_inline_html(content[index])
+      local opener_spec = tag and OPENERS[tag] or nil
+      if opener_spec then
+        local _, before, after = split_inline_block_at_tag(block, tag)
         return opener_spec, before, after
       end
     end
@@ -348,3 +352,6 @@ function Pandoc(doc)
   end
   return doc:walk({ Inlines = Inlines, Blocks = Blocks, Div = Div })
 end
+
+-- Initialize authors before walking comments, without an implicit first walk.
+return {{ Pandoc = Pandoc }}

@@ -255,9 +255,7 @@ def test_autofix_fixes_every_line_in_one_pass_from_the_end(tmp_path):
     assert markdown_lint_issues_from_text(fixed, wrapnumber=55) == []
 
 
-def test_only_lines_longer_than_the_width_are_too_long():
-    # from RM_ESR: short lines ending on a clause used to be flagged, since
-    # wr broke at a comma or paren even when the rest of the line fit
+def test_width_and_dependent_phrase_have_distinct_lint_rules():
     source = (
         "(see @fig:CaldararuTau) indicates that\n"
         "This is especially true, given that a comparison\n"
@@ -268,7 +266,7 @@ def test_only_lines_longer_than_the_width_are_too_long():
     assert [
         message.split(":")[0]
         for _, message in markdown_lint_issues_from_text(source, 40)
-    ] == ["line too long"]
+    ] == ["trailing dependent phrase", "line too long"]
 
 
 def test_long_line_breaks_early_on_a_nearby_clause(tmp_path):
@@ -285,10 +283,15 @@ def test_long_line_breaks_early_on_a_nearby_clause(tmp_path):
     fixed = path.read_text()
     assert fixed.split() == line.split()
     assert all(len(text) <= 79 for text in fixed.splitlines())
-    # the widest break is after "classic" (72 characters); "time," is 18
-    # characters before that, within the slop, so the line ends on it
-    assert fixed.splitlines()[0].endswith("rotational correlation time,")
+    # "time," is 26 characters before the actual maximum width, although
+    # it is only 18 before the widest word boundary. Use the actual width.
+    assert fixed.splitlines()[0].endswith("the classic")
     assert len(report["fixes"]) == 1
+    path.write_text(line)
+    autofix_markdown_file(path, wrapnumber=79, punctuation_slop=26)
+    assert path.read_text().splitlines()[0].endswith(
+        "rotational correlation time,"
+    )
 
 
 def test_clause_far_before_the_width_does_not_force_an_early_break():
@@ -432,7 +435,8 @@ def test_qt_fix_and_reload_windows_show_source_changes(tmp_path):
     show_markdown_fix_dialog(report)
     assert "↳ collection of words" in seen["preview"]
     assert seen["button"] == "Done"
-    assert re.search(r"^ +1 − This deliberately", seen["preview"], re.M)
+    assert re.search(r"^ +1 This deliberately", seen["preview"], re.M)
+    assert seen["preview"].count("\n") == 0
     assert "line 1" not in seen["heading"].lower()
 
     def inspect_reload_window():
@@ -703,7 +707,7 @@ def numstat(path):
     return (int(output[0]), int(output[1])) if output else (0, 0)
 
 
-def test_words_appended_past_the_width_become_one_new_line(tmp_path):
+def test_appended_words_restore_head_lines_and_stay_within_width(tmp_path):
     path = committed_source(tmp_path, HEAD_PARAGRAPH)
     path.write_text(
         HEAD_PARAGRAPH.replace(
@@ -724,14 +728,18 @@ def test_words_appended_past_the_width_become_one_new_line(tmp_path):
     report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
 
     fixed = path.read_text()
-    assert report["layout"] == []
+    (notice,) = report["layout"]
+    assert notice["moves"] == 2
+    fixed = fixed.replace(notice["current"], notice["suggested"], 1)
+    path.write_text(fixed)
     assert markdown_lint_issues_from_text(fixed, 79) == []
     # the HEAD line stays intact and the added words get one new line
     assert (
         "This script determines the field positions and amplitudes of the\n"
         "three hyperfine lines, and of the\n"
     ) in fixed
-    assert numstat(path) == (3, 2)
+    assert "development of a script\nin a few lines\n" in fixed
+    assert numstat(path) == (3, 1)
 
 
 def test_stray_line_break_in_an_unchanged_line_is_rejoined(tmp_path):
@@ -772,6 +780,154 @@ def test_joined_head_lines_past_the_width_get_heads_break_back(tmp_path):
     autofix_markdown_file(path, wrapnumber=79, git_head=True)
 
     assert path.read_text() == HEAD_PARAGRAPH
+
+
+def test_joined_head_lines_below_width_restore_the_deleted_break(tmp_path):
+    head = "Water inside\nsmall pools stays liquid.\n"
+    path = committed_source(tmp_path, head)
+    path.write_text(head.replace("inside\nsmall", "inside small"))
+
+    report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
+
+    assert path.read_text() == head
+    assert numstat(path) == (0, 0)
+    assert report["layout"] == []
+    assert "put those breaks back" in report["fixes"][0]["reason"]
+
+
+def test_two_deleted_head_breaks_are_reported_without_rewriting(tmp_path):
+    head = "Water inside\nsmall pools\nstays liquid.\n"
+    joined = head.replace("\n", " ").rstrip() + "\n"
+    path = committed_source(tmp_path, head)
+    path.write_text(joined)
+
+    report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
+
+    assert path.read_text() == joined
+    assert report["fixes"] == []
+    (notice,) = report["layout"]
+    assert notice["moves"] == 2
+    assert notice["current"] == joined.rstrip()
+    assert notice["suggested"] == head.rstrip()
+
+
+@pytest.mark.parametrize("dimensions_already_separate", [False, True])
+def test_rm_esr_restores_full_head_lines_in_rewritten_sentence(
+    tmp_path, dimensions_already_separate
+):
+    head = (
+        "To improve mechanical stability and minimize\n"
+        "vibrations, subsequent time-dependent\n"
+        "ESR measurements\n"
+        "(including the feedback-guided measurements)\n"
+        "employed a different setup\n"
+        "(as shown in @fig:Sample_holder_scheme_quartz).\n"
+        "The end of the sample capillary tube\n"
+        "(1.50 mm i.d., 1.80 mm o.d.),\n"
+        "was inserted into a teflon tube support (3 mm o.d.)\n"
+        "that was, in turn,\n"
+    )
+    edited = (
+        "However, to improve mechanical stability and minimize\n"
+        "vibrations, the ESR measurements presented in the main text\n"
+        "employ a setup\n"
+        "(as shown in @fig:Sample_holder_scheme_quartz)\n"
+        "where the end of the sample capillary tube "
+        "(1.50 mm i.d., 1.80 mm o.d.),\n"
+        "is inserted into a teflon tube support (3 mm o.d.)\n"
+        "that is, in turn,\n"
+    )
+    if dimensions_already_separate:
+        edited = edited.replace("tube (1.50", "tube\n(1.50")
+    path = committed_source(tmp_path, head)
+    path.write_text(edited)
+    assert numstat(path) == (7, 9 if dimensions_already_separate else 10)
+
+    report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
+
+    assert path.read_text() == edited
+    assert report["fixes"] == []
+    (notice,) = report["layout"]
+    assert notice["moves"] == (2 if dimensions_already_separate else 3)
+    expected = edited.replace(
+        "the ESR measurements presented",
+        "the\nESR measurements\npresented",
+    ).replace("tube (1.50", "tube\n(1.50")
+    assert edited.replace(
+        notice["current"], notice["suggested"], 1
+    ) == expected
+    from pydifftools.match_spaces import run
+
+    reference = tmp_path / "reference.md"
+    reference.write_text(head)
+    matched = tmp_path / "matched.md"
+    matched.write_text(edited)
+    run([str(reference), str(matched)])
+    assert matched.read_text() == expected
+    # Applying the complete suggestion preserves both unchanged HEAD lines.
+    path.write_text(expected)
+    assert numstat(path) == (8, 8)
+
+
+def test_embedded_head_line_restores_both_boundaries_together(tmp_path):
+    path = committed_source(tmp_path, "Before\nESR measurements\nAfter.\n")
+    edited = "Changed before ESR measurements changed after.\n"
+    path.write_text(edited)
+
+    report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
+
+    assert path.read_text() == edited
+    assert report["fixes"] == []
+    (notice,) = report["layout"]
+    assert notice["moves"] == 2
+    assert notice["suggested"] == (
+        "Changed before\nESR measurements\nchanged after."
+    )
+
+
+@pytest.mark.parametrize("count", [1, 5, 30])
+def test_cpb_and_wmatch_restore_scattered_reference_lines(tmp_path, count):
+    from pydifftools.match_spaces import run
+
+    head = "\n\n".join(
+        f"Former intro {number}\nStable component {number}\n"
+        f"former outro {number}."
+        for number in range(count)
+    ) + "\n"
+    current = "\n\n".join(
+        f"Changed intro {number} Stable component {number} "
+        f"changed outro {number}."
+        for number in range(count)
+    ) + "\n"
+    expected = "\n\n".join(
+        f"Changed intro {number}\nStable component {number}\n"
+        f"changed outro {number}."
+        for number in range(count)
+    ) + "\n"
+    path = committed_source(tmp_path, head)
+    path.write_text(current)
+
+    report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
+
+    assert path.read_text() == current
+    assert report["fixes"] == []
+    assert len(report["layout"]) == count
+    proposed = current
+    for notice in report["layout"]:
+        assert notice["moves"] == 2
+        proposed = proposed.replace(
+            notice["current"], notice["suggested"], 1
+        )
+    assert proposed == expected
+    reference = tmp_path / "reference.md"
+    reference.write_text(head)
+    run([str(reference), str(path)])
+    assert path.read_text() == expected
+    assert not any(
+        autofix_markdown_file(path, wrapnumber=79, git_head=True).values()
+    )
+    run([str(reference), str(path)])
+    assert path.read_text() == expected
 
 
 def test_two_moved_line_breaks_in_one_hunk_are_only_reported(tmp_path):
@@ -848,9 +1004,9 @@ def test_file_outside_git_is_linted_without_head(tmp_path):
 # }}}
 
 
-def test_rewritten_sentence_keeps_its_semantic_line_breaks(tmp_path):
-    # from RM_ESR: a rewrite that breaks at each phrase shares words with
-    # HEAD, but joining its lines would not restore any HEAD line
+def test_rewritten_sentence_reuses_whitespace_between_matched_words(tmp_path):
+    # Partial matching lines reuse reference whitespace too, before the
+    # separate complete-line preservation pass.
     head = (
         "Peric *et al.* also observed that\n"
         "even similarly sized nitroxide probes can report\n"
@@ -868,11 +1024,19 @@ def test_rewritten_sentence_keeps_its_semantic_line_breaks(tmp_path):
 
     report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
 
-    assert path.read_text() == rewrite
-    assert report["fixes"] == [] and report["layout"] == []
+    expected = rewrite.replace("dynamics\nof", "dynamics of")
+    assert path.read_text() == expected
+    assert expected.split() == rewrite.split()
+    assert len(report["fixes"]) == 1 and report["layout"] == []
+    assert not any(
+        autofix_markdown_file(path, wrapnumber=79, git_head=True).values()
+    )
 
 
-def test_qt_layout_notice_shows_head_now_and_suggested(tmp_path):
+@pytest.mark.parametrize("deleted_breaks", [False, True])
+def test_qt_layout_notice_marks_suggestions_on_original_source(
+    tmp_path, deleted_breaks
+):
     pytest.importorskip("PySide6")
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication, QDialog, QLabel
@@ -881,8 +1045,14 @@ def test_qt_layout_notice_shows_head_now_and_suggested(tmp_path):
     from pydifftools.continuous import show_markdown_fix_dialog
 
     app = QApplication.instance() or QApplication([])
-    path = committed_source(tmp_path, HEAD_PARAGRAPH)
-    path.write_text(
+    head_text = (
+        "Water inside\nsmall pools\nstays liquid.\n"
+        if deleted_breaks else HEAD_PARAGRAPH
+    )
+    path = committed_source(tmp_path, head_text)
+    edited = (
+        head_text.replace("\n", " ").rstrip() + "\n"
+        if deleted_breaks else
         HEAD_PARAGRAPH.replace(
             "amplitudes of the\nspectral lines",
             "amplitudes\nof the spectral lines",
@@ -890,6 +1060,7 @@ def test_qt_layout_notice_shows_head_now_and_suggested(tmp_path):
             "experiment.\nIt implements", "experiment.\nIt\nimplements"
         )
     )
+    path.write_text(edited)
     report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
     seen = {}
 
@@ -907,10 +1078,121 @@ def test_qt_layout_notice_shows_head_now_and_suggested(tmp_path):
     show_markdown_fix_dialog(report)
 
     assert "differ from git HEAD in 2 places" in seen["heading"]
-    head, now, suggested = seen["preview"].split("\n\n")
-    assert head.startswith("git HEAD:")
-    assert re.search(r"^ +3 This script determines .* amplitudes$", now, re.M)
-    assert re.search(r"^ +4 spectral lines for", suggested, re.M)
+    original = "\n".join(
+        row[7:] for row in seen["preview"].splitlines()
+    ).replace("↳×", "").replace("↳", "")
+    assert original == report["layout"][0]["current"]
+    assert seen["preview"].count("↳") == (2 if deleted_breaks else 3)
+    if deleted_breaks:
+        assert "Water inside↳ small pools↳ stays liquid." in seen["preview"]
+        assert "↳×" not in seen["preview"]
+    else:
+        assert seen["preview"].count("↳×") == 2
+
+
+@pytest.mark.parametrize(
+    "before, after, marked, colors",
+    [
+        (
+            "capillary tube (1.50 mm i.d., 1.80 mm o.d.),",
+            "capillary tube\n(1.50 mm i.d., 1.80 mm o.d.),",
+            "capillary tube↳ (1.50 mm i.d., 1.80 mm o.d.),",
+            ["#188038"],
+        ),
+        (
+            "capillary tube\n(1.50 mm i.d., 1.80 mm o.d.),",
+            "capillary tube (1.50 mm i.d., 1.80 mm o.d.),",
+            "capillary tube↳×\n(1.50 mm i.d., 1.80 mm o.d.),",
+            ["#c62828"],
+        ),
+        (
+            "a b\nc d",
+            "a\nb c d",
+            "a↳ b↳×\nc d",
+            ["#188038", "#c62828"],
+        ),
+        (
+            "same same same\nsame",
+            "same\nsame same same",
+            "same↳ same same↳×\nsame",
+            ["#188038", "#c62828"],
+        ),
+        (
+            "a b\nc d",
+            "a\nb\nc d",
+            "a↳ b\nc d",
+            ["#188038"],
+        ),
+        (
+            "Text <JFcom> & details\ncontinued here.",
+            "Text\n<JFcom> & details continued here.",
+            "Text↳ <JFcom> & details↳×\ncontinued here.",
+            ["#188038", "#c62828"],
+        ),
+        (
+            "alpha\n    beta gamma",
+            "alpha beta\ngamma",
+            "alpha↳×\n    beta↳ gamma",
+            ["#c62828", "#188038"],
+        ),
+    ],
+)
+def test_qt_break_markers_keep_original_source_and_colors(
+    before, after, marked, colors
+):
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication, QDialog, QPushButton
+    from PySide6.QtWidgets import QLabel, QTextEdit
+
+    from pydifftools.continuous import show_markdown_fix_dialog
+
+    app = QApplication.instance() or QApplication([])
+    seen = {}
+
+    def inspect():
+        dialog = next(
+            widget for widget in app.topLevelWidgets()
+            if isinstance(widget, QDialog) and widget.isVisible()
+        )
+        preview = dialog.findChild(QTextEdit)
+        seen["text"] = preview.toPlainText()
+        seen["wrap"] = preview.lineWrapMode()
+        seen["details"] = dialog.findChildren(QLabel)[1].text()
+        document = preview.document()
+        cursor = document.find("↳")
+        seen["colors"] = []
+        while not cursor.isNull():
+            seen["colors"].append(
+                cursor.charFormat().foreground().color().name()
+            )
+            cursor = document.find("↳", cursor)
+        cursor = document.find("×")
+        if not cursor.isNull():
+            seen["cross_color"] = (
+                cursor.charFormat().foreground().color().name()
+            )
+        dialog.findChild(QPushButton).click()
+
+    QTimer.singleShot(0, inspect)
+    show_markdown_fix_dialog(
+        {
+            "fixes": [
+                {"line": 648, "reason": "Restore breaks.",
+                 "before": before, "after": after}
+            ],
+            "warnings": [],
+        }
+    )
+
+    assert seen["text"] == "\n".join(
+        f"{648 + offset:>6} {row}"
+        for offset, row in enumerate(marked.split("\n"))
+    )
+    assert seen["colors"] == colors
+    assert seen["wrap"] == QTextEdit.LineWrapMode.NoWrap
+    assert "Original source:" in seen["details"]
+    if "×" in marked:
+        assert seen["cross_color"] == "#c62828"
 
 
 def test_qt_fix_windows_create_their_own_application():

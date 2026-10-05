@@ -18,6 +18,9 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 from .command_registry import register_command
+from .wrapping_options import (
+    DEFAULT_WIDTH, DEFAULT_TRAILING_DEPENDENT_PHRASE, WRAPPING_ARGUMENTS,
+)
 from .zotero import recover_bibliography, zotero_notice
 from .comment_migration import prepare_comment_source
 from .browser_lifecycle import (
@@ -25,8 +28,8 @@ from .browser_lifecycle import (
     close_browser_window,
     dialog_callbacks,
     forward_search_in_browser,
-    launch_chrome,
     prepare_for_dialog,
+    start_chrome,
 )
 from .forward_search import (
     CPB_FORWARD_SEARCH_PORT,
@@ -170,6 +173,54 @@ def show_markdown_fix_dialog(report):
     dialog._pydifftools_application = application
     dialog.setWindowTitle("Markdown source fixes")
     fixed_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+
+    def annotated_source(before, after, line):
+        """Mark changed breaks on their positions in the original source."""
+        original_words = list(re.finditer(r"\S+", before))
+        updated_words = list(re.finditer(r"\S+", after))
+        if [word[0] for word in original_words] != [
+            word[0] for word in updated_words
+        ]:
+            return None
+        marks = {}
+        for number in range(len(original_words) + 1):
+            start = original_words[number - 1].end() if number else 0
+            stop = (
+                original_words[number].start()
+                if number < len(original_words)
+                else len(before)
+            )
+            updated_start = updated_words[number - 1].end() if number else 0
+            updated_stop = (
+                updated_words[number].start()
+                if number < len(updated_words)
+                else len(after)
+            )
+            old_breaks = [
+                start + match.start()
+                for match in re.finditer("\n", before[start:stop])
+            ]
+            new_count = after[updated_start:updated_stop].count("\n")
+            if new_count > len(old_breaks):
+                marks[start] = (
+                    "<span style='color:#188038; font-weight:bold'>↳</span>"
+                    * (new_count - len(old_breaks))
+                )
+            for position in old_breaks[new_count:]:
+                marks[position] = (
+                    "<span style='color:#c62828; font-weight:bold'>↳×</span>"
+                )
+        if not marks:
+            return None
+        marked = "".join(
+            marks.get(position, "") + escape(char)
+            for position, char in enumerate(before)
+        ) + marks.get(len(before), "")
+        return "<br>".join(
+            f"<span style='color:#666'>{line + offset:>6}</span> " + value
+            for offset, value in enumerate(marked.split("\n"))
+        )
+
     # {{{ group fixes of one kind onto pages that fill the screen
     screen_height = dialog.screen().availableGeometry().height()
     dialog.resize(900, int(screen_height * 0.85))
@@ -189,13 +240,15 @@ def show_markdown_fix_dialog(report):
         page = []
         rows = 0
         for fix in sorted(group, key=lambda fix: fix["line"]):
-            # a blank line separates each fix from the one before it, and a
-            # fix that only drops trailing spaces shows just its old line
+            # A break annotation needs only the original source lines.
             fix_rows = (
                 len(fix["before"].splitlines() or [""])
                 + (
                     0
                     if fix["after"] == fix["before"].rstrip()
+                    or annotated_source(
+                        fix["before"], fix["after"], fix["line"]
+                    ) is not None
                     else len(fix["after"].splitlines() or [""])
                 )
                 + (1 if page else 0)
@@ -235,6 +288,7 @@ def show_markdown_fix_dialog(report):
     preview = QTextEdit()
     preview.setReadOnly(True)
     preview.setFont(fixed_font)
+    preview.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
     preview_row.addWidget(line_numbers)
     preview_row.addWidget(preview, 1)
     layout.addLayout(preview_row, 1)
@@ -261,9 +315,17 @@ def show_markdown_fix_dialog(report):
             )
             details.setText(record["reason"])
             line_numbers.setVisible(False)
-            # {{{ show each fix as numbered before (−) and after (+) lines
+            # {{{ annotate changed breaks on the original source
             entries = []
+            has_break_annotations = False
             for fix in record["fixes"]:
+                annotated = annotated_source(
+                    fix["before"], fix["after"], fix["line"]
+                )
+                if annotated is not None:
+                    entries.append(annotated)
+                    has_break_annotations = True
+                    continue
                 rows = []
                 for offset, value in enumerate(
                     fix["before"].splitlines() or [""]
@@ -289,6 +351,13 @@ def show_markdown_fix_dialog(report):
                         + escape(value)
                     )
                 entries.append("<br>".join(rows))
+            if has_break_annotations:
+                details.setText(
+                    record["reason"]
+                    + "<br>Original source: "
+                    "<span style='color:#188038'>↳</span> inserted newline; "
+                    "<span style='color:#c62828'>↳×</span> removed newline."
+                )
             preview.setHtml(
                 "<pre style='font-family:monospace; margin:0'>"
                 + "<br><br>".join(entries)
@@ -308,21 +377,33 @@ def show_markdown_fix_dialog(report):
                 "lay them out as suggested."
             )
             line_numbers.setVisible(False)
-            # {{{ show HEAD, the current source and the suggested layout
+            # {{{ show suggested breaks on the original source
             sections = []
-            for title, text, numbered in (
-                ("git HEAD:", record["head"], False),
-                ("Now:", record["current"], True),
-                ("Suggested:", record["suggested"], True),
-            ):
-                rows = [escape(title)]
-                for offset, value in enumerate(text.split("\n")):
-                    number = record["line"] + offset if numbered else ""
-                    rows.append(
-                        f"<span style='color:#666'>{number:>6}</span> "
-                        + escape(value)
-                    )
-                sections.append("<br>".join(rows))
+            annotated = annotated_source(
+                record["current"], record["suggested"], record["line"]
+            )
+            if annotated is not None:
+                sections.append(annotated)
+                details.setText(
+                    details.text()
+                    + "<br>Original source, with suggested changes: "
+                    "<span style='color:#188038'>↳</span> insert newline; "
+                    "<span style='color:#c62828'>↳×</span> remove newline."
+                )
+            else:
+                for title, text, numbered in (
+                    ("git HEAD:", record["head"], False),
+                    ("Now:", record["current"], True),
+                    ("Suggested:", record["suggested"], True),
+                ):
+                    rows = [escape(title)]
+                    for offset, value in enumerate(text.split("\n")):
+                        number = record["line"] + offset if numbered else ""
+                        rows.append(
+                            f"<span style='color:#666'>{number:>6}</span> "
+                            + escape(value)
+                        )
+                    sections.append("<br>".join(rows))
             preview.setHtml(
                 "<pre style='font-family:monospace; margin:0'>"
                 + "<br><br>".join(sections)
@@ -415,7 +496,8 @@ def run_pandoc(
     comments_to_margin=False,
     no_comments=False,
     comment_filter_session=None,
-    wrapnumber=79,
+    wrapnumber=DEFAULT_WIDTH,
+    trailing_dependent_phrase=DEFAULT_TRAILING_DEPENDENT_PHRASE,
 ):
     # {{{ automatically fix Markdown source and request edits for
     # unfinished spans
@@ -424,7 +506,8 @@ def run_pandoc(
     automatic_fixes_were_made = False
     while True:
         report = autofix_markdown_file(
-            filename, wrapnumber=wrapnumber, git_head=True
+            filename, wrapnumber=wrapnumber, git_head=True,
+            punctuation_slop=trailing_dependent_phrase,
         )
         automatic_fixes_were_made |= bool(report["fixes"])
         if report["fixes"] or report["warnings"] or report["layout"]:
@@ -927,6 +1010,8 @@ class Handler(FileSystemEventHandler):
             self._queue_if_source_changed(event.src_path, event.dest_path)
 
 
+# also used by: command_line.main through the command registry, and the
+# CPB runtime tests in tests/test_continuous_shutdown.py and test_zotero.py.
 @register_command(
     "continuous pandoc build.  Like latexmk, but for markdown!",
     help={
@@ -938,14 +1023,15 @@ class Handler(FileSystemEventHandler):
         "no_comments": (
             "Render the HTML without comment tags or comment div blocks."
         ),
-        "wrapnumber": (
-            "Maximum source line width; the automatic Markdown fixes break "
-            "only lines longer than this."
-        ),
     },
     filename_extensions={"filename": ".md"},
+    argument_options=WRAPPING_ARGUMENTS,
 )
-def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
+def cpb(
+    filename, comments_to_margin=False, no_comments=False,
+    wrapnumber=DEFAULT_WIDTH,
+    trailing_dependent_phrase=DEFAULT_TRAILING_DEPENDENT_PHRASE,
+):
     source_path = os.path.normpath(os.path.abspath(filename))
     source_dir = os.path.dirname(source_path)
     html_file = filename.rsplit(".", 1)[0] + ".html"
@@ -994,6 +1080,7 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
             no_comments=no_comments,
             comment_filter_session=comment_filter_session,
             wrapnumber=wrapnumber,
+            trailing_dependent_phrase=trailing_dependent_phrase,
         )
         source_jump_server = SourceJumpServer(source_path)
         source_jump_server.start()
@@ -1001,10 +1088,9 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
 
         # Selenium is deliberately initialized once, after the first
         # successful build. Nothing in recovery constructs a browser.
-        from selenium import webdriver
         from selenium.common.exceptions import WebDriverException
 
-        chrome = launch_chrome(webdriver)
+        chrome = start_chrome()
         observer = Observer()
         change_queue = queue.Queue()
         event_handler = Handler(filename, change_queue)
@@ -1145,6 +1231,9 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
                                 no_comments=no_comments,
                                 comment_filter_session=comment_filter_session,
                                 wrapnumber=wrapnumber,
+                                trailing_dependent_phrase=(
+                                    trailing_dependent_phrase
+                                ),
                             )
                             append_autorefresh(
                                 html_file, source_jump_server.url
@@ -1190,7 +1279,7 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
                                     break
                         if chrome is None:
                             # {{{ reopen the preview a dialog closed
-                            chrome = launch_chrome(webdriver)
+                            chrome = start_chrome()
                             chrome.get(
                                 "file://" + os.path.abspath(html_file)
                             )

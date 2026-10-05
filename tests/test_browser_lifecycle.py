@@ -9,6 +9,8 @@ from selenium.webdriver.chrome.options import Options
 
 from pydifftools import browser_lifecycle
 from pydifftools.flowchart.watch_graph import start_chrome
+from selenium import webdriver
+from selenium.webdriver.common.selenium_manager import SeleniumManager
 
 
 class FakeBrowser:
@@ -113,3 +115,57 @@ def test_chrome_retry_failure_is_reported():
         browser_lifecycle.launch_chrome(SimpleNamespace(Chrome=fake_chrome))
     assert excinfo.value is retry_error
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize("browser_path", [None, "/opt/google/chrome"])
+@pytest.mark.parametrize("mismatch", [False, True])
+def test_start_chrome_uses_installed_driver_without_manager(
+    monkeypatch, browser_path, mismatch,
+):
+    from selenium.webdriver.common.driver_finder import DriverFinder
+
+    driver_path = webdriver.__file__
+    monkeypatch.setattr(
+        browser_lifecycle.shutil,
+        "which",
+        lambda name: driver_path if name == "chromedriver" else browser_path,
+    )
+
+    def unexpected_manager(*args, **kwargs):
+        raise AssertionError("An installed driver must not need the network")
+
+    monkeypatch.setattr(SeleniumManager, "binary_paths", unexpected_manager)
+    services = []
+    browser = FakeBrowser()
+
+    def chrome(*, service, options):
+        # Exercise Selenium's real discovery path without opening a window.
+        finder = DriverFinder(service, options)
+        assert finder.get_driver_path() == driver_path
+        assert finder.get_browser_path() == ""
+        assert options.binary_location == (browser_path or "")
+        services.append(service)
+        if mismatch and len(services) % 2:
+            raise SessionNotCreatedException(
+                "This version of ChromeDriver only supports Chrome "
+                "version 154\nCurrent browser version is 153.0.8010.47"
+            )
+        return browser
+
+    monkeypatch.setattr(webdriver, "Chrome", chrome)
+    assert browser_lifecycle.start_chrome() is browser
+    assert browser_lifecycle.start_chrome() is browser
+    assert len(services) == (4 if mismatch else 2)
+    assert services[0] is not services[1]
+    if mismatch:
+        assert "--disable-build-check" in services[1].service_args
+        assert "--disable-build-check" in services[3].service_args
+
+
+def test_start_chrome_keeps_automatic_discovery_without_driver(monkeypatch):
+    monkeypatch.setattr(
+        browser_lifecycle.shutil, "which", lambda _name: None
+    )
+    browser = FakeBrowser()
+    monkeypatch.setattr(webdriver, "Chrome", lambda: browser)
+    assert browser_lifecycle.start_chrome() is browser

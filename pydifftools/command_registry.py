@@ -15,6 +15,7 @@ def register_command(
     description=None,
     help=None,
     filename_extensions=None,
+    argument_options=None,
 ):
     """Register a command handler for the CLI dispatcher."""
 
@@ -108,6 +109,12 @@ def register_command(
                     kwargs["type"] = type(parameter.default)
             if parameter.name in argument_help:
                 kwargs["help"] = argument_help[parameter.name].strip()
+            if argument_options is not None:
+                kwargs.update(argument_options.get(parameter.name, {}))
+                override_flags = kwargs.pop("flags", None)
+                if override_flags is not None:
+                    flags = override_flags
+                    kwargs["dest"] = parameter.name
             argument_spec = {"flags": flags, "kwargs": kwargs}
             if parameter.name in completion_allowednames:
                 argument_spec["completion_allowednames"] = (

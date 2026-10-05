@@ -160,10 +160,21 @@ included are (listed in order of fun/utility):
 
     * this allows you to use an original file with good whitespace formatting as a "template" that you can match other (e.g. pandoc converted file) onto another
 
-    * changed prose lines exceeding 1.5 times the nearby reference width are
-      wrapped using the same sentence and punctuation rules as ``wr``.
-      Existing surrounding line breaks are retained; the fallback width is
-      80 columns when the reference provides too little prose.
+    * ``cpb`` and ``wmatch`` share a matcher that finds changed hunks, aligns
+      their words using Git's minimal diff, and restores reference whitespace.
+      It then considers extra breaks that preserve an unchanged reference line
+      without stranding a tiny edited fragment, and checks wrapping rules.
+
+    * ``--wrapnumber`` sets the maximum width (79 for ``cpb`` and ``wmatch``).
+      Wmatch also uses nearby reference widths for large edits, retaining
+      unchanged reference lines and protected Markdown blocks.
+
+    * ``--trailing-dependent-phrase`` defaults to 20: a clause boundary within
+      20 characters of the maximum width must end the line, even when its
+      trailing phrase would still fit. Commas, semicolons, colons, parentheses,
+      dashes, and inline-math boundaries are supported. Set it to 0 to disable
+      this rule. The option is shared by ``cpb``, ``wmatch``, ``wr`` and
+      ``wrchk``; ``--punctuation-slop`` remains an alias.
 
 - `pydifft wd` ("word diff"): generate "track changes" word files starting from pandoc markdown in a git history.  Assuming that you have copied diff-doc.js (copied + licensed from elsewhere) into your home directory, this will use pandoc to convert the markdown files to MS Word, then use the MS Word comparison tool to generate a document where all relevant changes are shown with "track changes."
 
