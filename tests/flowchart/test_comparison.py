@@ -1,6 +1,9 @@
 from copy import deepcopy
+import re
 import subprocess
 from types import SimpleNamespace
+import urllib.error
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -224,10 +227,13 @@ def test_deleted_navigation_filters_and_date_order(plan):
     current["nodes"]["old"]["due"] = "10/05/26"
     model = baseline.render(current, 55, target="gone")
     assert set(model["nodes"]) == {"gone"}
-    model = baseline.render(current, 55, completed=True)
-    assert "old" in model["nodes"]  # independently visible in history
+    model = baseline.render(current, 55, target="old")
+    assert "old" in model["nodes"]
     assert baseline.edge_states["root->old"] == "same"
     assert model["nodes"]["old"]["due"] == "10/05/26"
+    for target in (None, "old"):
+        model = baseline.render(current, 55, target=target, completed=True)
+        assert "old" not in model["nodes"]
     save_graph_yaml(plan, current)
     dot = plan.with_suffix(".dot")
     write_dot_from_yaml(plan, dot, comparison=baseline, order_by_date=True)
@@ -269,8 +275,10 @@ def test_baseline_persists_on_reload_and_navigation(plan, monkeypatch):
         comparison=baseline,
         debounce=0,
     )
+    refreshes = []
     monkeypatch.setattr(
-        "pydifftools.flowchart.watch_graph._reload_svg", lambda *args: None
+        "pydifftools.flowchart.watch_graph._reload_svg",
+        lambda _driver, src: refreshes.append(src),
     )
     original = plan.read_text()
     plan.write_text(original.replace("Starting task", "New starting task"))
@@ -281,10 +289,97 @@ def test_baseline_persists_on_reload_and_navigation(plan, monkeypatch):
     server.start()
     try:
         for query in ("?t=gone", "?d=1&p=1", "?p=1", ""):
-            with urllib.request.urlopen(server.base_url + query) as response:
+            diff_query = query + ("&" if query else "?") + "diff-base=HEAD"
+            with urllib.request.urlopen(
+                server.base_url + diff_query
+            ) as response:
                 page = response.read().decode()
             assert baseline.commit[:12] in page
             assert handler.comparison is baseline
+            links = re.findall(r"<a href='([^']+)'", page)
+            assert links
+            for link in links:
+                params = urllib.parse.parse_qs(
+                    urllib.parse.urlparse(link).query
+                )
+                assert params["diff-base"] == ["HEAD"]
+            svg_url = re.search(r"src='([^']+)'", page)[1]
+            with urllib.request.urlopen(
+                server.base_url.rstrip("/") + svg_url
+            ) as response:
+                root = ET.fromstring(response.read())
+            task_links = [
+                value
+                for item in root.iter()
+                for key, value in item.attrib.items()
+                if key.endswith("}href") and value.startswith("/?t=")
+            ]
+            assert task_links
+            for link in task_links:
+                params = urllib.parse.parse_qs(
+                    urllib.parse.urlparse(link).query
+                )
+                assert params["diff-base"] == ["HEAD"]
+            with urllib.request.urlopen(
+                server.base_url.rstrip("/") + task_links[0]
+            ) as response:
+                assert baseline.commit[:12] in response.read().decode()
+
+            # Removing only diff-base must rebuild even in the same view.
+            with urllib.request.urlopen(
+                server.base_url + diff_query
+            ) as response:
+                response.read()
+            with urllib.request.urlopen(server.base_url + query) as response:
+                page = response.read().decode()
+            assert "Comparing against" not in page
+            assert "diff-base" not in page
+            assert handler.comparison is None
+            svg = handler.svg_file.read_text()
+            assert "line-through" not in svg
+            assert "diff-base" not in svg
+            assert handler.svg_url == server.base_url + "graph.svg" + query
+
+        # Editing the plan after returning to normal mode stays in that mode.
+        plan.write_text(original.replace("Starting task", "Latest task"))
+        handler.on_modified(SimpleNamespace(src_path=str(plan)))
+        assert handler.comparison is None
+        assert refreshes[-1] == server.base_url + "graph.svg"
+        assert "line-through" not in handler.svg_file.read_text()
+        with urllib.request.urlopen(
+            server.base_url + "?diff-base=HEAD"
+        ) as response:
+            assert baseline.commit[:12] in response.read().decode()
+        assert handler.comparison is baseline
+        assert baseline.data["nodes"]["root"]["text"] == "Starting task"
+        plan.write_text(original.replace("Starting task", "Another task"))
+        handler.on_modified(SimpleNamespace(src_path=str(plan)))
+        assert refreshes[-1] == server.base_url + "graph.svg?diff-base=HEAD"
+    finally:
+        server.stop()
+
+
+def test_url_selects_baseline_without_cli_diff(plan):
+    handler = GraphEventHandler(
+        plan,
+        plan.with_suffix(".dot"),
+        plan.with_suffix(".svg"),
+        data=load_graph_yaml(plan),
+    )
+    server = FlowchartPreviewServer(handler)
+    server.start()
+    try:
+        for revision in ("HEAD", "@{0}"):
+            query = "?diff-base=" + urllib.parse.quote(revision, safe="")
+            with urllib.request.urlopen(server.base_url + query) as response:
+                page = response.read().decode()
+            assert "Comparing against " + revision in page
+            assert handler.comparison.reference == revision
+        comparison = handler.comparison
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(server.base_url + "?diff-base=missing-ref")
+        assert exc.value.code == 400
+        assert handler.comparison is comparison
     finally:
         server.stop()
 

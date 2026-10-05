@@ -14,6 +14,7 @@ from .graph import (
     _normalize_graph_dates,
     _node_text_with_due,
     load_graph_yaml,
+    node_is_completed,
     trace_ancestors,
 )
 
@@ -201,7 +202,9 @@ class PlanComparison:
         ):
             if target is not None:
                 names = [focus] + trace_ancestors(graph, focus)
-                view = _filter_nodes_for_dot(graph, names)
+                view = _filter_nodes_for_dot(
+                    graph, names, filter_completed=completed
+                )
             elif completed:
                 view = _filter_nodes_for_dot(graph, graph["nodes"], True)
             else:
@@ -209,6 +212,15 @@ class PlanComparison:
             visible.append(set(view["nodes"]))
             views.append(view)
         names = visible[0] | {matches.get(k, k) for k in visible[1]}
+        if completed:
+            # A task completed in the current plan must not reappear merely
+            # because it was incomplete in the Git snapshot.
+            names = {
+                name for name in names
+                if name not in new
+                or not node_is_completed(new[name])
+                or name in visible[0]
+            }
         model = {"nodes": {}, "styles": deepcopy(current.get("styles", {}))}
         model["styles"] = {
             **deepcopy(self.data.get("styles", {})),

@@ -14,6 +14,161 @@
   let boxMode = false;
   let panZoom = null;
   let initializedDoc = null;
+  const searchButton = document.getElementById('wgrph-search');
+  const searchPanel = document.getElementById('wgrph-search-panel');
+  const searchInput = document.getElementById('wgrph-search-input');
+  const searchStatus = document.getElementById('wgrph-search-status');
+  const searchPrev = document.getElementById('wgrph-search-prev');
+  const searchNext = document.getElementById('wgrph-search-next');
+  let searchIndex = [];
+  let matches = [];
+  let matchIndex = 0;
+
+  // {{{ Find literal text, including phrases across Graphviz line breaks
+
+  function showMatch(step, focus = true) {
+    const svgDoc = initializedDoc;
+    if (svgDoc === null) {
+      return;
+    }
+    const oldHighlight = svgDoc.getElementById('wgrph-search-highlight');
+    if (oldHighlight) {
+      oldHighlight.remove();
+    }
+    searchPrev.disabled = searchNext.disabled = matches.length === 0;
+    if (matches.length === 0) {
+      searchStatus.textContent = searchInput.value.trim() ? 'No matches' : '';
+      return;
+    }
+    matchIndex = (matchIndex + step + matches.length) % matches.length;
+    searchStatus.textContent = `${matchIndex + 1} of ${matches.length}`;
+    const sizes = panZoom.getSizes();
+    const pan = panZoom.getPan();
+    const highlight = svgDoc.createElementNS(
+      'http://www.w3.org/2000/svg', 'g'
+    );
+    highlight.id = 'wgrph-search-highlight';
+    highlight.setAttribute('pointer-events', 'none');
+    const boxes = matches[matchIndex].map(function (range) {
+      const bounds = range.getBoundingClientRect();
+      const box = {
+        x: (bounds.x - pan.x) / sizes.realZoom,
+        y: (bounds.y - pan.y) / sizes.realZoom,
+        width: bounds.width / sizes.realZoom,
+        height: bounds.height / sizes.realZoom,
+      };
+      const rect = svgDoc.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      for (const key of ['x', 'y', 'width', 'height']) {
+        rect.setAttribute(key, box[key]);
+      }
+      rect.setAttribute('fill', '#ffd54f');
+      rect.setAttribute('fill-opacity', '0.4');
+      rect.setAttribute('stroke', '#b77900');
+      rect.setAttribute('vector-effect', 'non-scaling-stroke');
+      highlight.appendChild(rect);
+      return box;
+    });
+    svgDoc.querySelector('.svg-pan-zoom_viewport').appendChild(highlight);
+    if (focus) {
+      const left = Math.min(...boxes.map(b => b.x));
+      const right = Math.max(...boxes.map(b => b.x + b.width));
+      const top = Math.min(...boxes.map(b => b.y));
+      const bottom = Math.max(...boxes.map(b => b.y + b.height));
+      const element = matches[matchIndex][0].startContainer.parentElement;
+      const fontSize = parseFloat(svgDoc.defaultView.getComputedStyle(element)
+        .fontSize) || 14;
+      // Target an 18 CSS-pixel font regardless of the graph's initial fit.
+      const zoom = panZoom.getZoom() * 18 / fontSize / sizes.realZoom;
+      panZoom.setMaxZoom(Math.max(50, zoom));
+      panZoom.zoom(zoom);
+      const realZoom = panZoom.getSizes().realZoom;
+      panZoom.pan({
+        x: sizes.width / 2 - (left + right) / 2 * realZoom,
+        y: sizes.height / 2 - (top + bottom) / 2 * realZoom,
+      });
+    }
+  }
+
+  function search(reset = true) {
+    const query = searchInput.value.trim().replace(/\s+/g, ' ').toLowerCase();
+    matches = [];
+    if (reset) {
+      matchIndex = 0;
+    }
+    if (query) {
+      for (const entry of searchIndex) {
+        let start = entry.text.indexOf(query);
+        while (start !== -1) {
+          const ranges = [];
+          for (const position of entry.positions.slice(start, start + query.length)) {
+            if (position === null) {
+              continue;
+            }
+            const last = ranges[ranges.length - 1];
+            if (last && last.endContainer === position.leaf) {
+              last.setEnd(position.leaf, position.end);
+            } else {
+              const range = initializedDoc.createRange();
+              range.setStart(position.leaf, position.offset);
+              range.setEnd(position.leaf, position.end);
+              ranges.push(range);
+            }
+          }
+          if (ranges.length) {
+            matches.push(ranges);
+          }
+          start = entry.text.indexOf(query, start + query.length);
+        }
+      }
+    }
+    showMatch(0, reset);
+  }
+
+  function openSearch() {
+    searchPanel.hidden = false;
+    searchButton.setAttribute('aria-expanded', 'true');
+    searchInput.focus();
+    searchInput.select();
+  }
+
+  function closeSearch() {
+    searchPanel.hidden = true;
+    searchButton.setAttribute('aria-expanded', 'false');
+    searchInput.value = '';
+    search();
+    searchButton.focus();
+  }
+
+  searchButton.addEventListener('click', function () {
+    if (searchPanel.hidden) {
+      openSearch();
+    } else {
+      closeSearch();
+    }
+  });
+  searchInput.addEventListener('input', function () { search(); });
+  searchInput.addEventListener('keydown', function (evt) {
+    if (evt.key === 'Tab' || evt.key === 'Enter') {
+      evt.preventDefault();
+      showMatch(evt.shiftKey ? -1 : 1);
+    }
+  });
+  searchPrev.addEventListener('click', function () { showMatch(-1); });
+  searchNext.addEventListener('click', function () { showMatch(1); });
+  // }}}
+
+  function handleKeys(evt) {
+    if ((evt.ctrlKey || evt.metaKey) && evt.key.toLowerCase() === 'f') {
+      evt.preventDefault();
+      openSearch();
+    }
+    if (evt.key === 'Escape') {
+      setBoxMode(false);
+      if (!searchPanel.hidden) {
+        closeSearch();
+      }
+    }
+  }
 
   function saveView() {
     savedView = {
@@ -84,6 +239,35 @@
     }
     saveView();
     setBoxMode(boxMode);
+    // {{{ Index the visible SVG text after each load
+    searchIndex = Array.from(svgDoc.querySelectorAll('g.node'), function (node) {
+      let text = '';
+      const positions = [];
+      for (const element of node.querySelectorAll('text')) {
+        if (text && !text.endsWith(' ')) {
+          text += ' ';
+          positions.push(null);
+        }
+        const walker = svgDoc.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const leaf = walker.currentNode;
+          for (let offset = 0; offset < leaf.length;) {
+            const char = String.fromCodePoint(leaf.data.codePointAt(offset));
+            const normalized = /\s/.test(char) ? ' ' : char.toLowerCase();
+            if (normalized !== ' ' || !text.endsWith(' ')) {
+              text += normalized;
+              for (let i = 0; i < normalized.length; i++) {
+                positions.push({ leaf, offset, end: offset + char.length });
+              }
+            }
+            offset += char.length;
+          }
+        }
+      }
+      return { text, positions };
+    });
+    // }}}
+    search(false);
 
     // {{{ Suppress link clicks that end a pan or a box selection
     let downPoint = null;
@@ -198,11 +382,7 @@
       });
     });
     // }}}
-    svgDoc.addEventListener('keydown', function (evt) {
-      if (evt.key === 'Escape') {
-        setBoxMode(false);
-      }
-    });
+    svgDoc.addEventListener('keydown', handleKeys);
   }
 
   embed.addEventListener('load', init);
@@ -213,11 +393,7 @@
       panZoom.resize();
     }
   });
-  document.addEventListener('keydown', function (evt) {
-    if (evt.key === 'Escape') {
-      setBoxMode(false);
-    }
-  });
+  document.addEventListener('keydown', handleKeys);
   document.getElementById('wgrph-home').addEventListener('click', home);
   document
     .getElementById('wgrph-zoom-in')

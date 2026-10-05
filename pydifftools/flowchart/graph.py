@@ -645,7 +645,8 @@ def yaml_to_dot(data, wrap_width=55, order_by_date=False):
 
 
 def _filter_nodes_for_dot(
-    data, node_names, include_completed_endpoint_ancestors=False
+    data, node_names, include_completed_endpoint_ancestors=False,
+    filter_completed=True,
 ):
     nodes = data.get("nodes", {})
     included = []
@@ -659,7 +660,7 @@ def _filter_nodes_for_dot(
     for name in node_names:
         if name not in nodes:
             continue
-        if node_is_completed(nodes[name]):
+        if filter_completed and node_is_completed(nodes[name]):
             continue
         include_node(name)
 
@@ -848,7 +849,7 @@ def write_dot_from_yaml(
             data, wrap_width, filter_task, filter_completed
         )
     elif filter_task is not None:
-        # Limit the rendered graph to incomplete ancestors of the target task.
+        # Limit the rendered graph to the target task and its ancestors.
         if "nodes" not in data or filter_task not in data["nodes"]:
             matches = [
                 name
@@ -879,7 +880,9 @@ def write_dot_from_yaml(
         # Include the target task alongside its ancestors in the filtered view.
         ancestors = set([filter_task])
         ancestors.update(trace_ancestors(data, filter_task))
-        data_for_dot = _filter_nodes_for_dot(data, ancestors)
+        data_for_dot = _filter_nodes_for_dot(
+            data, ancestors, filter_completed=filter_completed
+        )
     elif filter_completed:
         data_for_dot = _filter_nodes_for_dot(
             data,

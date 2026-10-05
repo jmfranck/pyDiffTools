@@ -7,6 +7,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 
 from pydifftools.flowchart.watch_graph import (
@@ -182,8 +183,17 @@ def test_links_navigate_only_on_plain_click(preview):
     assert driver.current_url.startswith(server.base_url)
 
 
-def test_live_reload_keeps_pan_and_zoom(preview):
+@pytest.mark.parametrize("query", ["", "?t=Report", "?d=1&p=1"])
+def test_live_reload_keeps_pan_and_zoom(preview, query):
     driver, server = preview
+    driver.get(server.base_url + query)
+    WebDriverWait(driver, 10).until(
+        lambda d: d.execute_script("return !!window.wgrphPanZoom")
+    )
+    nodes_before = driver.execute_script(
+        "return Array.from(document.getElementById('svg-view')"
+        ".getSVGDocument().querySelectorAll('g.node title'),n=>n.textContent)"
+    )
     embed = driver.find_element("id", "svg-view")
     ActionChains(driver).scroll_from_origin(
         ScrollOrigin.from_element(embed), 0, -300
@@ -191,7 +201,77 @@ def test_live_reload_keeps_pan_and_zoom(preview):
     _drag(driver, embed, (400, 300), (450, 340))
     before = _view(driver)
     _reload_svg(driver, server.svg_url)
+    nodes_after = driver.execute_script(
+        "return Array.from(document.getElementById('svg-view')"
+        ".getSVGDocument().querySelectorAll('g.node title'),n=>n.textContent)"
+    )
+    assert nodes_after == nodes_before
     after = _view(driver)
     assert after["z"] == pytest.approx(before["z"])
     assert after["x"] == pytest.approx(before["x"])
     assert after["y"] == pytest.approx(before["y"])
+
+
+def test_search_centers_readable_matches_and_cycles_after_reload(preview):
+    driver, server = preview
+    handler = server.event_handler
+    handler.yaml_file.write_text(
+        "nodes:\n"
+        "  alpha:\n"
+        "    text: Sample sample at <b>room</b> temperature (test) μ\n"
+        "  beta:\n"
+        "    text: A sample for the experiment\n"
+        "  gamma:\n"
+        "    text: A completed sample\n"
+        "    style: completed\n"
+    )
+    handler.data = build_graph(
+        handler.yaml_file, handler.dot_file, handler.svg_file, 25
+    )
+    driver.get(server.base_url)
+    WebDriverWait(driver, 10).until(
+        lambda d: d.execute_script("return !!window.wgrphPanZoom")
+    )
+    driver.find_element("id", "wgrph-search").click()
+    field = driver.find_element("id", "wgrph-search-input")
+    field.send_keys("sAmPlE")
+    status = driver.find_element("id", "wgrph-search-status")
+    assert status.text == "1 of 4"
+    for key, expected in (
+        (Keys.TAB, "2 of 4"), (Keys.TAB, "3 of 4"),
+        (Keys.TAB, "4 of 4"), (Keys.TAB, "1 of 4"),
+        (Keys.SHIFT + Keys.TAB, "4 of 4"),
+    ):
+        field.send_keys(key)
+        assert status.text == expected
+    assert driver.execute_script("return document.activeElement.id") == (
+        "wgrph-search-input"
+    )
+    geometry = driver.execute_script(
+        "const e=document.getElementById('svg-view');"
+        "const doc=e.getSVGDocument();"
+        "const rect=doc.querySelector('#wgrph-search-highlight rect')"
+        ".getBoundingClientRect();const sizes=window.wgrphPanZoom.getSizes();"
+        "return {x:rect.x+rect.width/2,y:rect.y+rect.height/2,"
+        "w:sizes.width,h:sizes.height,font:14*sizes.realZoom};"
+    )
+    assert geometry["x"] == pytest.approx(geometry["w"] / 2, abs=2)
+    assert geometry["y"] == pytest.approx(geometry["h"] / 2, abs=2)
+    assert geometry["font"] == pytest.approx(18, abs=0.5)
+    assert driver.execute_script("return window.visualViewport.scale") == 1
+    _reload_svg(driver, server.svg_url)
+    assert status.text == "4 of 4"
+    field.send_keys(Keys.TAB)
+    assert status.text == "1 of 4"
+    for query in ("room temperature", "(test)", "μ", "no such phrase"):
+        field.send_keys(Keys.CONTROL + "a")
+        field.send_keys(query)
+        assert status.text == (
+            "No matches" if query == "no such phrase" else "1 of 1"
+        )
+    field.send_keys(Keys.ESCAPE)
+    assert not driver.find_element("id", "wgrph-search-panel").is_displayed()
+    assert driver.execute_script(
+        "return document.getElementById('svg-view').getSVGDocument()"
+        ".getElementById('wgrph-search-highlight') === null"
+    )

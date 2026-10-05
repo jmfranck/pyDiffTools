@@ -1,9 +1,16 @@
 import pathlib
+import re
 import subprocess
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
 import pytest
 
 from pydifftools.flowchart.graph import write_dot_from_yaml
 from pydifftools.flowchart.watch_graph import (
+    FlowchartPreviewServer,
+    GraphEventHandler,
     _reload_svg,
     _send_preview_response,
     _watch_html,
@@ -54,7 +61,7 @@ def test_watch_html_uses_block_embed(tmp_path):
     )
     assert "#svg-view{display:block;width:100%;height:100%;}" in html
     assert "id='svg-view'" in html
-    for button in ("home", "zoom-in", "zoom-out", "box-zoom"):
+    for button in ("home", "zoom-in", "zoom-out", "box-zoom", "search"):
         assert f"id='wgrph-{button}'" in html
     assert "<script src='/svg-pan-zoom.min.js'></script>" in html
     assert "<script src='/wgrph_view.js'></script>" in html
@@ -63,27 +70,28 @@ def test_watch_html_uses_block_embed(tmp_path):
     assert "type='image/svg+xml'" in html
     assert "<a href='/?d=1'>date-ordered</a>" in html
     assert "<a href='/?p=1'>exclude completed</a>" in html
-    assert "<a href='/?p=0'>full plan</a>" in html
+    assert "full plan" not in html
 
 
 def test_watch_html_shows_project_overview_link_in_date_mode():
     html = _watch_html("/graph.svg", True)
-    assert "<a href='/'>project overview</a>" in html
+    assert "<a href='/'>full plan</a>" in html
     assert "<a href='/?d=1&p=1'>exclude completed</a>" in html
-    assert "<a href='/?p=0'>full plan</a>" in html
+    assert "<a href='/'>dependency order</a>" in html
 
 
 def test_watch_html_shows_project_overview_link_in_task_mode():
     html = _watch_html("/graph.svg", False, "task_a")
-    assert "<a href='/?d=1'>date-ordered</a>" in html
-    assert "<a href='/?p=0'>full plan</a>" in html
-    assert "<a href='/'>project overview</a>" in html
+    assert "<a href='/?t=task_a&d=1'>date-ordered</a>" in html
+    assert "<a href='/?t=task_a&p=1'>exclude completed</a>" in html
+    assert "<a href='/'>full plan</a>" in html
 
 
 def test_watch_html_shows_project_overview_link_in_full_plan_mode():
     html = _watch_html("/graph.svg", False, None, True)
-    assert "<a href='/?d=1'>date-ordered</a>" in html
-    assert "<a href='/'>project overview</a>" in html
+    assert "<a href='/?p=1&d=1'>date-ordered</a>" in html
+    assert "<a href='/'>full plan</a>" in html
+    assert "<a href='/'>include completed</a>" in html
     assert "<a href='/?p=1'>full plan</a>" not in html
     assert "exclude completed" not in html
 
@@ -92,10 +100,10 @@ def test_watch_view_state_defaults_to_project_overview():
     assert _watch_view_state_from_params({}) == (False, None, False)
 
 
-def test_watch_view_state_prefers_task_mode_over_date_mode():
+def test_watch_view_state_combines_task_date_and_completed_modes():
     assert _watch_view_state_from_params(
-        {"d": ["1"], "t": ["task_a"]}
-    ) == (False, "task_a", False)
+        {"d": ["1"], "t": ["task_a"], "p": ["1"]}
+    ) == (True, "task_a", True)
 
 
 def test_watch_view_state_parses_full_plan_mode():
@@ -112,6 +120,82 @@ def test_watch_view_state_keeps_completed_filter_in_date_mode():
         None,
         True,
     )
+
+def test_each_preview_url_fully_determines_rendered_nodes(tmp_path):
+    yaml_file = tmp_path / "graph.yaml"
+    yaml_file.write_text(
+        "nodes:\n"
+        "  root:\n    text: Root\n    children: [target, done]\n"
+        "  target:\n    text: Target\n    due: 10/05/26\n"
+        "  done:\n    text: Done\n    due: 10/05/26\n    style: completed\n"
+        "  unrelated:\n    text: Unrelated\n"
+    )
+    handler = GraphEventHandler(
+        yaml_file, yaml_file.with_suffix(".dot"),
+        yaml_file.with_suffix(".svg"),
+    )
+    server = FlowchartPreviewServer(handler)
+    server.start()
+    other_server = FlowchartPreviewServer(GraphEventHandler(
+        yaml_file, yaml_file.with_suffix(".dot"),
+        yaml_file.with_suffix(".svg"),
+    ))
+    other_server.start()
+    views = [
+        ("", {"root", "target", "done", "unrelated"}),
+        ("?t=target", {"root", "target"}),
+        ("", {"root", "target", "done", "unrelated"}),
+        ("?d=1", {"target", "done"}),
+        ("?d=1&p=1", {"target"}),
+        ("?p=1", {"root", "target", "unrelated"}),
+        ("?p=0&d=0", {"root", "target", "done", "unrelated"}),
+        ("?t=target&d=1&p=1", {"target"}),
+        ("?t=done", {"root", "done"}),
+        ("?t=done&p=1", {"root"}),
+        ("?t=&d=&p=0", {"target", "done"}),
+    ]
+    try:
+        for query, expected in views + list(reversed(views)):
+            with urllib.request.urlopen(server.base_url + query) as response:
+                page = response.read().decode()
+            svg_url = urllib.parse.urljoin(
+                server.base_url, re.search(r"src='([^']+)'", page)[1]
+            )
+            # Another tab may choose a different view before this SVG loads.
+            with urllib.request.urlopen(
+                server.base_url + "?t=unrelated"
+            ) as response:
+                response.read()
+            # Separate command invocations on this YAML must be independent.
+            with urllib.request.urlopen(
+                other_server.base_url + "?p=1"
+            ) as response:
+                response.read()
+            for url in (svg_url, server.base_url + "graph.svg" + query):
+                with urllib.request.urlopen(url) as response:
+                    root = ET.fromstring(response.read())
+                namespace = root.tag[:root.tag.find("}") + 1]
+                nodes = {
+                    group.find(f"{namespace}title").text
+                    for group in root.iter(f"{namespace}g")
+                    if group.get("class") == "node"
+                }
+                assert nodes == expected, query
+        with urllib.request.urlopen(server.base_url + "graph.svg") as response:
+            root = ET.fromstring(response.read())
+        assert len([
+            group for group in root.iter(f"{namespace}g")
+            if group.get("class") == "node"
+        ]) == 4
+        for _ in range(2):
+            with pytest.raises(urllib.error.HTTPError) as exc:
+                urllib.request.urlopen(server.base_url + "?t=missing-task")
+            assert exc.value.code == 400
+        assert handler.state["target_task"] is None
+    finally:
+        server.stop()
+        other_server.stop()
+
 
 def test_send_preview_response_ignores_disconnected_client():
     class BrokenWriter:
@@ -192,14 +276,20 @@ class FakePreviewServer:
         self.stopped = True
 
 
+@pytest.mark.parametrize(
+    "options,query",
+    [({}, {}), ({"t": "task_a"}, {"t": ["task_a"]}),
+     ({"d": True, "p": True}, {"d": ["1"], "p": ["1"]})],
+)
 def test_wgrph_stops_preview_server_when_browser_window_closed(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, options, query
 ):
     # Build a minimal yaml graph for the command to read.
     yaml_file = tmp_path / "graph.yaml"
     yaml_file.write_text("nodes:\n  task_a:\n    text: Task A\n")
 
     close_calls = []
+    launch_urls = []
 
     # Replace expensive components so the command loop can run as a fast
     # unit test.
@@ -209,7 +299,7 @@ def test_wgrph_stops_preview_server_when_browser_window_closed(
     )
     monkeypatch.setattr(
         "pydifftools.flowchart.watch_graph.start_chrome",
-        lambda *args, **kwargs: object(),
+        lambda _webdriver, _options, url: launch_urls.append(url) or object(),
     )
     monkeypatch.setattr(
         "pydifftools.flowchart.watch_graph.browser_window_is_alive",
@@ -229,7 +319,11 @@ def test_wgrph_stops_preview_server_when_browser_window_closed(
 
     from pydifftools.flowchart.watch_graph import wgrph
 
-    wgrph(str(yaml_file))
+    wgrph(str(yaml_file), **options)
+    assert len(launch_urls) == 1
+    assert urllib.parse.parse_qs(
+        urllib.parse.urlparse(launch_urls[0]).query
+    ) == query
 
     # The browser shutdown path must also stop the local preview server.
     assert FakePreviewServer.latest is not None

@@ -6,6 +6,7 @@ import time
 import shutil
 import math
 import threading
+import tempfile
 import urllib.parse
 import http.server
 import xml.etree.ElementTree as ET
@@ -48,10 +49,16 @@ def _reload_svg(driver, svg_src) -> None:
     else:
         svg_uri = svg_uri + f"?ts={time.time()}"
     driver.execute_async_script(
-        "const [src,z,x,y,done]=arguments;const"
+        "let [src,z,x,y,done]=arguments;const"
         " s=document.getElementById('svg-view');s.onload=function()"
         "{document.body.style.zoom=z;"
-        " window.scrollTo(x,y); done();};s.setAttribute('src', src);",
+        " window.scrollTo(x,y); done();};"
+        "const url=new URL(src,window.location.href);"
+        "if(url.pathname==='/graph.svg'"
+        " && /^https?:$/.test(window.location.protocol)){"
+        "url.search=window.location.search;"
+        "url.searchParams.set('ts',Date.now());src=url.href;}"
+        "s.setAttribute('src', src);",
         svg_uri,
         zoom,
         scroll_x,
@@ -138,8 +145,6 @@ def _watch_view_state_from_params(params):
         t_value = params["t"][-1]
         if t_value is not None and str(t_value) != "":
             target_task = str(t_value)
-            order_by_date = False
-            filter_completed = False
     return order_by_date, target_task, filter_completed
 
 
@@ -154,32 +159,47 @@ def _watch_html(
     source_jump_url=None,
 ):
     # {{{ Build links for the other preview views
-    links = []
-    diff_query = (
-        "?diff-base=" + urllib.parse.quote(comparison.reference, safe="")
-        if comparison is not None
-        else ""
-    )
-    if diff_query:
+    svg_params = {}
+    if target_task is not None:
+        svg_params["t"] = target_task
+    if order_by_date:
+        svg_params["d"] = "1"
+    if filter_completed:
+        svg_params["p"] = "1"
+    if comparison is not None:
+        svg_params["diff-base"] = comparison.reference
+    if svg_params:
         separator = "&" if "?" in svg_url else "?"
-        svg_url += separator + diff_query[1:]
-    query_prefix = f"{diff_query}&" if diff_query else "?"
+        svg_url += separator + urllib.parse.urlencode(svg_params)
+    links = []
     if not order_by_date:
-        links.append((f"/{query_prefix}d=1", "date-ordered"))
-    if not filter_completed and not order_by_date:
-        links.append((f"/{query_prefix}p=1", "exclude completed"))
-    if order_by_date and not filter_completed:
-        links.append((f"/{query_prefix}d=1&p=1", "exclude completed"))
+        links.append(({**svg_params, "d": "1"}, "date-ordered"))
+    else:
+        links.append((
+            {k: v for k, v in svg_params.items() if k != "d"},
+            "dependency order",
+        ))
     if not filter_completed:
-        links.append((f"/{query_prefix}p=0", "full plan"))
+        links.append(({**svg_params, "p": "1"}, "exclude completed"))
+    else:
+        links.append((
+            {k: v for k, v in svg_params.items() if k != "p"},
+            "include completed",
+        ))
     if (
         order_by_date
         or filter_completed
         or (target_task is not None and str(target_task).strip())
     ):
-        links.append((f"/{diff_query}", "project overview"))
+        links.append((
+            {"diff-base": comparison.reference}
+            if comparison is not None else {},
+            "full plan",
+        ))
     footer_html = " | ".join(
-        f"<a href='{url}'>{label}</a>" for url, label in links
+        "<a href='/"
+        + ("?" + urllib.parse.urlencode(params) if params else "")
+        + f"'>{label}</a>" for params, label in links
     )
     # }}}
     if comparison is not None:
@@ -204,6 +224,12 @@ def _watch_html(
         "#wgrph-toolbar button{font-size:15px;min-width:2em;cursor:pointer;"
         "background:#f4f4f4;border:1px solid #aaa;border-radius:3px;}"
         "#wgrph-toolbar button.active{background:#cde;border-color:#468;}"
+        "#wgrph-search-panel{position:absolute;top:40px;right:6px;"
+        "background:#fff;border:1px solid #aaa;padding:8px;"
+        "font:14px sans-serif;max-width:calc(100% - 30px);}"
+        "#wgrph-search-panel[hidden]{display:none;}"
+        "#wgrph-search-input{width:180px;max-width:45vw;}"
+        "#wgrph-search-help{margin-top:5px;font-size:12px;color:#555;}"
         "</style></head><body>"
         "<div id='graph-area'>"
         "<embed id='svg-view' type='image/svg+xml'"
@@ -213,9 +239,24 @@ def _watch_html(
         "</button>"
         "<button id='wgrph-zoom-in' title='Zoom in'>+</button>"
         "<button id='wgrph-zoom-out' title='Zoom out'>&#8722;</button>"
+        "<button id='wgrph-search' title='Search graph (Ctrl+F)'"
+        " aria-label='Search graph' aria-expanded='false'"
+        " aria-controls='wgrph-search-panel'>&#128269;</button>"
         "<button id='wgrph-box-zoom' title='Zoom to rectangle (Esc to exit)'>"
         "&#9633;</button>"
-        "</div></div>"
+        "</div>"
+        "<div id='wgrph-search-panel' hidden>"
+        "<input id='wgrph-search-input' type='search'"
+        " aria-label='Search visible graph text' placeholder='Search graph'"
+        " aria-describedby='wgrph-search-help'/> "
+        "<button id='wgrph-search-prev' aria-label='Previous match'"
+        " title='Previous match (Shift+Tab)'>&#8593;</button>"
+        "<button id='wgrph-search-next' aria-label='Next match'"
+        " title='Next match (Tab)'>&#8595;</button> "
+        "<span id='wgrph-search-status' role='status' aria-live='polite'>"
+        "</span>"
+        "<div id='wgrph-search-help'>Tab / Shift+Tab: next / previous. "
+        "Esc: close.</div></div></div>"
         "<p style='margin:0.4em 0.8em;font-family:sans-serif;font-size:13px;'>"
         f"{footer_html}"
         "</p>"
@@ -336,6 +377,13 @@ def build_graph(
     xlink_ns = "http://www.w3.org/1999/xlink"
     ET.register_namespace("xlink", xlink_ns)
     link_marker = "__WGRPH_TASK_LINK__:"
+    link_params = {}
+    if order_by_date:
+        link_params["d"] = "1"
+    if filter_completed:
+        link_params["p"] = "1"
+    if comparison is not None:
+        link_params["diff-base"] = comparison.reference
     for group in svg_root.iter(f"{namespace}g"):
         if group.attrib.get("class") == "node":
             title = next(
@@ -361,7 +409,8 @@ def build_graph(
             child.text = prefix + task_name
             link = ET.Element(f"{namespace}a")
             link.set(
-                f"{{{xlink_ns}}}href", f"/?t={urllib.parse.quote(task_name)}"
+                f"{{{xlink_ns}}}href",
+                "/?" + urllib.parse.urlencode({"t": task_name, **link_params}),
             )
             link.set("target", "_top")
             link.append(child)
@@ -642,7 +691,13 @@ class GraphEventHandler(FileSystemEventHandler):
         self.webdriver = webdriver
         self.wrap_width = wrap_width
         self.data = data
+        self.render_lock = threading.RLock()
         self.comparison = comparison
+        self.comparisons = (
+            {comparison.reference: comparison}
+            if comparison is not None
+            else {}
+        )
         self.resolve_due_date_conflict = resolve_due_date_conflict
         if state is None:
             self.state = {
@@ -665,48 +720,49 @@ class GraphEventHandler(FileSystemEventHandler):
             if now - self._last_handled < self.debounce:
                 return
             self._last_handled = now
-            try:
-                build_kwargs = {}
-                if self.comparison is not None:
-                    build_kwargs["comparison"] = self.comparison
-                if self.resolve_due_date_conflict is not None:
-                    build_kwargs["resolve_due_date_conflict"] = (
-                        self.resolve_due_date_conflict
+            with self.render_lock:
+                try:
+                    build_kwargs = {}
+                    if self.comparison is not None:
+                        build_kwargs["comparison"] = self.comparison
+                    if self.resolve_due_date_conflict is not None:
+                        build_kwargs["resolve_due_date_conflict"] = (
+                            self.resolve_due_date_conflict
+                        )
+                    if self.state["filter_completed"]:
+                        build_kwargs["filter_completed"] = True
+                    self.data = build_graph(
+                        self.yaml_file,
+                        self.dot_file,
+                        self.svg_file,
+                        self.wrap_width,
+                        self.state["order_by_date"],
+                        self.data,
+                        self.state["target_task"],
+                        **build_kwargs,
                     )
-                if self.state["filter_completed"]:
-                    build_kwargs["filter_completed"] = True
-                self.data = build_graph(
-                    self.yaml_file,
-                    self.dot_file,
-                    self.svg_file,
-                    self.wrap_width,
-                    self.state["order_by_date"],
-                    self.data,
-                    self.state["target_task"],
-                    **build_kwargs,
-                )
-            except Exception as exc:
-                if isinstance(exc, EmptyGraphYamlError):
+                except Exception as exc:
+                    if isinstance(exc, EmptyGraphYamlError):
+                        print(
+                            "Graph YAML is empty; closing preview window.",
+                            flush=True,
+                        )
+                        close_chrome(self.driver)
+                        self.driver = None
+                        self._last_mtime = self.yaml_file.stat().st_mtime
+                        return
+                    # Keep the preview open and log the failure so users can
+                    # see why the graph didn't refresh.
                     print(
-                        "Graph YAML is empty; closing preview window.",
+                        "Graph build failed; keeping preview window open: "
+                        f"{type(exc).__name__}: {exc}",
                         flush=True,
                     )
-                    close_chrome(self.driver)
-                    self.driver = None
+                    print("---------------------------")
+                    print("here is the traceback:")
+                    print(traceback.format_exc(), flush=True)
                     self._last_mtime = self.yaml_file.stat().st_mtime
                     return
-                # Keep the preview open and log the failure so users can
-                # see why the graph didn't refresh.
-                print(
-                    "Graph build failed; keeping preview window open: "
-                    f"{type(exc).__name__}: {exc}",
-                    flush=True,
-                )
-                print("---------------------------")
-                print("here is the traceback:")
-                print(traceback.format_exc(), flush=True)
-                self._last_mtime = self.yaml_file.stat().st_mtime
-                return
             if self.driver is None:
                 # Restart the preview once the SVG successfully builds again.
                 if (
@@ -741,93 +797,145 @@ class FlowchartPreviewServer:
         self.source_jump_server = None
         self.base_url = None
         self.svg_url = None
+        self.render_directory = None
 
     def start(self):
         event_handler = self.event_handler
+        # Each preview owns its render files. Two watchers of the same YAML
+        # must not overwrite each other's filtered SVG or intermediate DOT.
+        self.render_directory = tempfile.TemporaryDirectory(
+            prefix="pydifft-wgrph-"
+        )
+        event_handler.dot_file = (
+            Path(self.render_directory.name) / "graph.dot"
+        )
+        event_handler.svg_file = (
+            Path(self.render_directory.name) / "graph.svg"
+        )
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
-                parsed = urllib.parse.urlparse(self.path)
-                if parsed.path == "/graph.svg":
-                    svg_bytes = event_handler.svg_file.read_bytes()
-                    _send_preview_response(
-                        self,
-                        svg_bytes,
-                        "image/svg+xml; charset=utf-8",
-                    )
-                    return
-                if parsed.path in ("/svg-pan-zoom.min.js", "/wgrph_view.js"):
-                    _send_preview_response(
-                        self,
-                        (Path(__file__).parent / parsed.path[1:]).read_bytes(),
-                        "text/javascript; charset=utf-8",
-                    )
-                    return
-                if parsed.path == "/source_jump.js":
-                    _send_preview_response(
-                        self,
-                        (Path(__file__).parent / parsed.path[1:]).read_bytes(),
-                        "text/javascript; charset=utf-8",
-                    )
-                    return
-
-                if parsed.path != "/" and parsed.path != "/index.html":
-                    self.send_error(404)
-                    return
-
-                # Parse query args so GET requests control graph mode.
-                params = urllib.parse.parse_qs(
-                    parsed.query, keep_blank_values=True
-                )
-                (
-                    order_by_date,
-                    target_task,
-                    filter_completed,
-                ) = _watch_view_state_from_params(params)
-
-                if (
-                    order_by_date != event_handler.state["order_by_date"]
-                    or target_task != event_handler.state["target_task"]
-                    or filter_completed
-                    != event_handler.state["filter_completed"]
-                ):
-                    event_handler.state["order_by_date"] = order_by_date
-                    event_handler.state["target_task"] = target_task
-                    event_handler.state["filter_completed"] = filter_completed
-                    build_kwargs = {}
-                    if event_handler.comparison is not None:
-                        build_kwargs["comparison"] = event_handler.comparison
-                    if event_handler.resolve_due_date_conflict is not None:
-                        build_kwargs["resolve_due_date_conflict"] = (
-                            event_handler.resolve_due_date_conflict
+                with event_handler.render_lock:
+                    parsed = urllib.parse.urlparse(self.path)
+                    if parsed.path in (
+                        "/svg-pan-zoom.min.js", "/wgrph_view.js"
+                    ):
+                        _send_preview_response(
+                            self,
+                            (Path(__file__).parent / parsed.path[1:])
+                            .read_bytes(),
+                            "text/javascript; charset=utf-8",
                         )
-                    if event_handler.state["filter_completed"]:
-                        build_kwargs["filter_completed"] = True
-                    event_handler.data = build_graph(
-                        event_handler.yaml_file,
-                        event_handler.dot_file,
-                        event_handler.svg_file,
-                        event_handler.wrap_width,
-                        event_handler.state["order_by_date"],
-                        event_handler.data,
-                        event_handler.state["target_task"],
-                        **build_kwargs,
-                    )
+                        return
+                    if parsed.path == "/source_jump.js":
+                        _send_preview_response(
+                            self,
+                            (Path(__file__).parent / parsed.path[1:])
+                            .read_bytes(),
+                            "text/javascript; charset=utf-8",
+                        )
+                        return
 
-                body = _watch_html(
-                    "/graph.svg",
-                    event_handler.state["order_by_date"],
-                    event_handler.state["target_task"],
-                    event_handler.state["filter_completed"],
-                    event_handler.comparison,
-                    self_outer.source_jump_server.url,
-                )
-                body_bytes = body.encode("utf-8")
-                _send_preview_response(
-                    self,
-                    body_bytes,
-                    "text/html; charset=utf-8",
-                )
+                    if parsed.path not in ("/", "/index.html", "/graph.svg"):
+                        self.send_error(404)
+                        return
+
+                    # Parse query args so GET requests control graph mode.
+                    params = urllib.parse.parse_qs(
+                        parsed.query, keep_blank_values=True
+                    )
+                    (
+                        order_by_date,
+                        target_task,
+                        filter_completed,
+                    ) = _watch_view_state_from_params(params)
+
+                    # {{{ Select comparison solely from the requested URL
+                    comparison = None
+                    if "diff-base" in params:
+                        reference = params["diff-base"][-1]
+                        comparison = event_handler.comparisons.get(reference)
+                        if comparison is None:
+                            try:
+                                comparison = PlanComparison(
+                                    event_handler.yaml_file, reference
+                                )
+                            except ValueError as exc:
+                                self.send_error(400, str(exc))
+                                return
+                            event_handler.comparisons[reference] = comparison
+                    # }}}
+
+                    if (
+                        order_by_date != event_handler.state["order_by_date"]
+                        or target_task != event_handler.state["target_task"]
+                        or filter_completed
+                        != event_handler.state["filter_completed"]
+                        or comparison is not event_handler.comparison
+                        or not event_handler.svg_file.exists()
+                    ):
+                        build_kwargs = {}
+                        if comparison is not None:
+                            build_kwargs["comparison"] = comparison
+                        if event_handler.resolve_due_date_conflict is not None:
+                            build_kwargs["resolve_due_date_conflict"] = (
+                                event_handler.resolve_due_date_conflict
+                            )
+                        if filter_completed:
+                            build_kwargs["filter_completed"] = True
+                        try:
+                            data = build_graph(
+                                event_handler.yaml_file,
+                                event_handler.dot_file,
+                                event_handler.svg_file,
+                                event_handler.wrap_width,
+                                order_by_date,
+                                event_handler.data,
+                                target_task,
+                                **build_kwargs,
+                            )
+                        except ValueError as exc:
+                            self.send_error(400, str(exc))
+                            return
+                        event_handler.data = data
+                        event_handler.state.update(
+                            order_by_date=order_by_date,
+                            target_task=target_task,
+                            filter_completed=filter_completed,
+                        )
+                        event_handler.comparison = comparison
+
+                    if parsed.path == "/graph.svg":
+                        _send_preview_response(
+                            self,
+                            event_handler.svg_file.read_bytes(),
+                            "image/svg+xml; charset=utf-8",
+                        )
+                        return
+
+                    # Keep restart and refresh URLs in sync with navigation.
+                    event_handler.svg_url = (
+                        self_outer.svg_url.split("?", 1)[0]
+                        + ("?" + parsed.query if parsed.query else "")
+                    )
+                    event_handler.preview_url = (
+                        self_outer.base_url
+                        + ("?" + parsed.query if parsed.query else "")
+                    )
+                    body = _watch_html(
+                        "/graph.svg",
+                        event_handler.state["order_by_date"],
+                        event_handler.state["target_task"],
+                        event_handler.state["filter_completed"],
+                        event_handler.comparison,
+                        self_outer.source_jump_server.url,
+                    )
+                    body_bytes = body.encode("utf-8")
+                    _send_preview_response(
+                        self,
+                        body_bytes,
+                        "text/html; charset=utf-8",
+                    )
 
             def log_message(self, format, *args):
                 return
@@ -842,6 +950,7 @@ class FlowchartPreviewServer:
         except Exception:
             self.source_jump_server.stop()
             self.source_jump_server = None
+            self.render_directory.cleanup()
             raise
         self.httpd.daemon_threads = True
         port = self.httpd.server_address[1]
@@ -873,6 +982,9 @@ class FlowchartPreviewServer:
         if self.source_jump_server is not None:
             self.source_jump_server.stop()
             self.source_jump_server = None
+        if self.render_directory is not None:
+            self.render_directory.cleanup()
+            self.render_directory = None
 
 
 # also used by: pydifftools.command_registry, which dispatches registered
@@ -884,7 +996,7 @@ class FlowchartPreviewServer:
         "yaml": "Path to the flowchart YAML file",
         "wrap_width": "Line wrap width used when generating node labels",
         "d": "Render nodes by date without showing connections",
-        "t": "Task name to focus on (show incomplete ancestor tasks only)",
+        "t": "Task name to focus on (show the task and its ancestors)",
         "p": "Render the full plan with completed tasks filtered out",
         "diff_base": "Compare the live plan against a Git revision",
     },
@@ -954,31 +1066,22 @@ def wgrph(yaml, wrap_width=55, d=False, t=None, p=False, diff_base=None):
     preview_server = FlowchartPreviewServer(event_handler)
     preview_server.start()
     event_handler.svg_url = preview_server.svg_url
-    preview_url = preview_server.base_url
+    preview_params = {}
     if comparison is not None:
-        preview_url += "?diff-base=" + urllib.parse.quote(
-            comparison.reference, safe=""
-        )
+        preview_params["diff-base"] = comparison.reference
+    if t is not None and str(t).strip():
+        preview_params["t"] = str(t).strip()
+    if d:
+        preview_params["d"] = "1"
+    if p:
+        preview_params["p"] = "1"
+    preview_url = preview_server.base_url
+    if preview_params:
+        preview_url += "?" + urllib.parse.urlencode(preview_params)
     event_handler.preview_url = preview_url
 
     driver = start_chrome(webdriver, options, preview_url)
     event_handler.driver = driver
-
-    if t is not None and str(t).strip():
-        driver.get(
-            preview_url
-            + ("&" if "?" in preview_url else "?")
-            + "t="
-            + urllib.parse.quote(str(t).strip())
-        )
-    elif d:
-        driver.get(
-            preview_url + ("&" if "?" in preview_url else "?") + "d=1"
-        )
-    elif p:
-        driver.get(
-            preview_url + ("&" if "?" in preview_url else "?") + "p=1"
-        )
 
     observer = Observer()
     observer.schedule(event_handler, yaml_file.parent, recursive=False)

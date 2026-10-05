@@ -97,11 +97,21 @@ included are (listed in order of fun/utility):
   ``flowchart/watch_graph.py`` script so all of its functionality is now
   available through the main ``pydifft`` entry point.
   Add ``--diff-base HEAD`` (or a branch, tag, commit, or quoted reflog
-  reference) to compare against that Git snapshot throughout the preview
-  session. Additions are green, deletions are red and struck through, and
+  reference) to open a URL comparing against that Git snapshot.
+  Additions are green, deletions are red and struck through, and
   unchanged content is muted. Renames share one box; date, status, and
   dependency changes are annotated. Navigation, filters, and reloads retain
-  the baseline, whose reference and commit appear below the graph.
+  the baseline through the ``diff-base`` URL parameter, whose reference and
+  commit appear below the graph. All view choices come from the URL:
+  ``t`` focuses a task and its ancestors, ``d=1``
+  orders dated tasks, and ``p=1`` excludes completed tasks. Command options
+  choose the initial URL. Removing ``diff-base`` restores normal rendering;
+  clearing the entire query shows the full plan, including completed and
+  undated tasks. Each embedded SVG and live refresh uses the same URL mode.
+  The search button beside Home and Zoom finds text in the visible graph,
+  highlights matches, and centers them at a readable font size. Tab or Enter
+  advances to the next match; Shift+Tab or Shift+Enter goes back. Esc closes
+  search. Phrases can span wrapped lines and formatted text.
   Comparison uses the same repository-relative YAML path; a file absent
   from the revision is treated as an empty plan. Historical file renames
   are not followed, and comparison markup is never written to YAML.
