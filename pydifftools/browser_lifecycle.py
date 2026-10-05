@@ -1,10 +1,41 @@
 import os
+import re
 import shutil
 import subprocess
+import sys
 
 # callbacks that run before any dialog needs the user; cpb registers one
 # that closes its live preview, so issues are dealt with before it reopens
 dialog_callbacks = []
+
+
+def launch_chrome(webdriver, **kwargs):
+    """Start Chrome, retrying version mismatches with a warning."""
+    from selenium.common.exceptions import SessionNotCreatedException
+    from selenium.webdriver.chrome.service import Service
+
+    try:
+        return webdriver.Chrome(**kwargs)
+    except SessionNotCreatedException as exc:
+        # {{{ Retry only ChromeDriver's explicit browser-version rejection
+        details = str(exc)
+        driver_match = re.search(
+            r"ChromeDriver only supports Chrome version (\d+)", details
+        )
+        browser_match = re.search(
+            r"Current browser version is (\d+)", details
+        )
+        if driver_match is None or browser_match is None:
+            raise
+        print(
+            "pydifft: warning: ChromeDriver "
+            f"{driver_match.group(1)} and Chrome {browser_match.group(1)} "
+            "do not match; retrying with the driver version check disabled.",
+            file=sys.stderr,
+        )
+        kwargs["service"] = Service(service_args=["--disable-build-check"])
+        return webdriver.Chrome(**kwargs)
+        # }}}
 
 
 def prepare_for_dialog():

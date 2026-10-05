@@ -25,6 +25,7 @@ from .browser_lifecycle import (
     close_browser_window,
     dialog_callbacks,
     forward_search_in_browser,
+    launch_chrome,
     prepare_for_dialog,
 )
 from .forward_search import (
@@ -1002,7 +1003,7 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
         from selenium import webdriver
         from selenium.common.exceptions import WebDriverException
 
-        chrome = webdriver.Chrome()
+        chrome = launch_chrome(webdriver)
         observer = Observer()
         change_queue = queue.Queue()
         event_handler = Handler(filename, change_queue)
@@ -1184,7 +1185,7 @@ def cpb(filename, comments_to_margin=False, no_comments=False, wrapnumber=79):
                                     break
                         if chrome is None:
                             # {{{ reopen the preview a dialog closed
-                            chrome = webdriver.Chrome()
+                            chrome = launch_chrome(webdriver)
                             chrome.get(
                                 "file://" + os.path.abspath(html_file)
                             )

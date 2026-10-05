@@ -27,6 +27,7 @@ from pydifftools.command_registry import register_command
 from pydifftools.browser_lifecycle import (
     browser_window_is_alive,
     close_browser_window,
+    launch_chrome,
 )
 from pydifftools.source_jump import SourceJumpServer
 from .comparison import PlanComparison
@@ -60,7 +61,7 @@ def _reload_svg(driver, svg_src) -> None:
 
 def start_chrome(webdriver, options, preview_url):
     # Launch Chrome and display the local SVG preview page from the server.
-    driver = webdriver.Chrome(options=options)
+    driver = launch_chrome(webdriver, options=options)
     driver.get(preview_url)
     return driver
 
