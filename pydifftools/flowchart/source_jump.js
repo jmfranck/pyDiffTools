@@ -28,12 +28,21 @@
 
   let phrase = '';
 
+  // Preserve HTML tag boundaries without adding spaces to words such as
+  // H<sub>2</sub>O. Python treats this reserved marker as a formatting gap.
+  function normalizeSourceText(text, trimEnd = true) {
+    const normalized = text.replace(/[\s\uE000]+/g, function (gap) {
+      return /\s/.test(gap) ? ' ' : '\uE000';
+    }).replace(/^[\s\uE000]+/, '');
+    return trimEnd ? normalized.replace(/[\s\uE000]+$/, '') : normalized;
+  }
+
   function hideMenu() {
     menu.style.display = 'none';
   }
 
   function showMenu(event, text) {
-    phrase = (text || '').replace(/\s+/g, ' ').trim();
+    phrase = normalizeSourceText(text || '');
     if (!phrase) {
       hideMenu();
       return;
@@ -71,8 +80,8 @@
     const block = targetElement.closest(
       'p,li,blockquote,h1,h2,h3,h4,h5,h6,dt,dd,td,th'
     ) || targetElement;
-    // Drop rendered math and cross-reference links so the phrase resembles
-    // the searchable Markdown source, where mfs removes those constructs.
+    // Drop rendered math and figure-reference links, whose displayed text
+    // differs from their Markdown source.
     let text = '';
     let clickedOffset = 0;
     let found = false;
@@ -93,11 +102,18 @@
         text += ' ';
         return;
       }
+      const tagBoundary = node !== block && node.nodeType === Node.ELEMENT_NODE;
+      if (tagBoundary) {
+        text += '\uE000';
+      }
       node.childNodes.forEach(collectText);
+      if (tagBoundary) {
+        text += '\uE000';
+      }
     }
     collectText(block);
     const rawText = text;
-    text = rawText.replace(/\s+/g, ' ').trim();
+    text = normalizeSourceText(rawText);
     if (!text) {
       return '';
     }
@@ -107,10 +123,9 @@
 
     // The raw DOM offset is used to find sentence bounds before whitespace is
     // collapsed. Recompute its visible offset after normalization.
-    const normalizedPrefix = rawText
-      .slice(0, clickedOffset)
-      .replace(/\s+/g, ' ')
-      .replace(/^\s+/, '');
+    const normalizedPrefix = normalizeSourceText(
+      rawText.slice(0, clickedOffset), false
+    );
     clickedOffset = normalizedPrefix.length;
     const before = text.slice(0, clickedOffset);
     const after = text.slice(clickedOffset);
@@ -119,7 +134,7 @@
       before.lastIndexOf('!'),
       before.lastIndexOf('?')
     ) + 1;
-    const endMatch = after.match(/[.!?](?:\s|$)/);
+    const endMatch = after.match(/[.!?]\uE000*(?:\s|$)/);
     const end = endMatch ? clickedOffset + endMatch.index + 1 : text.length;
     return text.slice(start, end).trim() || text;
   }
