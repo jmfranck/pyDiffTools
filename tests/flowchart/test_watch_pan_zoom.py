@@ -212,7 +212,7 @@ def test_live_reload_keeps_pan_and_zoom(preview, query):
     assert after["y"] == pytest.approx(before["y"])
 
 
-def test_search_centers_readable_matches_and_cycles_after_reload(preview):
+def test_search_centers_tasks_without_zooming_and_cycles_after_reload(preview):
     driver, server = preview
     handler = server.event_handler
     handler.yaml_file.write_text(
@@ -232,46 +232,149 @@ def test_search_centers_readable_matches_and_cycles_after_reload(preview):
     WebDriverWait(driver, 10).until(
         lambda d: d.execute_script("return !!window.wgrphPanZoom")
     )
+    driver.set_window_size(2400, 1600)
+    WebDriverWait(driver, 10).until(lambda d: _view(d)["w"] == 2400)
+    driver.find_element("id", "wgrph-actual-size").click()
+    driver.find_element("id", "wgrph-zoom-in").click()
+    chosen_zoom = _view(driver)["z"]
     driver.find_element("id", "wgrph-search").click()
     field = driver.find_element("id", "wgrph-search-input")
     field.send_keys("sAmPlE")
     status = driver.find_element("id", "wgrph-search-status")
     assert status.text == "1 of 4"
-    for key, expected in (
-        (Keys.TAB, "2 of 4"), (Keys.TAB, "3 of 4"),
-        (Keys.TAB, "4 of 4"), (Keys.TAB, "1 of 4"),
-        (Keys.SHIFT + Keys.TAB, "4 of 4"),
+    for key, expected, task in (
+        (Keys.NULL, "1 of 4", "alpha"),
+        (Keys.TAB, "2 of 4", "alpha"),
+        (Keys.TAB, "3 of 4", "beta"),
+        (Keys.TAB, "4 of 4", "gamma"),
+        (Keys.TAB, "1 of 4", "alpha"),
+        (Keys.SHIFT + Keys.TAB, "4 of 4", "gamma"),
     ):
         field.send_keys(key)
         assert status.text == expected
+        assert _view(driver)["z"] == pytest.approx(chosen_zoom)
+        WebDriverWait(driver, 10).until(
+            lambda d: d.execute_script(
+                "const doc=document.getElementById('svg-view')"
+                ".getSVGDocument();"
+                "const node=Array.from(doc.querySelectorAll('g.node')).find("
+                "n=>n.getAttribute('data-source-name')===arguments[0]);"
+                "const b=node.getBoundingClientRect();"
+                "const s=window.wgrphPanZoom.getSizes();"
+                "return Math.abs(b.x+b.width/2-s.width/2)<2 &&"
+                "Math.abs(b.y+b.height/2-s.height/2)<2;",
+                task,
+            )
+        )
+        geometry = driver.execute_script(
+            "const doc=document.getElementById('svg-view').getSVGDocument();"
+            "const node=Array.from(doc.querySelectorAll('g.node')).find("
+            "n=>n.getAttribute('data-source-name')===arguments[0]);"
+            "const bounds=node.getBoundingClientRect();"
+            "const rect=doc.querySelector('#wgrph-search-highlight rect')"
+            ".getBoundingClientRect();"
+            "return {x:bounds.x+bounds.width/2,y:bounds.y+bounds.height/2,"
+            "highlightWidth:rect.width,highlightHeight:rect.height};",
+            task,
+        )
+        view = _view(driver)
+        assert geometry["x"] == pytest.approx(view["w"] / 2, abs=2)
+        assert geometry["y"] == pytest.approx(view["h"] / 2, abs=2)
+        assert geometry["highlightWidth"] > 0
+        assert geometry["highlightHeight"] > 0
     assert driver.execute_script("return document.activeElement.id") == (
         "wgrph-search-input"
     )
-    geometry = driver.execute_script(
-        "const e=document.getElementById('svg-view');"
-        "const doc=e.getSVGDocument();"
-        "const rect=doc.querySelector('#wgrph-search-highlight rect')"
-        ".getBoundingClientRect();const sizes=window.wgrphPanZoom.getSizes();"
-        "return {x:rect.x+rect.width/2,y:rect.y+rect.height/2,"
-        "w:sizes.width,h:sizes.height,font:14*sizes.realZoom};"
-    )
-    assert geometry["x"] == pytest.approx(geometry["w"] / 2, abs=2)
-    assert geometry["y"] == pytest.approx(geometry["h"] / 2, abs=2)
-    assert geometry["font"] == pytest.approx(18, abs=0.5)
     assert driver.execute_script("return window.visualViewport.scale") == 1
     _reload_svg(driver, server.svg_url)
     assert status.text == "4 of 4"
     field.send_keys(Keys.TAB)
     assert status.text == "1 of 4"
+    assert _view(driver)["z"] == pytest.approx(chosen_zoom)
+    driver.find_element("id", "wgrph-zoom-out").click()
+    chosen_zoom = _view(driver)["z"]
+    field.send_keys(Keys.TAB)
+    assert status.text == "2 of 4"
+    assert _view(driver)["z"] == pytest.approx(chosen_zoom)
     for query in ("room temperature", "(test)", "μ", "no such phrase"):
         field.send_keys(Keys.CONTROL + "a")
         field.send_keys(query)
         assert status.text == (
             "No matches" if query == "no such phrase" else "1 of 1"
         )
+        assert _view(driver)["z"] == pytest.approx(chosen_zoom)
     field.send_keys(Keys.ESCAPE)
     assert not driver.find_element("id", "wgrph-search-panel").is_displayed()
     assert driver.execute_script(
         "return document.getElementById('svg-view').getSVGDocument()"
         ".getElementById('wgrph-search-highlight') === null"
     )
+
+
+def test_resize_scales_graph_and_keeps_current_center(preview):
+    driver, _ = preview
+    home = _view(driver)
+    driver.set_window_size(2400, 1600)
+    WebDriverWait(driver, 10).until(lambda d: _view(d)["w"] > home["w"])
+    _home_matches(_view(driver))
+    assert _view(driver)["z"] > home["z"] * 1.5
+    driver.find_element("id", "wgrph-zoom-in").click()
+    _drag(
+        driver, driver.find_element("id", "svg-view"), (400, 300), (450, 340)
+    )
+    before = _view(driver)
+    for width, height in ((1000, 700), (1800, 1000), (2400, 1600)):
+        driver.set_window_size(width, height)
+        WebDriverWait(driver, 10).until(lambda d: _view(d)["w"] == width)
+        after = _view(driver)
+        factor = min(after["w"] / after["vw"], after["h"] / after["vh"]) / min(
+            before["w"] / before["vw"], before["h"] / before["vh"]
+        )
+        assert after["z"] == pytest.approx(before["z"] * factor)
+        for axis, size in (("x", "w"), ("y", "h")):
+            assert (after[size] / 2 - after[axis]) / after["z"] == (
+                pytest.approx((before[size] / 2 - before[axis]) / before["z"])
+            )
+        before = after
+
+
+def test_actual_size_shows_native_font_pixels_and_preserves_center(preview):
+    driver, server = preview
+    for width, height in ((1200, 800), (2400, 1600)):
+        driver.set_window_size(width, height)
+        driver.find_element("id", "wgrph-home").click()
+        before = _view(driver)
+        graph_scale = driver.execute_script(
+            "const doc=document.getElementById('svg-view').getSVGDocument();"
+            "return doc.querySelector('.svg-pan-zoom_viewport')"
+            ".getScreenCTM().inverse().multiply(doc.querySelector('text')"
+            ".getScreenCTM()).a;"
+        )
+        button = driver.find_element("id", "wgrph-actual-size")
+        assert button.text == "1:1"
+        button.click()
+        after = _view(driver)
+        assert after["z"] == pytest.approx(1 / graph_scale)
+        WebDriverWait(driver, 10).until(
+            lambda d: d.execute_script(
+                "const doc=document.getElementById('svg-view')"
+                ".getSVGDocument();"
+                "return Math.abs(doc.querySelector('text')"
+                ".getScreenCTM().a-1)<1e-6;"
+            )
+        )
+        for axis, size in (("x", "w"), ("y", "h")):
+            assert (after[size] / 2 - after[axis]) / after["z"] == (
+                pytest.approx((before[size] / 2 - before[axis]) / before["z"])
+            )
+        pixels = driver.execute_script(
+            "const doc=document.getElementById('svg-view').getSVGDocument();"
+            "const text=doc.querySelector('text');"
+            "const font=parseFloat(doc.defaultView.getComputedStyle(text)"
+            ".fontSize);return {font:font,"
+            "rendered:font*text.getScreenCTM().a};"
+        )
+        assert pixels["rendered"] == pytest.approx(pixels["font"])
+        assert driver.execute_script("return window.visualViewport.scale") == 1
+        _reload_svg(driver, server.svg_url)
+        assert _view(driver)["z"] == pytest.approx(after["z"])

@@ -43,19 +43,23 @@
     matchIndex = (matchIndex + step + matches.length) % matches.length;
     searchStatus.textContent = `${matchIndex + 1} of ${matches.length}`;
     const sizes = panZoom.getSizes();
-    const pan = panZoom.getPan();
+    const viewport = svgDoc.querySelector('.svg-pan-zoom_viewport');
+    // DOM ranges reflect the last rendered frame, which can lag behind the
+    // pan/zoom state while typing. Use that frame's matrix for highlights.
+    const matrix = viewport.getScreenCTM();
     const highlight = svgDoc.createElementNS(
       'http://www.w3.org/2000/svg', 'g'
     );
     highlight.id = 'wgrph-search-highlight';
     highlight.setAttribute('pointer-events', 'none');
-    const boxes = matches[matchIndex].map(function (range) {
+    const match = matches[matchIndex];
+    match.ranges.forEach(function (range) {
       const bounds = range.getBoundingClientRect();
       const box = {
-        x: (bounds.x - pan.x) / sizes.realZoom,
-        y: (bounds.y - pan.y) / sizes.realZoom,
-        width: bounds.width / sizes.realZoom,
-        height: bounds.height / sizes.realZoom,
+        x: (bounds.x - matrix.e) / matrix.a,
+        y: (bounds.y - matrix.f) / matrix.d,
+        width: bounds.width / matrix.a,
+        height: bounds.height / matrix.d,
       };
       const rect = svgDoc.createElementNS('http://www.w3.org/2000/svg', 'rect');
       for (const key of ['x', 'y', 'width', 'height']) {
@@ -66,25 +70,20 @@
       rect.setAttribute('stroke', '#b77900');
       rect.setAttribute('vector-effect', 'non-scaling-stroke');
       highlight.appendChild(rect);
-      return box;
     });
-    svgDoc.querySelector('.svg-pan-zoom_viewport').appendChild(highlight);
+    viewport.appendChild(highlight);
     if (focus) {
-      const left = Math.min(...boxes.map(b => b.x));
-      const right = Math.max(...boxes.map(b => b.x + b.width));
-      const top = Math.min(...boxes.map(b => b.y));
-      const bottom = Math.max(...boxes.map(b => b.y + b.height));
-      const element = matches[matchIndex][0].startContainer.parentElement;
-      const fontSize = parseFloat(svgDoc.defaultView.getComputedStyle(element)
-        .fontSize) || 14;
-      // Target an 18 CSS-pixel font regardless of the graph's initial fit.
-      const zoom = panZoom.getZoom() * 18 / fontSize / sizes.realZoom;
-      panZoom.setMaxZoom(Math.max(50, zoom));
-      panZoom.zoom(zoom);
-      const realZoom = panZoom.getSizes().realZoom;
+      // Center the containing task while keeping the user's chosen scale.
+      const bounds = match.node.getBBox();
+      const point = svgDoc.documentElement.createSVGPoint();
+      point.x = bounds.x + bounds.width / 2;
+      point.y = bounds.y + bounds.height / 2;
+      const center = point.matrixTransform(
+        matrix.inverse().multiply(match.node.getScreenCTM())
+      );
       panZoom.pan({
-        x: sizes.width / 2 - (left + right) / 2 * realZoom,
-        y: sizes.height / 2 - (top + bottom) / 2 * realZoom,
+        x: sizes.width / 2 - center.x * sizes.realZoom,
+        y: sizes.height / 2 - center.y * sizes.realZoom,
       });
     }
   }
@@ -115,7 +114,7 @@
             }
           }
           if (ranges.length) {
-            matches.push(ranges);
+            matches.push({ ranges, node: entry.node });
           }
           start = entry.text.indexOf(query, start + query.length);
         }
@@ -232,9 +231,11 @@
       home();
     } else {
       const restore = savedView;
-      panZoom.zoom(
-        (restore.realZoom / panZoom.getSizes().realZoom) * panZoom.getZoom()
-      );
+      const zoom = (restore.realZoom / panZoom.getSizes().realZoom) *
+        panZoom.getZoom();
+      panZoom.setMinZoom(Math.min(0.1, zoom));
+      panZoom.setMaxZoom(Math.max(50, zoom));
+      panZoom.zoom(zoom);
       panZoom.pan(restore.pan);
     }
     saveView();
@@ -264,7 +265,7 @@
           }
         }
       }
-      return { text, positions };
+      return { text, positions, node };
     });
     // }}}
     search(false);
@@ -390,11 +391,44 @@
   init();
   window.addEventListener('resize', function () {
     if (panZoom !== null) {
+      // Keep the same magnification relative to the whole-graph fit.
+      const before = panZoom.getSizes();
+      const pan = panZoom.getPan();
+      const zoom = panZoom.getZoom();
+      const atHome = Math.abs(zoom - 1) < 1e-6 &&
+        Math.abs(pan.x + before.viewBox.x * before.realZoom -
+          (before.width - before.viewBox.width * before.realZoom) / 2) < 0.5 &&
+        Math.abs(pan.y + before.viewBox.y * before.realZoom) < 0.5;
       panZoom.resize();
+      if (atHome) {
+        home();
+      } else {
+        panZoom.zoom(zoom);
+        const after = panZoom.getSizes();
+        const factor = after.realZoom / before.realZoom;
+        panZoom.pan({
+          x: after.width / 2 + (pan.x - before.width / 2) * factor,
+          y: after.height / 2 + (pan.y - before.height / 2) * factor,
+        });
+      }
+      saveView();
     }
   });
   document.addEventListener('keydown', handleKeys);
   document.getElementById('wgrph-home').addEventListener('click', home);
+  document.getElementById('wgrph-actual-size').addEventListener('click', function () {
+    // Graphviz may scale its graph group before viewer zoom is applied.
+    const viewport = initializedDoc.querySelector('.svg-pan-zoom_viewport');
+    const text = initializedDoc.querySelector('g.node text');
+    const matrix = text ? viewport.getScreenCTM().inverse().multiply(
+      text.getScreenCTM()
+    ) : { a: 1, b: 0 };
+    const zoom = panZoom.getZoom() / panZoom.getSizes().realZoom /
+      Math.hypot(matrix.a, matrix.b);
+    panZoom.setMinZoom(Math.min(0.1, zoom));
+    panZoom.setMaxZoom(Math.max(50, zoom));
+    panZoom.zoom(zoom);
+  });
   document
     .getElementById('wgrph-zoom-in')
     .addEventListener('click', function () {

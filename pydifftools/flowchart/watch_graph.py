@@ -239,6 +239,8 @@ def _watch_html(
         "</button>"
         "<button id='wgrph-zoom-in' title='Zoom in'>+</button>"
         "<button id='wgrph-zoom-out' title='Zoom out'>&#8722;</button>"
+        "<button id='wgrph-actual-size' title='Actual size: native font size'"
+        " aria-label='Actual size'>1:1</button>"
         "<button id='wgrph-search' title='Search graph (Ctrl+F)'"
         " aria-label='Search graph' aria-expanded='false'"
         " aria-controls='wgrph-search-panel'>&#128269;</button>"
