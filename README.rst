@@ -207,6 +207,29 @@ included are (listed in order of fun/utility):
       this rule. The option is shared by ``cpb``, ``wmatch``, ``wr`` and
       ``wrchk``; ``--punctuation-slop`` remains an alias.
 
+- ``pydifft pd OLD NEW [--no-compile]`` ("PDF diff") compares two ``.md``
+  files or two ``.tex`` files. It writes ``NEW_diff.tex`` beside the newer
+  input and, by default, compiles ``NEW_diff.pdf`` there with ``latexmk -pdf``.
+  For example, ``pydifft pd old.md paper.md`` produces ``paper_diff.tex``
+  and ``paper_diff.pdf``. ``--no-compile`` retains the diff TeX without
+  running a compiler and supports TeX fragments as well as full documents.
+
+  Both formats use ``mylatexdiff-preamble.sty`` and the existing custom
+  ``latexdiff`` options and postprocessing. The preamble is searched for
+  in the current directory, beside NEW, then through ``kpsewhich``.
+  Tools must be available on the caller's PATH, including any TeX Live
+  directory configured in your shell. Markdown additionally requires
+  Pandoc and pandoc-crossref; conversion honors declared bibliography and
+  CSL metadata, renders citations and cross-references, and resolves local
+  images beside each source. Converted TeX intermediates are temporary;
+  the Markdown sources are unchanged.
+
+  Compilation runs beside NEW, using normal project latexmk configuration.
+  Compilation artifacts and the diff TeX remain available if compilation
+  fails. Existing generated outputs can be replaced on a successful rerun.
+  The former ``git-latexdiffnocompile.sh`` is a compatibility wrapper for
+  ``pydifft pd --no-compile``.
+
 - `pydifft wd` ("word diff"): generate "track changes" word files starting from pandoc markdown in a git history.  Assuming that you have copied diff-doc.js (copied + licensed from elsewhere) into your home directory, this will use pandoc to convert the markdown files to MS Word, then use the MS Word comparison tool to generate a document where all relevant changes are shown with "track changes."
 
     * by default, this uses the file `template.docx` in the current directory as a pandoc word template
