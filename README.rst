@@ -172,6 +172,10 @@ included are (listed in order of fun/utility):
   changes, an additional red/blue alpha-difference view is included.
   Run ``pydifft gd --install`` to add the matching ``git gd`` alias to
   your global git config.
+  ``pydifft gd --add-to-git`` offers the same installation, retaining the
+  exact command of an existing global ``gd`` alias. If none is configured,
+  it installs ``!f() { pydifft gd "$@"; }; f``. Alias installation is shared
+  with ``pd`` and ``tree``.
 - `pydifft qmdinit [directory]` scaffolds a new Quarto-style project using
   the bundled templates and example ``project1`` hierarchy, then downloads
   MathJax into ``_template/mathjax`` so the builder can run immediately.
@@ -209,7 +213,7 @@ included are (listed in order of fun/utility):
 
 - ``pydifft pd OLD NEW [--no-compile]`` ("PDF diff") compares two ``.md``
   files or two ``.tex`` files. It writes ``NEW_diff.tex`` beside the newer
-  input and, by default, compiles ``NEW_diff.pdf`` there with ``latexmk -pdf``.
+  input and, by default, compiles ``NEW_diff.pdf`` there with ``pdflatex``.
   For example, ``pydifft pd old.md paper.md`` produces ``paper_diff.tex``
   and ``paper_diff.pdf``. ``--no-compile`` retains the diff TeX without
   running a compiler and supports TeX fragments as well as full documents.
@@ -224,11 +228,32 @@ included are (listed in order of fun/utility):
   images beside each source. Converted TeX intermediates are temporary;
   the Markdown sources are unchanged.
 
-  Compilation runs beside NEW, using normal project latexmk configuration.
+  Markdown code blocks retain Pandoc syntax highlighting. Changed lines
+  get a colored background and a ``+`` or ``-`` marker, with each line
+  processed independently so highlighted code remains valid TeX.
+  Prose keeps the custom preamble styling.
+
+  Python runs ``pdflatex`` beside NEW until references and the table of
+  contents settle (at most six passes), running ``bibtex`` or ``biber``
+  when required. ``latexmk`` and its configuration are not used.
   Compilation artifacts and the diff TeX remain available if compilation
   fails. Existing generated outputs can be replaced on a successful rerun.
   The former ``git-latexdiffnocompile.sh`` is a compatibility wrapper for
   ``pydifft pd --no-compile``.
+
+  Run ``pydifft pd --add-to-git`` to install the global ``git pd`` alias.
+  It accepts Git diff arguments: ``git pd 00ffaa -- filename.md`` compares
+  that revision with the working file; bare ``git pd`` compares unstaged
+  changes; ``git pd --cached`` compares staged changes; and
+  ``git pd OLD NEW -- filename.md`` compares two revisions. Ranges and
+  Git pathspecs work as usual, including from repository subdirectories.
+  Each changed Markdown or TeX file produces its own ``NAME_diff.tex`` and
+  PDF beside the document's working-tree path. ``git pd --no-compile``
+  generates only TeX. Other file types are skipped, and unchanged files
+  produce no output. Additions, deletions, and renames are supported;
+  unresolved merge conflicts must be resolved first. Historical document
+  snapshots use the current project's bibliography, images, and TeX
+  includes. The shared installer edits only the requested global Git alias.
 
 - `pydifft wd` ("word diff"): generate "track changes" word files starting from pandoc markdown in a git history.  Assuming that you have copied diff-doc.js (copied + licensed from elsewhere) into your home directory, this will use pandoc to convert the markdown files to MS Word, then use the MS Word comparison tool to generate a document where all relevant changes are shown with "track changes."
 

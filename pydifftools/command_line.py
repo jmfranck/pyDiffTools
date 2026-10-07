@@ -36,7 +36,7 @@ from .copy_files import copy_image_files
 from .searchacro import replace_acros
 from .rearrange_tex import run as rearrange_tex_run
 from .git_gd import gd  # registers git difftool review command
-from .pdf_diff import pd  # registers PDF diff command
+from .pdf_diff import pd, git_pd  # registers PDF diff command
 from .flowchart.watch_graph import wgrph
 from .flowchart.graph import load_graph_yaml
 from .notebook.tex_to_qmd import tex2qmd
@@ -934,6 +934,8 @@ def build_parser():
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
+    if argv[:2] == ["pd", "--git"]:
+        return git_pd(argv[2:])
     if argv and argv[0] in ("--ver", "--version"):
         build_parser().parse_args(argv)
         return

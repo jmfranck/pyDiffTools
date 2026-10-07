@@ -620,13 +620,16 @@ def test_gd_install_sets_git_alias(monkeypatch, capsys):
 
     command_line.main(["gd", "--install"])
     assert calls[0]["cmd"] == [
+        "git", "config", "--global", "--null", "--get", "alias.gd",
+    ]
+    assert calls[1]["cmd"] == [
         "git",
         "config",
         "--global",
         "alias.gd",
         INSTALL_ALIAS_VALUE,
     ]
-    assert calls[0]["check"] is True
+    assert calls[1]["check"] is True
     out = capsys.readouterr().out
     assert "alias.gd" in out
     assert "difftool.mygvim.cmd" in out
@@ -886,7 +889,7 @@ def test_tree_install_sets_git_alias(monkeypatch, capsys):
          '!f() { pydifft tree "$@"; }; f'],
         check=True,
     )
-    assert "alias.tree -> pydifft tree" in capsys.readouterr().out
+    assert "alias.tree -> !f() { pydifft tree" in capsys.readouterr().out
 
 
 def test_gd_builds_background_image_score_command():

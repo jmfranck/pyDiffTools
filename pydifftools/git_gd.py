@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .command_registry import register_command
+from .git_aliases import install_git_alias
 
 INSTALL_ALIAS_VALUE = '!f() { pydifft gd "$@"; }; f'
 DIFFTOOL_NAME = "mygvim"
@@ -186,6 +187,7 @@ def changed_paths(
     return [entry.path for entry in changed_entries(diff_args, pathspec)]
 
 
+# also used by: git_gd_qt.py and tests/test_git_gd_history.py.
 def numstat_for_paths(diff_args: Sequence[str], paths: Sequence[str]):
     cmd = [
         "diff",
@@ -435,7 +437,7 @@ def main(argv: Sequence[str]) -> int:
     "With no arguments, review unstaged changes, like git diff.\n"
     "Use pydifft tree to browse Git history.\n\n"
     "Install the matching git alias automatically with:\n"
-    "  pydifft gd --install\n\n"
+    "  pydifft gd --add-to-git (or --install)\n\n"
     "or add it yourself with:\n"
     "  git config --global alias.gd '!f() { pydifft gd \"$@\"; }; f'\n\n"
     "This command shells out to git difftool --tool=mygvim, so keep\n"
@@ -446,19 +448,26 @@ def main(argv: Sequence[str]) -> int:
             "runs this subcommand."
         ),
     },
+    argument_options={
+        "add_to_git": {
+            "help": (
+                "Install the global git gd alias, preserving its current "
+                "command."
+            ),
+        },
+    },
 )
-def gd(arguments, install=False):
+def gd(arguments, install=False, add_to_git=False):
     """Mirror ``git_gd_qt.py`` and optionally install ``git gd``."""
 
-    if install:
+    if install or add_to_git:
         if arguments:
-            raise SystemExit("pydifft gd --install does not take diff args")
+            flag = "--add-to-git" if add_to_git else "--install"
+            raise SystemExit(f"pydifft gd {flag} does not take diff args")
         # {{{ install the Git alias and check difftool configuration
-        subprocess.run(
-            ["git", "config", "--global", "alias.gd", INSTALL_ALIAS_VALUE],
-            check=True,
+        install_git_alias(
+            "gd", INSTALL_ALIAS_VALUE, preserve_existing=True,
         )
-        print("Installed global git alias: alias.gd -> pydifft gd")
         tool_cmd = subprocess.run(
             ["git", "config", "--global", "--get", "difftool.mygvim.cmd"],
             capture_output=True,
@@ -490,12 +499,9 @@ def tree(install=False):
     """Open the history browser or install its Git alias."""
     try:
         if install:
-            subprocess.run(
-                ["git", "config", "--global", "alias.tree",
-                 '!f() { pydifft tree "$@"; }; f'],
-                check=True,
+            install_git_alias(
+                "tree", '!f() { pydifft tree "$@"; }; f',
             )
-            print("Installed global git alias: alias.tree -> pydifft tree")
             return
         from PySide6.QtWidgets import QApplication
         from .git_gd_history import HistoryWindow, load_history

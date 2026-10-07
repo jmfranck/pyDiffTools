@@ -34,7 +34,7 @@ def tools_stub(monkeypatch):
 
     def run(command, **kwargs):
         calls.append((command, kwargs))
-        if command[0] == "pandoc":
+        if command[0] == "pandoc" and "--output" in command:
             Path(command[command.index("--output") + 1]).write_text(
                 "converted source\n"
                 r"\@ifpackageloaded{subfig}{}{\usepackage{subfig}}"
@@ -64,11 +64,19 @@ def test_cli_flag_placement_and_help(project, monkeypatch, capsys, flag_first):
     args = [str(old), str(new)]
     args.insert(0 if flag_first else len(args), "--no-compile")
     command_line.main(["pd", *args])
-    assert calls == [{"old": str(old), "new": str(new), "no_compile": True}]
+    assert calls == [
+        {
+            "old": str(old),
+            "new": str(new),
+            "no_compile": True,
+            "add_to_git": False,
+        }
+    ]
     command_line.main(["--help", "pd"])
     help_text = capsys.readouterr().out
-    assert "OLD NEW" in help_text
+    assert "[OLD] [NEW]" in help_text
     assert "--no-compile" in help_text
+    assert "--add-to-git" in help_text
     spec = command_line._COMMAND_SPECS["pd"]["arguments"][0]
     assert spec["completion_allowednames"] == ["*.md", "*.tex"]
 
@@ -174,12 +182,17 @@ def test_markdown_conversion_and_cleanup(project, tools_stub, no_compile):
     new = new.rename(new.with_suffix(".md"))
     original = old.read_bytes(), new.read_bytes()
     pdf_diff.pd(str(old), str(new), no_compile=no_compile)
-    conversions = [(cmd, kw) for cmd, kw in tools_stub if cmd[0] == "pandoc"]
+    conversions = [
+        (cmd, kw)
+        for cmd, kw in tools_stub
+        if cmd[0] == "pandoc" and "--output" in cmd
+    ]
     assert len(conversions) == 2
     for (cmd, kwargs), source in zip(conversions, (old, new)):
         assert kwargs["cwd"] == source.parent
         assert kwargs["check"]
         assert "--standalone" in cmd
+        assert "--no-highlight" not in cmd
         assert "--citeproc" in cmd
         assert "--filter=pandoc-crossref" in cmd
         assert not Path(cmd[cmd.index("--output") + 1]).exists()
@@ -190,18 +203,18 @@ def test_markdown_conversion_and_cleanup(project, tools_stub, no_compile):
     assert new.with_name("new version_diff.tex").read_text() == "diff\n"
     assert list(old.parent.iterdir()) == [old]
     compile_calls = [
-        (cmd, kw) for cmd, kw in tools_stub if cmd[0] == "latexmk"
+        (cmd, kw) for cmd, kw in tools_stub if cmd[0] == "pdflatex"
     ]
-    assert len(compile_calls) == (0 if no_compile else 1)
+    assert len(compile_calls) == (0 if no_compile else 2)
     if not no_compile:
         cmd, kwargs = compile_calls[0]
         assert cmd[-1] == "new version_diff.tex"
-        assert "-pdf" in cmd
+        assert "-interaction=nonstopmode" in cmd
         assert "-halt-on-error" in cmd
         assert kwargs["cwd"] == new.parent
 
 
-@pytest.mark.parametrize("failed_tool", ["pandoc", "latexdiff", "latexmk"])
+@pytest.mark.parametrize("failed_tool", ["pandoc", "latexdiff", "pdflatex"])
 def test_failure_preserves_output(
     project, tools_stub, monkeypatch, failed_tool
 ):
@@ -221,7 +234,7 @@ def test_failure_preserves_output(
     monkeypatch.setattr(pdf_diff.subprocess, "run", run)
     with pytest.raises(SystemExit, match="failed while") as exc:
         pdf_diff.pd(str(old), str(new))
-    if failed_tool == "latexmk":
+    if failed_tool == "pdflatex":
         assert output.read_text() == "diff\n"
         assert "retained" in str(exc.value)
     else:
@@ -229,9 +242,21 @@ def test_failure_preserves_output(
     assert not list(new.parent.glob(".pydifft-pd-*"))
 
 
-@pytest.mark.parametrize("extension", [".md", ".tex"])
-def test_real_pdf_diff(tmp_path, monkeypatch, extension):
-    required = ["latexdiff", "latexmk", "pdflatex"]
+@pytest.mark.parametrize(
+    "extension,backend",
+    [
+        (".md", None),
+        (".tex", None),
+        (".tex", "bibtex"),
+        (".tex", "biber"),
+        (".md", "add-code"),
+        (".md", "delete-code"),
+    ],
+)
+def test_real_pdf_diff(tmp_path, monkeypatch, extension, backend):
+    required = ["latexdiff", "pdflatex"]
+    if backend in {"bibtex", "biber"}:
+        required.append(backend)
     if extension == ".md":
         required += ["pandoc", "pandoc-crossref"]
     if not all(shutil.which(name) for name in required):
@@ -277,11 +302,18 @@ def test_real_pdf_diff(tmp_path, monkeypatch, extension):
                 "title={Example}, year={2020}}"
             )
         content = (
-            "---\nbibliography: refs.bib\n---\n\n# Results\n\n"
+            "---\nbibliography: refs.bib\n"
+            "header-includes: |\n"
+            "  \\DeclareUnicodeCharacter{00B5}{\\textmu}\n"
+            "---\n\n# Results\n\n"
             "The original result has $x=1$. See [@sample].\n\n"
             "![Example.](figure.png){#fig:example width=10mm}\n\n"
             "See @fig:example.\n\n$$y=x^2$${#eq:example}\n\n"
-            "See @eq:example.\n"
+            "See @eq:example.\n\n"
+            "```python\n# original calculation — µ\nx = 1\nprint(x)\n"
+            "value = (\n    1\n    + 2\n)\n```\n"
+            "\n```python\nprint('unchanged')\n```\n"
+            "\n```\noriginal plain code\n```\n"
         )
     else:
         content = (
@@ -293,8 +325,33 @@ def test_real_pdf_diff(tmp_path, monkeypatch, extension):
             r"\end{document}"
             "\n"
         )
+    if backend in {"bibtex", "biber"}:
+        (new_dir / "refs.bib").write_text(
+            "@book{sample, author={Jane Doe}, title={Example}, year={2020}}"
+        )
+        if backend == "biber":
+            content = content.replace(
+                r"\begin{document}",
+                "\\usepackage[backend=biber]{biblatex}\n"
+                "\\addbibresource{refs.bib}\n"
+                r"\begin{document}",
+            )
+            bibliography = r"\printbibliography"
+        else:
+            bibliography = r"\bibliographystyle{plain}\bibliography{refs}"
+        content = content.replace(
+            r"\end{document}",
+            "\\section{Results}\n"
+            "\\label{result}See section~\\ref{result}. "
+            "See~\\cite{sample}.\n" + bibliography + "\n"
+            r"\end{document}",
+        )
     old.write_text(content)
     new.write_text(content.replace("original", "revised"))
+    if backend in {"add-code", "delete-code"}:
+        (old if backend == "add-code" else new).write_text(
+            content[: content.index("```python")]
+        )
     original = old.read_bytes(), new.read_bytes()
     pdf_diff.pd(str(old), str(new))
     output = new_dir / "new_diff.tex"
@@ -302,11 +359,137 @@ def test_real_pdf_diff(tmp_path, monkeypatch, extension):
     tex = output.read_text()
     assert r"\DIFadd" in tex and r"\DIFdel" in tex
     assert (old.read_bytes(), new.read_bytes()) == original
+    if backend in {"bibtex", "biber"}:
+        assert "Doe" in output.with_suffix(".bbl").read_text()
+        log = output.with_suffix(".log").read_text()
+        assert "Rerun to get" not in log
+        assert "Please (re)run" not in log
+        assert "undefined" not in log
     if extension == ".md":
         assert str(old_dir / "figure.png") in tex
         assert str(new_dir / "figure.png") in tex
         assert "Doe" in tex and "2020" in tex
         assert r"\ref{fig:example}" in tex
         assert r"\ref{eq:example}" in tex
+        assert r"\begin{Highlighting}[]" in tex
+        if backend != "add-code":
+            assert (
+                r"\PydifftCodeDel{\CommentTok{\# original calculation — µ}}"
+                in tex
+            )
+        if backend != "delete-code":
+            assert (
+                r"\PydifftCodeAdd{\CommentTok{\# revised calculation — µ}}"
+                in tex
+            )
+        assert r"\BuiltInTok{print}" in tex
+        assert not any(
+            "alsolanguage=DIFcode" in line
+            for line in tex.splitlines()
+            if line.startswith(r"\begin{Highlighting}")
+        )
+        if backend is None:
+            assert r"\begin{DIFverbatim}" in tex
+            assert "%DIF < original plain code" in tex
+            assert "%DIF > revised plain code" in tex
+        assert r"\DIFmodbegin" in tex
         assert not list(old_dir.glob("*.tex"))
         assert list(new_dir.glob("*.tex")) == [output]
+
+
+@pytest.mark.parametrize("backend", [None, "bibtex", "biber"])
+def test_compile_resolves_references_and_bibliography(
+    project, tools_stub, monkeypatch, backend
+):
+    old, new, _ = project
+    stub = pdf_diff.subprocess.run
+    calls = []
+    passes = 0
+    output = new.with_name("new version_diff.tex")
+    # An earlier run's bcf must not select Biber for a BibTeX document.
+    output.with_suffix(".bcf").write_text("stale biber control file")
+
+    def run(command, **kwargs):
+        nonlocal passes
+        calls.append(command[0])
+        if command[0] == "pdflatex":
+            passes += 1
+            aux = r"\newlabel{result}{{1}{2}}"
+            if backend == "bibtex":
+                aux += "\n" + r"\@input{chapter.aux}"
+                (output.parent / "chapter.aux").write_text(
+                    r"\citation{sample}\bibdata{refs}\bibstyle{plain}"
+                )
+            if backend == "biber":
+                output.with_suffix(".bcf").write_text("current bibliography")
+            output.with_suffix(".aux").write_text(aux)
+            # Simulate a TOC that changes after the bibliography pass.
+            output.with_suffix(".toc").write_text(
+                "first page" if passes == 1 else "settled page"
+            )
+            output.with_suffix(".log").write_text(
+                "Rerun to get cross-references right." if passes < 3 else ""
+            )
+        if command[0] in {"bibtex", "biber"}:
+            assert command == [backend, output.stem]
+            assert kwargs["cwd"] == new.parent
+        return stub(command, **kwargs)
+
+    monkeypatch.setattr(pdf_diff.subprocess, "run", run)
+    pdf_diff.pd(str(old), str(new))
+    assert passes == 3
+    assert calls.count("bibtex") == (backend == "bibtex")
+    assert calls.count("biber") == (backend == "biber")
+    if backend:
+        assert calls[1:4] == ["pdflatex", backend, "pdflatex"]
+
+
+def test_compile_stops_if_references_never_settle(
+    project, tools_stub, monkeypatch
+):
+    old, new, _ = project
+    stub = pdf_diff.subprocess.run
+    passes = 0
+    output = new.with_name("new version_diff.tex")
+
+    def run(command, **kwargs):
+        nonlocal passes
+        if command[0] == "pdflatex":
+            passes += 1
+            output.with_suffix(".aux").write_text(str(passes))
+        return stub(command, **kwargs)
+
+    monkeypatch.setattr(pdf_diff.subprocess, "run", run)
+    with pytest.raises(SystemExit, match="did not settle after six passes"):
+        pdf_diff.pd(str(old), str(new))
+    assert passes == 6
+    assert output.read_text() == "diff\n"
+
+
+@pytest.mark.parametrize("executable", ["pdflatex", "bibtex", "biber"])
+def test_missing_compilation_tool_retains_tex(
+    project, tools_stub, monkeypatch, executable
+):
+    old, new, _ = project
+    stub = pdf_diff.subprocess.run
+    output = new.with_name("new version_diff.tex")
+    monkeypatch.setattr(
+        pdf_diff.shutil,
+        "which",
+        lambda name: None if name == executable else name,
+    )
+
+    def run(command, **kwargs):
+        if command[0] == "pdflatex":
+            if executable == "bibtex":
+                output.with_suffix(".aux").write_text(
+                    r"\citation{x}\bibdata{refs}\bibstyle{plain}"
+                )
+            elif executable == "biber":
+                output.with_suffix(".bcf").write_text("bibliography")
+        return stub(command, **kwargs)
+
+    monkeypatch.setattr(pdf_diff.subprocess, "run", run)
+    with pytest.raises(SystemExit, match=executable + " is not on PATH"):
+        pdf_diff.pd(str(old), str(new))
+    assert output.read_text() == "diff\n"
