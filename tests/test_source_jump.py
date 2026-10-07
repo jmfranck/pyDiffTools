@@ -160,6 +160,50 @@ def test_jump_to_source_reports_multiple_matches_and_uses_first(
     assert "lines [2, 4]; using line 2" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("suffix", [".yaml", ".yml"])
+@pytest.mark.parametrize(
+    "task, key",
+    [
+        ("task_key", "task_key"),
+        ("Task (μ)+", "Task (μ)+"),
+        ("Task's name", "'Task''s name'"),
+        ("Task: name", '"Task: name"'),
+        ("μ task", '"\\u03bc task"'),
+    ],
+)
+def test_yaml_source_jump_selects_definition_after_dependency_mentions(
+    editor_process, tmp_path, suffix, task, key
+):
+    launch, _process = editor_process
+    source = tmp_path / ("plan" + suffix)
+    source.write_text(
+        "nodes:\n  earlier:\n    children:\n"
+        f"      - {key}\n    text: Discuss {task}: tomorrow\n"
+        f"  prefix_{task}:\n    text: Another task\n"
+        f"  {key}:\n    text: Actual definition\n"
+    )
+
+    source_jump.jump_to_source(source, task)
+
+    assert launch.call_args.args[0][-2] == "+8"
+
+
+def test_yaml_source_jump_rejects_task_without_definition(
+    editor_process, tmp_path
+):
+    launch, _process = editor_process
+    source = tmp_path / "plan.yaml"
+    source.write_text(
+        "nodes:\n  earlier:\n    children: [missing]\n"
+        "    text: missing: task definition\n"
+    )
+
+    with pytest.raises(ValueError, match="No source match"):
+        source_jump.jump_to_source(source, "missing")
+
+    launch.assert_not_called()
+
+
 @pytest.mark.parametrize("phrase", ["... !!!", " ** _ ~~ ^ ", ""])
 def test_jump_to_source_rejects_text_without_searchable_words(
     editor_process, phrase

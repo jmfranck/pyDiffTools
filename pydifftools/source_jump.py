@@ -1,6 +1,7 @@
 """Local browser-to-editor requests for source jumps."""
 
 import http.server
+import json
 import os
 from pathlib import Path
 import re
@@ -55,6 +56,22 @@ def jump_to_source(source_path, phrase):
     pattern = "".join(fragments)
     source_path = Path(source_path).resolve()
     source = source_path.read_text(encoding="utf-8")
+    if source_path.suffix.lower() in {".yaml", ".yml"}:
+        # {{{ Match literal YAML task definitions rather than dependencies
+        # Task keys are not rendered Markdown. Match a complete key at the
+        # start of a line, including quoted keys, followed by its colon.
+        keys = [
+            phrase,
+            "'" + phrase.replace("'", "''") + "'",
+            json.dumps(phrase, ensure_ascii=False),
+            json.dumps(phrase),
+        ]
+        pattern = (
+            r"(?m)^[ \t]*(?:"
+            + "|".join(re.escape(key) for key in keys)
+            + r")[ \t]*:(?=[ \t\r\n]|$)"
+        )
+        # }}}
     matches = list(re.finditer(pattern, source))
     if not matches:
         print(f"pydifft source regex: {pattern}", flush=True)

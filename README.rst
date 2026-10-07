@@ -130,9 +130,13 @@ included are (listed in order of fun/utility):
   clearing the entire query shows the full plan, including completed and
   undated tasks. Each embedded SVG and live refresh uses the same URL mode.
   The search button beside Home and Zoom finds text in the visible graph,
-  highlights matches, and centers them at a readable font size. Tab or Enter
-  advances to the next match; Shift+Tab or Shift+Enter goes back. Esc closes
-  search. Phrases can span wrapped lines and formatted text.
+  highlights matches, and centers the containing task at your chosen zoom.
+  Tab or Enter advances to the next match; Shift+Tab or Shift+Enter goes
+  back. Esc closes search. Phrases can span wrapped lines and formatted
+  text. Resizing the window scales the current view with the viewport.
+  The ``1:1`` button displays fonts at their declared pixel sizes, including
+  correction for GraphViz's SVG scaling. Right-click a task and select
+  Jump to source to open its YAML definition in gvim.
   Comparison uses the same repository-relative YAML path; a file absent
   from the revision is treated as an empty plan. Historical file renames
   are not followed, and comparison markup is never written to YAML.
