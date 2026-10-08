@@ -150,6 +150,12 @@ included are (listed in order of fun/utility):
   ``_build``/``_display`` directories; with ``--watch`` it starts the HTTP
   server and automatically rebuilds the staged fragments whenever you edit
   a ``.qmd`` file.
+  Browser previews in ``qmdb``, ``cpb``, and ``wgrph`` share the same
+  Selenium launcher: Chrome/Chromium is preferred, with Firefox as a
+  fallback. Installed ``chromedriver`` and ``geckodriver`` are used directly
+  without online driver discovery; if only ``geckodriver`` is installed,
+  Firefox opens directly. With neither driver installed, Selenium handles
+  discovery. Chrome startup failures are reported before trying Firefox.
 - ``pydifft tree`` (or ``git tree`` with the alias installed) opens the last
   40 commits across all branches, in Git date order. Use the down arrow
   below the history to add the next 40 commits. Colors follow

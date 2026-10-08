@@ -24,6 +24,7 @@ from pydifftools.browser_lifecycle import (
     browser_window_is_alive,
     close_browser_window,
     forward_search_in_browser,
+    start_browser,
 )
 from pydifftools.forward_search import (
     FORWARD_SEARCH_HOST,
@@ -34,7 +35,6 @@ from pydifftools.forward_search import (
 )
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers.polling import PollingObserver as Observer
-from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
 from jinja2 import Environment, FileSystemLoader
 import nbformat
@@ -47,9 +47,11 @@ from ansi2html import Ansi2HTMLConverter
 
 _ansi_conv = Ansi2HTMLConverter(inline=True)
 PYGMENTS_CSS = Path("assets") / "pygments.css"
+# {{{ Source display modes (changeable parameters)
 CODE_DISPLAY_COLLAPSED = "collapsed"
 CODE_DISPLAY_ALWAYS = "always"
 CODE_DISPLAY_NONE = "none"
+# }}}
 CODE_DISPLAY_MODES = {
     CODE_DISPLAY_COLLAPSED,
     CODE_DISPLAY_ALWAYS,
@@ -128,28 +130,6 @@ def _mime_text(value) -> str:
     if isinstance(value, list):
         return "".join(str(part) for part in value)
     return str(value)
-
-
-def _inject_nb_capture_import(code: str) -> str:
-    """Add the nb_capture import to executable code without changing source."""
-    lines = code.splitlines(keepends=True)
-    if any(line.strip() == NB_CAPTURE_IMPORT for line in lines):
-        return code
-    if not lines:
-        return NB_CAPTURE_IMPORT + "\n"
-
-    insert_at = 0
-    for idx, line in enumerate(lines):
-        if line.strip():
-            insert_at = idx
-            break
-    else:
-        return code + NB_CAPTURE_IMPORT + "\n"
-
-    if lines[insert_at].lstrip().startswith("%reset -f"):
-        insert_at += 1
-    lines.insert(insert_at, NB_CAPTURE_IMPORT + "\n")
-    return "".join(lines)
 
 
 class ProgressExecutePreprocessor(ExecutePreprocessor):
@@ -323,14 +303,58 @@ class RenderNotebook:
                         )
                     )
                 html_text = html_file.read_text() if html_file.exists() else ""
-                completed = completed_notebook_cells(
-                    path,
-                    html_text,
-                    {
-                        index: md5
-                        for index, (_, md5, _) in enumerate(cells, start=1)
-                    },
-                )
+                # {{{ Identify unchanged notebook cells already staged in HTML
+                expected_hashes = {
+                    index: md5
+                    for index, (_, md5, _) in enumerate(cells, start=1)
+                }
+                completed = set()
+                if html_text and "data-script" in html_text:
+                    root = None
+                    if lxml_html is not None:
+                        try:
+                            root = lxml_html.fromstring(html_text)
+                        except Exception:
+                            pass
+                    if root is not None:
+                        for marker in root.xpath(
+                            "//div[@data-script][@data-index]"
+                        ):
+                            if marker.get("data-script") != path:
+                                continue
+                            if marker.get("data-output-state") != "complete":
+                                continue
+                            try:
+                                index = int(marker.get("data-index"))
+                            except (TypeError, ValueError):
+                                continue
+                            if marker.get("data-md5") != expected_hashes.get(
+                                index
+                            ):
+                                continue
+                            completed.add(index)
+                    else:
+                        pattern = re.compile(
+                            r"<div\b"
+                            r"(?=[^>]*\bdata-script=['\"]"
+                            rf"{re.escape(path)}['\"])"
+                            r"(?=[^>]*\bdata-index=['\"]?(\d+)['\"]?)"
+                            r"(?=[^>]*\bdata-output-state=['\"]"
+                            r"complete['\"])[^>]*>",
+                            re.IGNORECASE,
+                        )
+                        for match in pattern.finditer(html_text):
+                            index = int(match.group(1))
+                            md5_match = re.search(
+                                r"\bdata-md5=['\"]([^'\"]+)['\"]",
+                                match.group(0),
+                            )
+                            if not md5_match or md5_match.group(
+                                1
+                            ) != expected_hashes.get(index):
+                                continue
+                            completed.add(index)
+                # }}}
                 for group_idx, group in enumerate(
                     _notebook_groups(cells), start=1
                 ):
@@ -392,9 +416,23 @@ class RenderNotebook:
                 node.published_targets = set(old.published_targets)
 
         for path, node in self.nodes.items():
-            targets = collect_render_targets(
-                {path}, self.include_map, self.render_files
-            )
+            # {{{ Find render targets that include this source
+            targets = set()
+            stack = [path]
+            seen = set()
+            render_set = set(self.render_files)
+            while stack:
+                current = stack.pop()
+                if current in seen:
+                    continue
+                seen.add(current)
+                if current in render_set:
+                    targets.add(current)
+                if current in self.include_map:
+                    for parent in self.include_map[current]:
+                        stack.append(parent)
+
+            # }}}
             if path in self.render_files:
                 targets.add(path)
             node.required_display_targets = targets
@@ -495,7 +533,22 @@ class RenderNotebook:
                 self.checksums[path] = node.revision
 
     def render_order(self):
-        return build_order(self.render_files, self.tree)
+        # {{{ Order render targets after their included children
+        order = []
+        visited = set()
+
+        def visit(f):
+            if f in visited:
+                return
+            visited.add(f)
+            for child in self.tree.get(f, []):
+                visit(child)
+            order.append(f)
+
+        for f in self.render_files:
+            visit(f)
+        return order
+        # }}}
 
     def __str__(self):
         """Return an ASCII tree of the notebook graph and status tags."""
@@ -805,12 +858,66 @@ class RenderNotebook:
                 print(f"Cannot read title; missing source: {source_path}")
                 continue
             if html_file.exists():
-                sections = parse_headings(html_file)
+                # {{{ Read page headings for section navigation
+                sections = []
+                if lxml_html is not None:
+                    parser = lxml_html.HTMLParser(encoding="utf-8")
+                    tree = lxml_html.parse(str(html_file), parser)
+                    root = tree.getroot()
+                    headings = root.xpath("//h1|//h2|//h3|//h4|//h5|//h6")
+
+                    # Skip Quarto's page-title heading so navigation does not
+                    # duplicate the page title in its section list.
+                    headings = [
+                        h
+                        for h in headings
+                        if "title" not in (h.get("class") or "").split()
+                    ]
+                    items: list[dict] = []
+                    stack = []
+                    for h in headings:
+                        level = int(h.tag[1])
+                        text = "".join(h.itertext()).strip()
+                        ident = h.get("id")
+                        node = {
+                            "level": level,
+                            "text": text,
+                            "id": ident,
+                            "children": [],
+                        }
+                        while stack and stack[-1]["level"] >= level:
+                            stack.pop()
+                        if stack:
+                            stack[-1]["children"].append(node)
+                        else:
+                            items.append(node)
+                        stack.append(node)
+                    sections = items
+                # }}}
+                # {{{ Read the page title from metadata or its first heading
+                text = source_path.read_text()
+                title = source_path.stem
+                has_metadata_title = False
+                if text.startswith("---"):
+                    end = text.find("\n---", 3)
+                    if end != -1:
+                        try:
+                            meta = yaml.safe_load(text[3:end])
+                            if isinstance(meta, dict) and "title" in meta:
+                                title = str(meta["title"])
+                                has_metadata_title = True
+                        except Exception:
+                            pass
+                if not has_metadata_title:
+                    match = re.search(r"^#\s+(.+)", text, re.MULTILINE)
+                    if match:
+                        title = match.group(1).strip()
+                # }}}
                 pages.append(
                     {
                         "file": qmd,
                         "href": html_file.name,
-                        "title": read_title(source_path),
+                        "title": title,
                         "sections": sections,
                     }
                 )
@@ -838,7 +945,7 @@ class RenderNotebook:
         DISPLAY_DIR.mkdir(parents=True, exist_ok=True)
         ensure_pygments_css(DISPLAY_DIR)
         if not webtex:
-            ensure_mathjax()
+            download_mathjax(MATHJAX_DIR)
             shutil.copytree(
                 MATHJAX_DIR,
                 DISPLAY_DIR / "mathjax",
@@ -859,7 +966,39 @@ class RenderNotebook:
             shutil.copy2("_template/obs.lua", BUILD_DIR / "obs.lua")
 
         bibliography, csl = load_bibliography_csl()
-        anchors = collect_anchors(self.render_files, self.include_map)
+        # {{{ Collect cross-reference anchors for the project
+        anchors = {}
+        build_dir = BUILD_DIR.resolve()
+        display_dir = DISPLAY_DIR.resolve()
+        for path in PROJECT_ROOT.rglob("*.qmd"):
+            path = path.resolve()
+            if build_dir in path.parents or display_dir in path.parents:
+                continue
+            lines = path.read_text().splitlines()
+            for line in lines:
+                for m in anchor_pattern.finditer(line):
+                    kind, ident = m.group(1), m.group(2)
+                    key = f"{kind}:{ident}"
+                    text = ident
+                    hm = heading_pattern.match(line)
+                    if hm:
+                        text = hm.group(2).strip()
+                    # {{{ Resolve an anchor to its containing render target
+                    anchor_target = path.relative_to(PROJECT_ROOT).as_posix()
+                    visited = set()
+                    while anchor_target not in self.render_files:
+                        if (
+                            anchor_target in visited
+                            or anchor_target not in self.include_map
+                        ):
+                            break
+                        visited.add(anchor_target)
+                        anchor_target = self.include_map[anchor_target][0]
+
+                    # }}}
+                    anchors[key] = (anchor_target, text)
+
+        # }}}
         changed = set()
         config_changed = False
         for path in changed_paths or []:
@@ -1037,7 +1176,11 @@ class RenderNotebook:
                 + ", ".join(incomplete)
             )
         self.update_checksums(build_files)
-        save_checksums(self.checksums)
+        # {{{ Save successful build checksums
+        path = BUILD_DIR / "checksums.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self.checksums, indent=2))
+        # }}}
         self.print_tree_status()
         return self
 
@@ -1052,18 +1195,14 @@ def load_checksums():
     return {}
 
 
-def save_checksums(checksums):
-    path = BUILD_DIR / "checksums.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(checksums, indent=2))
-
-
 def load_rendered_files():
     text = Path("_quarto.yml").read_text()
     cfg = yaml.safe_load(text)
     return list(cfg.get("project", {}).get("render", []))
 
 
+# also used by: tests/notebook/test_fast_build.py, which calls or
+# monkeypatches this notebook-builder entry point.
 def load_bibliography_csl():
     text = Path("_quarto.yml").read_text()
     cfg = yaml.safe_load(text)
@@ -1096,8 +1235,9 @@ def _add_unique_path(paths: list[Path], path: Path) -> None:
         paths.append(resolved)
 
 
-def pandoc_resource_paths(source=None) -> list[Path]:
-    """Return resource search paths for a staged source."""
+def pandoc_resource_path_arg(source=None) -> str:
+    rel_paths = []
+    # {{{ Collect staged, display, and project resource paths
     paths: list[Path] = []
     build_dir = Path(BUILD_DIR).resolve()
     display_dir = Path(DISPLAY_DIR).resolve()
@@ -1118,75 +1258,15 @@ def pandoc_resource_paths(source=None) -> list[Path]:
     _add_unique_path(paths, build_dir)
     _add_unique_path(paths, display_dir)
     _add_unique_path(paths, PROJECT_ROOT)
-    return paths
 
-
-def pandoc_resource_path_arg(source=None) -> str:
-    build_dir = Path(BUILD_DIR).resolve()
-    rel_paths = []
-    for path in pandoc_resource_paths(source):
+    for path in paths:
         rel_paths.append(os.path.relpath(path, build_dir))
+    # }}}
     return os.pathsep.join(rel_paths)
 
 
-def render_markdown_fragment(
-    text: str,
-    source=None,
-    bibliography=None,
-    csl=None,
-    webtex: bool = False,
-) -> str:
-    """Render a Markdown fragment to HTML using Pandoc."""
-    build_dir = Path(BUILD_DIR).resolve()
-    build_dir.mkdir(parents=True, exist_ok=True)
-    args = [
-        "pandoc",
-        "--from",
-        "markdown+raw_html",
-        "--to",
-        "html",
-        "--embed-resources",
-        "--resource-path",
-        pandoc_resource_path_arg(source),
-    ]
-    obs_filter = build_dir / "obs.lua"
-    if obs_filter.exists():
-        args += ["--lua-filter", os.path.relpath(obs_filter, build_dir)]
-    if shutil.which("pandoc-crossref"):
-        args += ["--filter", "pandoc-crossref"]
-    args += ["--citeproc"]
-    if webtex:
-        args += ["--webtex"]
-    if bibliography:
-        bib_path = Path(os.path.expanduser(bibliography))
-        if not bib_path.is_absolute():
-            bib_path = PROJECT_ROOT / bib_path
-        if not bib_path.exists():
-            raise FileNotFoundError(
-                f"Bibliography file {bibliography} not found"
-            )
-        args += ["--bibliography", os.path.relpath(bib_path, build_dir)]
-    if csl:
-        csl_path = Path(os.path.expanduser(csl))
-        if not csl_path.is_absolute():
-            csl_path = PROJECT_ROOT / csl_path
-        if not csl_path.exists():
-            raise FileNotFoundError(f"CSL file {csl} not found")
-        args += ["--csl", os.path.relpath(csl_path, build_dir)]
-    try:
-        proc = subprocess.run(
-            args,
-            input=text,
-            check=True,
-            cwd=build_dir,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"{e.stderr}\nwhen trying to run:{' '.join(args)}")
-    return proc.stdout
-
-
+# also used by: tests/notebook/test_fast_build.py, which calls or
+# monkeypatches this notebook-builder entry point.
 def outputs_to_html(
     outputs: list[dict],
     source=None,
@@ -1206,13 +1286,65 @@ def outputs_to_html(
             if "text/html" in data:
                 parts.append(_mime_text(data["text/html"]))
             elif "text/markdown" in data:
-                html = render_markdown_fragment(
-                    _mime_text(data["text/markdown"]),
-                    source=source,
-                    bibliography=bibliography,
-                    csl=csl,
-                    webtex=webtex,
-                )
+                # {{{ Render notebook Markdown output with Pandoc
+                text = _mime_text(data["text/markdown"])
+                build_dir = Path(BUILD_DIR).resolve()
+                build_dir.mkdir(parents=True, exist_ok=True)
+                args = [
+                    "pandoc",
+                    "--from",
+                    "markdown+raw_html",
+                    "--to",
+                    "html",
+                    "--embed-resources",
+                    "--resource-path",
+                    pandoc_resource_path_arg(source),
+                ]
+                obs_filter = build_dir / "obs.lua"
+                if obs_filter.exists():
+                    args += [
+                        "--lua-filter",
+                        os.path.relpath(obs_filter, build_dir),
+                    ]
+                if shutil.which("pandoc-crossref"):
+                    args += ["--filter", "pandoc-crossref"]
+                args += ["--citeproc"]
+                if webtex:
+                    args += ["--webtex"]
+                if bibliography:
+                    bib_path = Path(os.path.expanduser(bibliography))
+                    if not bib_path.is_absolute():
+                        bib_path = PROJECT_ROOT / bib_path
+                    if not bib_path.exists():
+                        raise FileNotFoundError(
+                            f"Bibliography file {bibliography} not found"
+                        )
+                    args += [
+                        "--bibliography",
+                        os.path.relpath(bib_path, build_dir),
+                    ]
+                if csl:
+                    csl_path = Path(os.path.expanduser(csl))
+                    if not csl_path.is_absolute():
+                        csl_path = PROJECT_ROOT / csl_path
+                    if not csl_path.exists():
+                        raise FileNotFoundError(f"CSL file {csl} not found")
+                    args += ["--csl", os.path.relpath(csl_path, build_dir)]
+                try:
+                    proc = subprocess.run(
+                        args,
+                        input=text,
+                        check=True,
+                        cwd=build_dir,
+                        capture_output=True,
+                        text=True,
+                    )
+                except subprocess.CalledProcessError as e:
+                    raise RuntimeError(
+                        f"{e.stderr}\nwhen trying to run:{' '.join(args)}"
+                    )
+                html = proc.stdout
+                # }}}
                 parts.append(html)
             elif "image/png" in data:
                 src = f"data:image/png;base64,{data['image/png']}"
@@ -1314,10 +1446,28 @@ def execute_code_blocks(
                 publish("cached", offset, cell, cached=True)
         else:
             nb = nbformat.v4.new_notebook()
-            nb.cells = [
-                nbformat.v4.new_code_cell(_inject_nb_capture_import(c))
-                for c in group_codes
-            ]
+            # {{{ Inject nb_capture into executed cells while preserving source
+            nb.cells = []
+            for code in group_codes:
+                lines = code.splitlines(keepends=True)
+                if not any(
+                    line.strip() == NB_CAPTURE_IMPORT for line in lines
+                ):
+                    insert_at = next(
+                        (
+                            idx
+                            for idx, line in enumerate(lines)
+                            if line.strip()
+                        ),
+                        len(lines),
+                    )
+                    if insert_at < len(lines) and lines[
+                        insert_at
+                    ].lstrip().startswith("%reset -f"):
+                        insert_at += 1
+                    lines.insert(insert_at, NB_CAPTURE_IMPORT + "\n")
+                nb.cells.append(nbformat.v4.new_code_cell("".join(lines)))
+            # }}}
             ep = ProgressExecutePreprocessor(
                 kernel_name="python3", timeout=10800, allow_errors=True
             )
@@ -1440,42 +1590,6 @@ def analyze_includes(render_files):
     return tree, roots_str, included_by
 
 
-def resolve_render_file(file, included_by, render_files):
-    visited = set()
-    while file not in render_files:
-        if file in visited or file not in included_by:
-            break
-        visited.add(file)
-        file = included_by[file][0]
-    return file
-
-
-def collect_anchors(render_files, included_by):
-    anchors = {}
-    build_dir = BUILD_DIR.resolve()
-    display_dir = DISPLAY_DIR.resolve()
-    for path in PROJECT_ROOT.rglob("*.qmd"):
-        path = path.resolve()
-        if build_dir in path.parents or display_dir in path.parents:
-            continue
-        lines = path.read_text().splitlines()
-        for line in lines:
-            for m in anchor_pattern.finditer(line):
-                kind, ident = m.group(1), m.group(2)
-                key = f"{kind}:{ident}"
-                text = ident
-                hm = heading_pattern.match(line)
-                if hm:
-                    text = hm.group(2).strip()
-                render_file = resolve_render_file(
-                    path.relative_to(PROJECT_ROOT).as_posix(),
-                    included_by,
-                    render_files,
-                )
-                anchors[key] = (render_file, text)
-    return anchors
-
-
 ref_pattern = re.compile(r"@(sec|fig|tab):([A-Za-z0-9_-]+)")
 
 
@@ -1557,11 +1671,6 @@ def download_mathjax(target_dir):
     (target_dir / "es5").mkdir(parents=True, exist_ok=True)
     shutil.copytree(src, target_dir / "es5", dirs_exist_ok=True)
     shutil.rmtree(tmp)
-
-
-def ensure_mathjax():
-    """Ensure the default MathJax cache exists for builds."""
-    download_mathjax(MATHJAX_DIR)
 
 
 def ensure_pygments_css(resource_root):
@@ -1647,24 +1756,6 @@ $body$
         obs_target.write_text("-- placeholder filter\n")
 
 
-def _write_placeholder_outputs():
-    """Create stub HTML outputs when optional build dependencies
-    are missing."""
-
-    BUILD_DIR.mkdir(parents=True, exist_ok=True)
-    for qmd in PROJECT_ROOT.rglob("*.qmd"):
-        rel = qmd.relative_to(PROJECT_ROOT)
-        target = BUILD_DIR / rel.with_suffix(".html")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            content = qmd.read_text()
-        except OSError:
-            content = ""
-        if not content:
-            content = f"<html><body>{rel}</body></html>"
-        target.write_text(content)
-
-
 @register_command(
     "Initialize a sample Quarto project with bundled templates",
     help={
@@ -1738,7 +1829,20 @@ def qmdb(
     ensure_template_assets(Path("."))
     if yaml is None or nbformat is None or Environment is None:
         # Minimal fallback when optional dependencies are unavailable.
-        _write_placeholder_outputs()
+        # {{{ Create placeholder HTML when build dependencies are unavailable
+        BUILD_DIR.mkdir(parents=True, exist_ok=True)
+        for qmd in PROJECT_ROOT.rglob("*.qmd"):
+            rel = qmd.relative_to(PROJECT_ROOT)
+            target = BUILD_DIR / rel.with_suffix(".html")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                content = qmd.read_text()
+            except OSError:
+                content = ""
+            if not content:
+                content = f"<html><body>{rel}</body></html>"
+            target.write_text(content)
+        # }}}
         return
     code_display = resolve_code_display(
         always_code=always_code,
@@ -1765,6 +1869,8 @@ def resolve_code_display(
     return CODE_DISPLAY_COLLAPSED
 
 
+# also used by: tests/notebook/test_fast_build.py, which calls or
+# monkeypatches this notebook-builder entry point.
 def ensure_pandoc_available():
     """Make sure pandoc is discoverable on PATH."""
     if shutil.which("pandoc"):
@@ -1779,6 +1885,8 @@ def ensure_pandoc_available():
     )
 
 
+# also used by: tests/notebook/test_fast_build.py, which calls or
+# monkeypatches this notebook-builder entry point.
 def ensure_pandoc_crossref():
     """Verify pandoc-crossref is installed for reference handling."""
     if shutil.which("pandoc-crossref"):
@@ -1800,42 +1908,8 @@ def all_files(render_files, tree):
     return files
 
 
-def build_order(render_files, tree):
-    order = []
-    visited = set()
-
-    def visit(f):
-        if f in visited:
-            return
-        visited.add(f)
-        for child in tree.get(f, []):
-            visit(child)
-        order.append(f)
-
-    for f in render_files:
-        visit(f)
-    return order
-
-
-def collect_render_targets(targets, included_by, render_files):
-    """Find render files impacted by ``targets``."""
-    result = set()
-    stack = list(targets)
-    seen = set()
-    render_set = set(render_files)
-    while stack:
-        current = stack.pop()
-        if current in seen:
-            continue
-        seen.add(current)
-        if current in render_set:
-            result.add(current)
-        if current in included_by:
-            for parent in included_by[current]:
-                stack.append(parent)
-    return result
-
-
+# also used by: tests/notebook/test_fast_build.py, which calls or
+# monkeypatches this notebook-builder entry point.
 def mirror_and_modify(files, anchors, roots):
     project_root = PROJECT_ROOT
     code_blocks = {}
@@ -1974,57 +2048,8 @@ except ImportError:
     lxml_html = None
 
 
-def completed_notebook_cells(
-    src: str,
-    html_text: str,
-    expected_hashes=None,
-) -> set[int]:
-    """Return unchanged cells already substituted into staged HTML."""
-    completed = set()
-    if not html_text or "data-script" not in html_text:
-        return completed
-    if lxml_html is not None:
-        try:
-            root = lxml_html.fromstring(html_text)
-        except Exception:
-            root = None
-        if root is not None:
-            for node in root.xpath("//div[@data-script][@data-index]"):
-                if node.get("data-script") != src:
-                    continue
-                if node.get("data-output-state") != "complete":
-                    continue
-                try:
-                    index = int(node.get("data-index"))
-                except (TypeError, ValueError):
-                    continue
-                if expected_hashes is not None and node.get(
-                    "data-md5"
-                ) != expected_hashes.get(index):
-                    continue
-                completed.add(index)
-            return completed
-    pattern = re.compile(
-        r"<div\b"
-        rf"(?=[^>]*\bdata-script=['\"]{re.escape(src)}['\"])"
-        r"(?=[^>]*\bdata-index=['\"]?(\d+)['\"]?)"
-        r"(?=[^>]*\bdata-output-state=['\"]complete['\"])[^>]*>",
-        re.IGNORECASE,
-    )
-    for match in pattern.finditer(html_text):
-        index = int(match.group(1))
-        if expected_hashes is not None:
-            md5_match = re.search(
-                r"\bdata-md5=['\"]([^'\"]+)['\"]", match.group(0)
-            )
-            if not md5_match or md5_match.group(1) != expected_hashes.get(
-                index
-            ):
-                continue
-        completed.add(index)
-    return completed
-
-
+# also used by: tests/notebook/test_fast_build.py, which calls or
+# monkeypatches this notebook-builder entry point.
 def notebook_marker_is_pending(src: str, html_text: str) -> bool:
     """Return true when a rendered notebook marker has no substituted
     output."""
@@ -2055,57 +2080,8 @@ def notebook_marker_is_pending(src: str, html_text: str) -> bool:
     return bool(pattern.search(html_text))
 
 
-def parse_headings(html_path: Path):
-    """Return a nested list of headings found in ``html_path``."""
-    if lxml_html is None:
-        return []
-    parser = lxml_html.HTMLParser(encoding="utf-8")
-    tree = lxml_html.parse(str(html_path), parser)
-    root = tree.getroot()
-    headings = root.xpath("//h1|//h2|//h3|//h4|//h5|//h6")
-
-    # Skip headings used for the page title which Quarto renders with the
-    # ``title`` class. Including these in the navigation duplicates the page
-    # title entry in the section list.
-    def is_page_title(h):
-        cls = h.get("class") or ""
-        return "title" in cls.split()
-
-    headings = [h for h in headings if not is_page_title(h)]
-    items: list[dict] = []
-    stack = []
-    for h in headings:
-        level = int(h.tag[1])
-        text = "".join(h.itertext()).strip()
-        ident = h.get("id")
-        node = {"level": level, "text": text, "id": ident, "children": []}
-        while stack and stack[-1]["level"] >= level:
-            stack.pop()
-        if stack:
-            stack[-1]["children"].append(node)
-        else:
-            items.append(node)
-        stack.append(node)
-    return items
-
-
-def read_title(qmd: Path) -> str:
-    text = qmd.read_text()
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
-        if end != -1:
-            try:
-                meta = yaml.safe_load(text[3:end])
-                if isinstance(meta, dict) and "title" in meta:
-                    return str(meta["title"])
-            except Exception:
-                pass
-    m = re.search(r"^#\s+(.+)", text, re.MULTILINE)
-    if m:
-        return m.group(1).strip()
-    return qmd.stem
-
-
+# also used by: tests/notebook/test_fast_build.py, which calls or
+# monkeypatches this notebook-builder entry point.
 def add_navigation(html_path: Path, pages: list[dict], current: str):
     """Insert navigation menu for ``html_path`` using ``pages`` data."""
     parser = lxml_html.HTMLParser(encoding="utf-8")
@@ -2147,6 +2123,8 @@ def add_navigation(html_path: Path, pages: list[dict], current: str):
     tree.write(str(html_path), encoding="utf-8", method="html")
 
 
+# also used by: tests/notebook/test_fast_build.py, which calls or
+# monkeypatches this notebook-builder entry point.
 def postprocess_html(html_path: Path, include_root: Path, resource_root: Path):
     """Replace placeholder nodes with referenced HTML bodies."""
     root = lxml_html.fromstring(html_path.read_text())
@@ -2253,6 +2231,8 @@ def postprocess_html(html_path: Path, include_root: Path, resource_root: Path):
     html_path.write_text(lxml_html.tostring(root, encoding="unicode"))
 
 
+# also used by: tests/notebook/test_fast_build.py, which calls or
+# monkeypatches this notebook-builder entry point.
 def substitute_code_placeholders(
     html_path: Path,
     outputs: dict[tuple[str, int], str],
@@ -2291,7 +2271,22 @@ def substitute_code_placeholders(
             code = codes[(src, idx)]
         else:
             code = ""
-        frags = highlighted_code_fragments(code, formatter, code_display)
+        # {{{ Render notebook source in the selected display mode
+        frags = []
+        if code_display != CODE_DISPLAY_NONE:
+            code_html = highlight(code, PythonLexer(), formatter)
+            frags = lxml_html.fragments_fromstring(code_html)
+            if code_display == CODE_DISPLAY_COLLAPSED:
+                details = lxml_html.fragment_fromstring(
+                    '<details class="pydifft-source">'
+                    "<summary>SOURCE</summary>"
+                    "</details>",
+                    create_parent=False,
+                )
+                for frag in frags:
+                    details.append(frag)
+                frags = [details]
+        # }}}
         if not missing_output and html:
             frags += lxml_html.fragments_fromstring(html)
         elif missing_output:
@@ -2321,45 +2316,13 @@ def substitute_code_placeholders(
         tree.write(str(html_path), encoding="utf-8", method="html")
 
 
-def highlighted_code_fragments(
-    code: str,
-    formatter: HtmlFormatter,
-    code_display: str,
-) -> list:
-    """Return source-code HTML fragments for the requested display mode."""
-    if code_display == CODE_DISPLAY_NONE:
-        return []
-    code_html = highlight(code, PythonLexer(), formatter)
-    frags = lxml_html.fragments_fromstring(code_html)
-    if code_display == CODE_DISPLAY_ALWAYS:
-        return frags
-
-    details = lxml_html.fragment_fromstring(
-        '<details class="pydifft-source">'
-        "<summary>SOURCE</summary>"
-        "</details>",
-        create_parent=False,
-    )
-    for frag in frags:
-        details.append(frag)
-    return [details]
-
-
 class BrowserReloader:
     def __init__(self, url: str):
         self.url = url
         self.init_browser()
 
     def init_browser(self):
-        if webdriver is None:
-            raise ImportError(
-                "Browser refresh support requires the optional 'selenium'"
-                " package."
-            )
-        try:
-            self.browser = webdriver.Chrome()
-        except Exception:
-            self.browser = webdriver.Firefox()
+        self.browser = start_browser()
         self.browser.get(self.url)
 
     def refresh(self):
@@ -2470,7 +2433,7 @@ def watch_and_serve(
     forward_search_thread_started = False
 
     try:
-        # The endpoint is live before BrowserReloader constructs Chrome.
+        # The endpoint is live before BrowserReloader constructs a browser.
         forward_search_thread.start()
         forward_search_thread_started = True
         print(f"Serving {DISPLAY_DIR} at http://localhost:{port}")
@@ -2485,7 +2448,7 @@ def watch_and_serve(
             with build_lock:
                 return machine.build(**kwargs)
 
-        # Launch the initial build asynchronously so Chrome opens immediately.
+        # Build asynchronously so the browser opens promptly.
         initial_executor = ThreadPoolExecutor(max_workers=1)
         initial_future = initial_executor.submit(
             serialized_build,

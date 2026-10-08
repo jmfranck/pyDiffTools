@@ -28,7 +28,7 @@ from pydifftools.command_registry import register_command
 from pydifftools.browser_lifecycle import (
     browser_window_is_alive,
     close_browser_window,
-    launch_chrome,
+    start_browser,
 )
 from pydifftools.source_jump import SourceJumpServer
 from .comparison import PlanComparison
@@ -66,15 +66,15 @@ def _reload_svg(driver, svg_src) -> None:
     )
 
 
-def start_chrome(webdriver, options, preview_url):
-    # Launch Chrome and display the local SVG preview page from the server.
-    driver = launch_chrome(webdriver, options=options)
+def start_preview_browser(preview_url):
+    # Launch the shared browser and display the local SVG preview page.
+    driver = start_browser()
     driver.get(preview_url)
     return driver
 
 
 def close_chrome(driver):
-    # Close the Chrome window if it is still running.
+    # Close the browser window if it is still running.
     close_browser_window(driver)
 
 
@@ -674,8 +674,6 @@ class GraphEventHandler(FileSystemEventHandler):
         preview_url=None,
         svg_url=None,
         driver=None,
-        options=None,
-        webdriver=None,
         wrap_width=55,
         data=None,
         state=None,
@@ -689,8 +687,6 @@ class GraphEventHandler(FileSystemEventHandler):
         self.preview_url = preview_url
         self.svg_url = svg_url
         self.driver = driver
-        self.options = options
-        self.webdriver = webdriver
         self.wrap_width = wrap_width
         self.data = data
         self.render_lock = threading.RLock()
@@ -767,14 +763,8 @@ class GraphEventHandler(FileSystemEventHandler):
                     return
             if self.driver is None:
                 # Restart the preview once the SVG successfully builds again.
-                if (
-                    self.webdriver is not None
-                    and self.options is not None
-                    and self.preview_url is not None
-                ):
-                    self.driver = start_chrome(
-                        self.webdriver, self.options, self.preview_url
-                    )
+                if self.preview_url is not None:
+                    self.driver = start_preview_browser(self.preview_url)
                 else:
                     # Allow test/legacy usage where no browser driver exists.
                     if self.svg_url is not None:
@@ -1005,18 +995,6 @@ class FlowchartPreviewServer:
     filename_extensions={"yaml": (".yaml", ".yml")},
 )
 def wgrph(yaml, wrap_width=55, d=False, t=None, p=False, diff_base=None):
-    # Selenium is only required when actually launching the watcher, so it is
-    # imported here to avoid breaking the command-line tools when the optional
-    # dependency is not installed.
-    try:
-        from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options
-    except ImportError as exc:
-        raise ImportError(
-            "The 'watch_graph' command requires the 'selenium' package to be"
-            " installed."
-        ) from exc
-
     yaml_file = Path(yaml)
     if not yaml_file.exists():
         raise FileNotFoundError(f"YAML file not found: {yaml_file}")
@@ -1049,7 +1027,6 @@ def wgrph(yaml, wrap_width=55, d=False, t=None, p=False, diff_base=None):
         **({"comparison": comparison} if comparison is not None else {}),
     )
 
-    options = Options()
     event_handler = GraphEventHandler(
         yaml_file,
         dot_file,
@@ -1057,8 +1034,6 @@ def wgrph(yaml, wrap_width=55, d=False, t=None, p=False, diff_base=None):
         None,
         None,
         None,
-        options,
-        webdriver,
         wrap_width,
         data,
         initial_state,
@@ -1082,7 +1057,7 @@ def wgrph(yaml, wrap_width=55, d=False, t=None, p=False, diff_base=None):
         preview_url += "?" + urllib.parse.urlencode(preview_params)
     event_handler.preview_url = preview_url
 
-    driver = start_chrome(webdriver, options, preview_url)
+    driver = start_preview_browser(preview_url)
     event_handler.driver = driver
 
     observer = Observer()

@@ -1,4 +1,4 @@
-"""Continuous Pandoc build utility that requires geckodriver."""
+"""Continuous Pandoc build utility with a Selenium browser preview."""
 
 import json
 import hashlib
@@ -30,7 +30,7 @@ from .browser_lifecycle import (
     dialog_callbacks,
     forward_search_in_browser,
     prepare_for_dialog,
-    start_chrome,
+    start_browser,
 )
 from .forward_search import (
     CPB_FORWARD_SEARCH_PORT,
@@ -1276,12 +1276,12 @@ def cpb(
         socket_thread.start()
         socket_thread_started = True
 
-        # Build before opening Chrome so a failed initial build cannot leave an
+        # Build before opening the browser so a failed build cannot leave an
         # orphaned browser session. Remember the source version from before
         # the build so an edit during a slow Pandoc run remains pending.
         source_missing = object()
         # every dialog is dealt with (OK pressed) before Pandoc runs or
-        # Chrome opens
+        # The browser opens
         zotero_notice()
         prepare_comment_source(filename)
         initial_source_stat = os.stat(source_path)
@@ -1307,7 +1307,7 @@ def cpb(
         # successful build. Nothing in recovery constructs a browser.
         from selenium.common.exceptions import WebDriverException
 
-        chrome = start_chrome()
+        chrome = start_browser()
         observer = Observer()
         change_queue = queue.Queue()
         event_handler = Handler(filename, change_queue)
@@ -1328,7 +1328,7 @@ def cpb(
             observer.schedule(event_handler, path=source_dir, recursive=False)
             observer.start()
             # PollingObserver.start() does not wait for its emitter's initial
-            # directory snapshot. Do that before exposing Chrome, otherwise
+            # directory snapshot. Do that before opening the browser, otherwise
             # the first user save can become the baseline and emit no event.
             snapshot_deadline = time.monotonic() + 1.0
             while any(
@@ -1349,7 +1349,7 @@ def cpb(
         observer_started = True
         # }}}
         # Do not expose the preview until watching is active. Otherwise a save
-        # immediately after Chrome loads can become polling's initial snapshot
+        # after the browser loads can become polling's initial snapshot
         # and never be reported as a change.
         chrome.get("file://" + os.path.abspath(html_file))
 
@@ -1358,7 +1358,7 @@ def cpb(
             # issues are dealt with; it reopens once the rebuild is done
             nonlocal chrome, scroll_position
             if chrome is not None:
-                # sessionStorage does not survive quitting Chrome.
+                # sessionStorage does not survive quitting the browser.
                 scroll_position = chrome.execute_script(
                     "return window.scrollY;"
                 )
@@ -1376,7 +1376,7 @@ def cpb(
                     "closing the preview instead of leaving an "
                     "undiscoverable session."
                 )
-            # Chrome closure is terminal. Source-file and build failures do
+            # Browser closure is terminal. Source-file and build failures do
             # not affect browser ownership or observer lifetime.
             if not browser_window_is_alive(chrome):
                 break
@@ -1488,7 +1488,7 @@ def cpb(
                                     chrome.refresh()
                                 except WebDriverException:
                                     print(
-                                        "pydifft cpb: Chrome is no longer "
+                                        "pydifft cpb: Browser is no longer "
                                         "available; stopping without "
                                         "reopening it.",
                                         file=sys.stderr,
@@ -1496,7 +1496,7 @@ def cpb(
                                     break
                         if chrome is None:
                             # {{{ reopen the preview a dialog closed
-                            chrome = start_chrome()
+                            chrome = start_browser()
                             chrome.get(
                                 "file://" + os.path.abspath(html_file)
                             )
