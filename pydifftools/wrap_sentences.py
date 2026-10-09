@@ -1046,16 +1046,74 @@ def _iter_block_spans(blocks, wrapnumber, line_start=1):
         line += span
 
 
+# also used by: line_alignment.align_line_breaks for comment-aware alignment.
+def _html_comment_spans(content, initially_open=False):
+    """Find comment offsets, excluding literal delimiters in code or math."""
+    spans = []
+    start = 0 if initially_open else None
+    fence = None
+    inline_code = None
+    math = None
+    offset = 0
+    tokens = re.compile(r"<!--|-->|`+|(?<!\\)\$\$|(?<!\\)\$")
+    for line in content.splitlines(keepends=True):
+        opening = re.match(r"^[ \t]*(`{3,}|~{3,})", line)
+        if start is None and inline_code is None and math is None:
+            if fence is not None:
+                if (
+                    opening and opening[1][0] == fence[0]
+                    and len(opening[1]) >= len(fence)
+                ):
+                    fence = None
+                offset += len(line)
+                continue
+            if opening:
+                fence = opening[1]
+                offset += len(line)
+                continue
+        for token in tokens.finditer(line):
+            value = token[0]
+            if start is not None:
+                if value == "-->":
+                    spans.append((start, offset + token.end()))
+                    start = None
+            elif inline_code is not None:
+                if value == inline_code:
+                    inline_code = None
+            elif math is not None:
+                if value == math:
+                    math = None
+            elif value.startswith("`"):
+                inline_code = value
+            elif value in ("$", "$$"):
+                math = value
+            elif value == "<!--":
+                start = offset + token.start()
+        offset += len(line)
+    if start is not None:
+        spans.append((start, len(content)))
+    return spans
+
+
+# also used by: line_alignment.align_line_breaks, which masks complete hunks.
+def _mask_html_comments(content, initially_open=False):
+    """Hide comment characters while preserving offsets and line endings."""
+    masked = list(content)
+    for start, stop in _html_comment_spans(content, initially_open):
+        masked[start:stop] = [
+            char if char in "\r\n" else " " for char in content[start:stop]
+        ]
+    return "".join(masked)
+
+
 def markdown_lint_issues_from_text(
     content, wrapnumber=45, punctuation_slop=20
 ):
     """Return Markdown writing issues, including unfinished source spans."""
-    def mask_comment(match):
-        return "".join("\n" if char == "\n" else " " for char in match[0])
-
-    prose_content = re.sub(
-        r"<!--.*?(?:-->|\Z)", mask_comment, content, flags=re.DOTALL
-    )
+    masked_content = _mask_html_comments(content)
+    comment_spans = _html_comment_spans(content)
+    masked_lines = masked_content.splitlines()
+    prose_content = masked_content
     # trailing spaces are reported separately below, and a double space
     # (a hard line break) must not look like a sentence ending mid-line
     prose_content = re.sub(r"[ \t]+$", "", prose_content, flags=re.M)
@@ -1073,20 +1131,26 @@ def markdown_lint_issues_from_text(
     # {{{ report single trailing spaces, misspelled comment tags and
     # detached crossref markers
     fence = None
-    for number, line in enumerate(content.splitlines(), start=1):
+    offset = 0
+    for number, raw_line in enumerate(content.splitlines(keepends=True), 1):
+        line = raw_line.rstrip("\r\n")
+        last_character = offset + len(line) - 1
+        offset += len(raw_line)
         opening = re.match(r"[ \t]*(\x60{3,}|~{3,})", line)
         if opening and (fence is None or opening[1].startswith(fence)):
             fence = None if fence else opening[1]
             continue
         if fence is not None:
             continue
-        if re.search(r"(?<! ) $", line):
+        if re.search(r"(?<! ) $", line) and not any(
+            start <= last_character < stop for start, stop in comment_spans
+        ):
             issues.append((
                 number,
                 "trailing space: remove the single space at the end of this "
                 "line (two spaces are a deliberate hard line break)",
             ))
-        misspelled = MISSPELLED_COMMENT_TAG.search(line)
+        misspelled = MISSPELLED_COMMENT_TAG.search(masked_lines[number - 1])
         if misspelled:
             issues.append((
                 number,
@@ -1313,7 +1377,9 @@ def apply_markdown_issue_fix(content, line_number, message):
             "width. I moved the extra words onto new lines."
         )
     elif message.startswith("sentence ends mid-line"):
-        boundary = SENTENCE_BOUNDARY.search(old_line)
+        boundary = SENTENCE_BOUNDARY.search(
+            _mask_html_comments(content).splitlines()[index]
+        )
         if boundary is None or boundary.group(2) != " ":
             raise ValueError(
                 "Cannot find the sentence break on Markdown line "
@@ -1342,38 +1408,55 @@ def apply_markdown_issue_fix(content, line_number, message):
 
 
 def autofix_markdown_file(
-    filename, wrapnumber=55, punctuation_slop=20, git_head=False
+    filename, wrapnumber=55, punctuation_slop=20, git_head=False,
+    git_ref=None, git_index=False,
 ):
     """Apply safe source line breaks and report unfinished source spans.
 
-    With `git_head`, line breaks in the hunks that differ from the file's
-    git HEAD version are first placed to keep that diff small (see
-    "layout" in the returned report for hunks that would need more than
-    one line break moved).
+    With `git_index` or `git_head`, use the index or HEAD as the baseline.
+    An explicit `git_ref` enables alignment and overrides both flags.
+    All line-break alignments are applied automatically to keep the diff
+    small while enforcing the source wrapping rules.
     """
     with open(filename, encoding="utf-8", newline="") as fp:
         content = fp.read()
     fixes = []
-    layout = []
     baseline = None
-    if git_head:
+    if git_ref is not None or git_index or git_head:
+        # {{{ read the chosen Git baseline before making source fixes
         directory, basename = os.path.split(os.path.abspath(filename))
+        revision = git_ref if git_ref is not None else (
+            "" if git_index else "HEAD"
+        )
+        baseline_label = "Git index" if revision == "" else f"git {revision}"
+        baseline_error = (
+            f"Cannot read diff-lint baseline {git_ref!r} for {filename}. "
+            "Check that the ref exists and contains this file."
+        )
+        if git_ref == "":
+            raise RuntimeError(baseline_error)
         try:
             with subprocess.Popen(
-                ["git", "-C", directory, "show", "HEAD:./" + basename],
+                ["git", "-C", directory, "show", "--end-of-options",
+                 revision + ":./" + basename],
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
             ) as shown:
-                output = shown.communicate()[0]
+                output, stderr = shown.communicate()
             if shown.returncode == 0:
                 baseline = output.decode("utf-8")
-        except FileNotFoundError:
-            # git is not installed
-            pass
+            elif git_ref is not None:
+                raise RuntimeError(
+                    baseline_error + "\n" + stderr.decode("utf-8", "replace")
+                )
+        except (OSError, UnicodeDecodeError) as exc:
+            if git_ref is not None:
+                raise RuntimeError(baseline_error + f"\n{exc}") from exc
+        # }}}
     if baseline is not None:
         from .line_alignment import align_line_breaks
 
-        # {{{ apply single adjustments and report larger shared alignments
+        # {{{ apply all shared alignments and report the changes made
         results = align_line_breaks(
             baseline, content, width=wrapnumber,
             punctuation_slop=punctuation_slop,
@@ -1383,32 +1466,26 @@ def autofix_markdown_file(
         for result in results:
             line = result["line"] + shift
             moves = result["moves"]
-            chosen = result["aligned"] if moves == 1 else result["linted"]
+            chosen = result["aligned"]
             if chosen != result["before"]:
                 reasons = []
-                if result["linted"] != result["before"]:
+                if not moves and result["linted"] != result["before"]:
                     reasons.append(
                         "One or more lines broke the source wrapping rules. "
                         "I moved trailing phrases or extra words to new "
                         "lines and started sentences on new lines."
                     )
-                if moves == 1:
+                if moves:
                     reasons.append(
-                        "One or more edits moved a line break away from "
-                        "where git HEAD has it. I put those breaks back so "
-                        "the unchanged lines stay unchanged."
+                        "One or more edits moved line breaks away from "
+                        f"where {baseline_label} has them. "
+                        "I put those breaks back to minimize the diff, "
+                        "while enforcing the source wrapping rules."
                     )
                 fixes.append({
                     "line": line, "reason": " ".join(reasons),
                     "before": result["before"].rstrip("\r\n"),
                     "after": chosen.rstrip("\r\n"),
-                })
-            if moves > 1:
-                layout.append({
-                    "line": line, "moves": moves,
-                    "head": result["head"].rstrip("\r\n"),
-                    "current": chosen.rstrip("\r\n"),
-                    "suggested": result["aligned"].rstrip("\r\n"),
                 })
             updates.append((result["start"], result["stop"], chosen))
             shift += chosen.count("\n") - result["before"].count("\n")
@@ -1462,7 +1539,7 @@ def autofix_markdown_file(
     return {
         "fixes": fixes,
         "warnings": unclosed_markdown_spans(content),
-        "layout": layout,
+        "layout": [],
     }
 
 

@@ -1,4 +1,4 @@
-"""Continuous Pandoc build utility that requires geckodriver."""
+"""Continuous Pandoc build utility with a Selenium browser preview."""
 
 import json
 import hashlib
@@ -30,7 +30,7 @@ from .browser_lifecycle import (
     dialog_callbacks,
     forward_search_in_browser,
     prepare_for_dialog,
-    start_chrome,
+    start_browser,
 )
 from .forward_search import (
     CPB_FORWARD_SEARCH_PORT,
@@ -236,7 +236,7 @@ def show_markdown_fix_dialog(report):
     from html import escape
 
     from PySide6.QtCore import Qt
-    from PySide6.QtGui import QFontDatabase, QFontMetrics
+    from PySide6.QtGui import QFontDatabase
     from PySide6.QtWidgets import (
         QApplication,
         QDialog,
@@ -249,8 +249,7 @@ def show_markdown_fix_dialog(report):
 
     fixes = report["fixes"]
     warnings = report["warnings"]
-    layout = report.get("layout", [])
-    if not fixes and not warnings and not layout:
+    if not fixes and not warnings:
         return
     prepare_for_dialog()
 
@@ -308,55 +307,8 @@ def show_markdown_fix_dialog(report):
             for offset, value in enumerate(marked.split("\n"))
         )
 
-    # {{{ group fixes of one kind onto pages that fill the screen
     screen_height = dialog.screen().availableGeometry().height()
     dialog.resize(900, int(screen_height * 0.85))
-    # leave room for the heading, explanation, button and margins
-    page_rows = max(
-        3,
-        int(
-            (screen_height * 0.85 - 120)
-            / QFontMetrics(fixed_font).lineSpacing()
-        ),
-    )
-    groups = {}
-    for fix in fixes:
-        groups.setdefault(fix["reason"], []).append(fix)
-    records = []
-    for reason, group in groups.items():
-        page = []
-        rows = 0
-        for fix in sorted(group, key=lambda fix: fix["line"]):
-            # A break annotation needs only the original source lines.
-            fix_rows = (
-                len(fix["before"].splitlines() or [""])
-                + (
-                    0
-                    if fix["after"] == fix["before"].rstrip()
-                    or annotated_source(
-                        fix["before"], fix["after"], fix["line"]
-                    ) is not None
-                    else len(fix["after"].splitlines() or [""])
-                )
-                + (1 if page else 0)
-            )
-            if page and rows + fix_rows > page_rows:
-                records.append(
-                    {"record_type": "fix", "reason": reason, "fixes": page}
-                )
-                page = []
-                rows = 0
-                fix_rows -= 1
-            page.append(fix)
-            rows += fix_rows
-        records.append(
-            {"record_type": "fix", "reason": reason, "fixes": page}
-        )
-    records += [{"record_type": "layout", **notice} for notice in layout]
-    records += [
-        {"record_type": "warning", **warning} for warning in warnings
-    ]
-    # }}}
     layout = QVBoxLayout(dialog)
     heading = QLabel()
     heading.setWordWrap(True)
@@ -382,6 +334,84 @@ def show_markdown_fix_dialog(report):
 
     button = QPushButton()
     layout.addWidget(button)
+
+    def render_fix_page(page_fixes, reason, page=""):
+        count = len(page_fixes)
+        heading.setText(
+            "I fixed this source hunk automatically." + page
+            if count == 1
+            else f"I fixed these {count} source hunks automatically." + page
+        )
+        details.setText(
+            reason
+            + (
+                "<br>Original source: "
+                "<span style='color:#188038'>↳</span> inserted newline; "
+                "<span style='color:#c62828'>↳×</span> removed newline."
+                if any(fix["annotated"] for fix in page_fixes) else ""
+            )
+        )
+        line_numbers.setVisible(False)
+        preview.setHtml(
+            "<pre style='font-family:monospace; margin:0'>"
+            + "<br><br>".join(fix["preview"] for fix in page_fixes)
+            + "</pre>"
+        )
+
+    # {{{ render hunks once and pack each page to the actual viewport height
+    groups = {}
+    for fix in fixes:
+        annotated = annotated_source(fix["before"], fix["after"], fix["line"])
+        entry = annotated
+        if entry is None:
+            rows = []
+            for offset, value in enumerate(fix["before"].splitlines() or [""]):
+                stripped = value.rstrip(" ")
+                rows.append(
+                    f"<span style='color:#666'>{fix['line'] + offset:>6}"
+                    "</span> − " + escape(stripped)
+                    + "<span style='background:#fbb'>·</span>"
+                    * (len(value) - len(stripped))
+                )
+            for offset, value in enumerate(
+                [] if fix["after"] == fix["before"].rstrip()
+                else fix["after"].split("\n")
+            ):
+                rows.append(
+                    f"<span style='color:#666'>{fix['line'] + offset:>6}"
+                    "</span> " + ("+ " if offset == 0 else "↳ ")
+                    + escape(value)
+                )
+            entry = "<br>".join(rows)
+        groups.setdefault(fix["reason"], []).append({
+            **fix, "preview": entry, "annotated": annotated is not None,
+        })
+    records = []
+    button.setText("Next")
+    dialog.ensurePolished()
+    for reason, group in groups.items():
+        page = []
+        for fix in sorted(group, key=lambda fix: fix["line"]):
+            candidate = page + [fix]
+            render_fix_page(candidate, reason, " (page 999 of 999)")
+            layout.activate()
+            if page and (
+                preview.document().size().height()
+                > preview.viewport().height()
+            ):
+                records.append({
+                    "record_type": "fix", "reason": reason, "fixes": page,
+                })
+                page = [fix]
+            else:
+                page = candidate
+        records.append({
+            "record_type": "fix", "reason": reason, "fixes": page,
+        })
+    records += [
+        {"record_type": "warning", **warning} for warning in warnings
+    ]
+    # }}}
     index = 0
     user_says_fixed = False
 
@@ -393,110 +423,7 @@ def show_markdown_fix_dialog(report):
             else ""
         )
         if record["record_type"] == "fix":
-            count = len(record["fixes"])
-            heading.setText(
-                "I fixed this source line automatically." + page
-                if count == 1
-                else f"I fixed these {count} source lines automatically."
-                + page
-            )
-            details.setText(record["reason"])
-            line_numbers.setVisible(False)
-            # {{{ annotate changed breaks on the original source
-            entries = []
-            has_break_annotations = False
-            for fix in record["fixes"]:
-                annotated = annotated_source(
-                    fix["before"], fix["after"], fix["line"]
-                )
-                if annotated is not None:
-                    entries.append(annotated)
-                    has_break_annotations = True
-                    continue
-                rows = []
-                for offset, value in enumerate(
-                    fix["before"].splitlines() or [""]
-                ):
-                    stripped = value.rstrip(" ")
-                    rows.append(
-                        f"<span style='color:#666'>{fix['line'] + offset:>6}"
-                        "</span> − "
-                        + escape(stripped)
-                        # make stray trailing spaces visible
-                        + "<span style='background:#fbb'>·</span>"
-                        * (len(value) - len(stripped))
-                    )
-                for offset, value in enumerate(
-                    []
-                    if fix["after"] == fix["before"].rstrip()
-                    else fix["after"].split("\n")
-                ):
-                    rows.append(
-                        f"<span style='color:#666'>{fix['line'] + offset:>6}"
-                        "</span> "
-                        + ("+ " if offset == 0 else "↳ ")
-                        + escape(value)
-                    )
-                entries.append("<br>".join(rows))
-            if has_break_annotations:
-                details.setText(
-                    record["reason"]
-                    + "<br>Original source: "
-                    "<span style='color:#188038'>↳</span> inserted newline; "
-                    "<span style='color:#c62828'>↳×</span> removed newline."
-                )
-            preview.setHtml(
-                "<pre style='font-family:monospace; margin:0'>"
-                + "<br><br>".join(entries)
-                + "</pre>"
-            )
-            # }}}
-            button.setText("Next" if index + 1 < len(records) else "Done")
-        elif record["record_type"] == "layout":
-            heading.setText(
-                "These line breaks differ from git HEAD in "
-                f"{record['moves']} places." + page
-            )
-            details.setText(
-                "Keeping these lines as they are in git HEAD would need "
-                f"{record['moves']} line breaks moved, so I left them as you "
-                "wrote them. If you did not mean to rearrange these lines, "
-                "lay them out as suggested."
-            )
-            line_numbers.setVisible(False)
-            # {{{ show suggested breaks on the original source
-            sections = []
-            annotated = annotated_source(
-                record["current"], record["suggested"], record["line"]
-            )
-            if annotated is not None:
-                sections.append(annotated)
-                details.setText(
-                    details.text()
-                    + "<br>Original source, with suggested changes: "
-                    "<span style='color:#188038'>↳</span> insert newline; "
-                    "<span style='color:#c62828'>↳×</span> remove newline."
-                )
-            else:
-                for title, text, numbered in (
-                    ("git HEAD:", record["head"], False),
-                    ("Now:", record["current"], True),
-                    ("Suggested:", record["suggested"], True),
-                ):
-                    rows = [escape(title)]
-                    for offset, value in enumerate(text.split("\n")):
-                        number = record["line"] + offset if numbered else ""
-                        rows.append(
-                            f"<span style='color:#666'>{number:>6}</span> "
-                            + escape(value)
-                        )
-                    sections.append("<br>".join(rows))
-            preview.setHtml(
-                "<pre style='font-family:monospace; margin:0'>"
-                + "<br><br>".join(sections)
-                + "</pre>"
-            )
-            # }}}
+            render_fix_page(record["fixes"], record["reason"], page)
             button.setText("Next" if index + 1 < len(records) else "Done")
         else:
             line = record["line"]
@@ -585,6 +512,7 @@ def run_pandoc(
     comment_filter_session=None,
     wrapnumber=DEFAULT_WIDTH,
     trailing_dependent_phrase=DEFAULT_TRAILING_DEPENDENT_PHRASE,
+    diff=None,
 ):
     # {{{ automatically fix Markdown source and request edits for
     # unfinished spans
@@ -593,11 +521,11 @@ def run_pandoc(
     automatic_fixes_were_made = False
     while True:
         report = autofix_markdown_file(
-            filename, wrapnumber=wrapnumber, git_head=True,
+            filename, wrapnumber=wrapnumber, git_index=True, git_ref=diff,
             punctuation_slop=trailing_dependent_phrase,
         )
         automatic_fixes_were_made |= bool(report["fixes"])
-        if report["fixes"] or report["warnings"] or report["layout"]:
+        if report["fixes"] or report["warnings"]:
             user_says_fixed = show_markdown_fix_dialog(report)
             if report["warnings"]:
                 if not user_says_fixed:
@@ -1240,14 +1168,19 @@ class Handler(FileSystemEventHandler):
         "no_comments": (
             "Render the HTML without comment tags or comment div blocks."
         ),
+        "diff": (
+            "Diff-lint against this Git ref (branch, tag, or commit). "
+            "Defaults to the index, matching git diff; use @ for HEAD."
+        ),
     },
     filename_extensions={"filename": ".md"},
-    argument_options=WRAPPING_ARGUMENTS,
+    argument_options={**WRAPPING_ARGUMENTS, "diff": {"metavar": "REF"}},
 )
 def cpb(
     filename, comments_to_margin=False, no_comments=False,
     wrapnumber=DEFAULT_WIDTH,
     trailing_dependent_phrase=DEFAULT_TRAILING_DEPENDENT_PHRASE,
+    diff=None,
 ):
     source_path = os.path.normpath(os.path.abspath(filename))
     source_dir = os.path.dirname(source_path)
@@ -1276,12 +1209,12 @@ def cpb(
         socket_thread.start()
         socket_thread_started = True
 
-        # Build before opening Chrome so a failed initial build cannot leave an
+        # Build before opening the browser so a failed build cannot leave an
         # orphaned browser session. Remember the source version from before
         # the build so an edit during a slow Pandoc run remains pending.
         source_missing = object()
         # every dialog is dealt with (OK pressed) before Pandoc runs or
-        # Chrome opens
+        # The browser opens
         zotero_notice()
         prepare_comment_source(filename)
         initial_source_stat = os.stat(source_path)
@@ -1298,6 +1231,7 @@ def cpb(
             comment_filter_session=comment_filter_session,
             wrapnumber=wrapnumber,
             trailing_dependent_phrase=trailing_dependent_phrase,
+            diff=diff,
         )
         source_jump_server = SourceJumpServer(source_path)
         source_jump_server.start()
@@ -1307,7 +1241,7 @@ def cpb(
         # successful build. Nothing in recovery constructs a browser.
         from selenium.common.exceptions import WebDriverException
 
-        chrome = start_chrome()
+        chrome = start_browser()
         observer = Observer()
         change_queue = queue.Queue()
         event_handler = Handler(filename, change_queue)
@@ -1328,7 +1262,7 @@ def cpb(
             observer.schedule(event_handler, path=source_dir, recursive=False)
             observer.start()
             # PollingObserver.start() does not wait for its emitter's initial
-            # directory snapshot. Do that before exposing Chrome, otherwise
+            # directory snapshot. Do that before opening the browser, otherwise
             # the first user save can become the baseline and emit no event.
             snapshot_deadline = time.monotonic() + 1.0
             while any(
@@ -1349,7 +1283,7 @@ def cpb(
         observer_started = True
         # }}}
         # Do not expose the preview until watching is active. Otherwise a save
-        # immediately after Chrome loads can become polling's initial snapshot
+        # after the browser loads can become polling's initial snapshot
         # and never be reported as a change.
         chrome.get("file://" + os.path.abspath(html_file))
 
@@ -1358,7 +1292,7 @@ def cpb(
             # issues are dealt with; it reopens once the rebuild is done
             nonlocal chrome, scroll_position
             if chrome is not None:
-                # sessionStorage does not survive quitting Chrome.
+                # sessionStorage does not survive quitting the browser.
                 scroll_position = chrome.execute_script(
                     "return window.scrollY;"
                 )
@@ -1376,7 +1310,7 @@ def cpb(
                     "closing the preview instead of leaving an "
                     "undiscoverable session."
                 )
-            # Chrome closure is terminal. Source-file and build failures do
+            # Browser closure is terminal. Source-file and build failures do
             # not affect browser ownership or observer lifetime.
             if not browser_window_is_alive(chrome):
                 break
@@ -1451,6 +1385,7 @@ def cpb(
                                 trailing_dependent_phrase=(
                                     trailing_dependent_phrase
                                 ),
+                                diff=diff,
                             )
                             append_autorefresh(
                                 html_file, source_jump_server.url
@@ -1488,7 +1423,7 @@ def cpb(
                                     chrome.refresh()
                                 except WebDriverException:
                                     print(
-                                        "pydifft cpb: Chrome is no longer "
+                                        "pydifft cpb: Browser is no longer "
                                         "available; stopping without "
                                         "reopening it.",
                                         file=sys.stderr,
@@ -1496,7 +1431,7 @@ def cpb(
                                     break
                         if chrome is None:
                             # {{{ reopen the preview a dialog closed
-                            chrome = start_chrome()
+                            chrome = start_browser()
                             chrome.get(
                                 "file://" + os.path.abspath(html_file)
                             )

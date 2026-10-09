@@ -9,62 +9,91 @@ import sys
 dialog_callbacks = []
 
 
-def launch_chrome(webdriver, **kwargs):
-    """Start Chrome, retrying version mismatches with a warning."""
-    from selenium.common.exceptions import SessionNotCreatedException
-    from selenium.webdriver.chrome.service import Service
+# also used by: continuous.py, notebook/fast_build.py, flowchart/watch_graph.py
+def start_browser():
+    """Prefer Chrome/Chromium, using installed drivers before discovery.
+
+    If only GeckoDriver is installed, use Firefox directly. Otherwise try
+    Chrome first, including version-mismatch recovery, then Firefox.
+    """
+    from selenium import webdriver
+    from selenium.common.exceptions import (
+        SessionNotCreatedException,
+        WebDriverException,
+    )
+    from selenium.webdriver.chrome.service import Service as ChromeService
+    from selenium.webdriver.firefox.service import Service as FirefoxService
+
+    chrome_driver = shutil.which("chromedriver")
+    firefox_driver = shutil.which("geckodriver")
+    chrome_error = None
+    if chrome_driver or not firefox_driver:
+        # {{{ Use installed ChromeDriver without an online Manager lookup
+        kwargs = {}
+        if chrome_driver:
+            options = webdriver.ChromeOptions()
+            # Debian's driver defaults to Chromium even if Chrome is installed;
+            # retain Selenium Manager's preference for Google Chrome.
+            browser_path = (
+                shutil.which("google-chrome")
+                or shutil.which("google-chrome-stable")
+                or shutil.which("chromium")
+                or shutil.which("chromium-browser")
+            )
+            if browser_path:
+                options.binary_location = browser_path
+            kwargs = {
+                "service": ChromeService(chrome_driver),
+                "options": options,
+            }
+        # }}}
+        try:
+            try:
+                return webdriver.Chrome(**kwargs)
+            except SessionNotCreatedException as exc:
+                # {{{ Retry ChromeDriver's explicit browser-version rejection
+                details = str(exc)
+                driver_match = re.search(
+                    r"ChromeDriver only supports Chrome version (\d+)", details
+                )
+                browser_match = re.search(
+                    r"Current browser version is (\d+)", details
+                )
+                if driver_match is None or browser_match is None:
+                    raise
+                print(
+                    "pydifft: warning: ChromeDriver "
+                    f"{driver_match.group(1)} and Chrome "
+                    f"{browser_match.group(1)} do not match; retrying "
+                    "with the driver version check disabled.",
+                    file=sys.stderr,
+                )
+                service = kwargs.get("service")
+                kwargs["service"] = ChromeService(
+                    executable_path=service.path if service else None,
+                    service_args=[
+                        *(service.service_args if service else []),
+                        "--disable-build-check",
+                    ],
+                )
+                return webdriver.Chrome(**kwargs)
+                # }}}
+        except WebDriverException as exc:
+            chrome_error = exc
+            print(
+                f"pydifft: warning: Chrome/Chromium could not start: {exc}\n"
+                "Trying Firefox instead.",
+                file=sys.stderr,
+            )
 
     try:
-        return webdriver.Chrome(**kwargs)
-    except SessionNotCreatedException as exc:
-        # {{{ Retry only ChromeDriver's explicit browser-version rejection
-        details = str(exc)
-        driver_match = re.search(
-            r"ChromeDriver only supports Chrome version (\d+)", details
-        )
-        browser_match = re.search(
-            r"Current browser version is (\d+)", details
-        )
-        if driver_match is None or browser_match is None:
-            raise
-        print(
-            "pydifft: warning: ChromeDriver "
-            f"{driver_match.group(1)} and Chrome {browser_match.group(1)} "
-            "do not match; retrying with the driver version check disabled.",
-            file=sys.stderr,
-        )
-        service = kwargs.get("service")
-        kwargs["service"] = Service(
-            executable_path=service.path if service else None,
-            service_args=[
-                *(service.service_args if service else []),
-                "--disable-build-check",
-            ],
-        )
-        return webdriver.Chrome(**kwargs)
-        # }}}
-
-
-def start_chrome():
-    """Use an installed driver without an online Selenium Manager lookup."""
-    # Keep Selenium imports lazy, as in the watch commands.
-    from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service
-
-    driver_path = shutil.which("chromedriver")
-    if driver_path:
-        options = webdriver.ChromeOptions()
-        # Debian's driver defaults to Chromium even if Chrome is installed;
-        # retain Selenium Manager's preference for Google Chrome.
-        browser_path = shutil.which("google-chrome") or shutil.which(
-            "google-chrome-stable"
-        )
-        if browser_path:
-            options.binary_location = browser_path
-        return launch_chrome(
-            webdriver, service=Service(driver_path), options=options
-        )
-    return launch_chrome(webdriver)
+        if firefox_driver:
+            return webdriver.Firefox(service=FirefoxService(firefox_driver))
+        return webdriver.Firefox()
+    except WebDriverException as exc:
+        if chrome_error is not None:
+            raise exc from chrome_error
+        raise
 
 
 def prepare_for_dialog():
@@ -73,6 +102,7 @@ def prepare_for_dialog():
         callback()
 
 
+# also used by: continuous.py, notebook/fast_build.py, flowchart/watch_graph.py
 def browser_window_is_alive(browser):
     # Keep all browser liveness checks in one place so watch commands share
     # the same shutdown behavior when a user closes the browser window.
@@ -126,16 +156,18 @@ def forward_search_in_browser(browser, search_text):
     )
     if not found:
         print("forward search did not find text:", search_text)
-    # Bring the browser window to the foreground in Linux window managers.
-    if os.name == "posix" and shutil.which("wmctrl"):
+    # Bring the browser window to the foreground in Linux window managers,
+    # but only when it found the text, since every qmdb session hears it.
+    if found and os.name == "posix" and shutil.which("wmctrl"):
         window_title = browser.execute_script("return document.title;")
         if window_title:
-            # Try common Chromium title forms used by desktop environments.
+            # Try common browser title forms used by desktop environments.
             for title_candidate in [
                 window_title,
                 window_title + " - Google Chrome",
                 window_title + " - Chromium",
                 window_title + " - Chrome",
+                window_title + " - Mozilla Firefox",
             ]:
                 subprocess.run(["wmctrl", "-a", title_candidate], check=False)
     return found

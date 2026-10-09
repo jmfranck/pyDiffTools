@@ -48,6 +48,7 @@ from .notebook.fast_build import (
     qmdinit,
     QMDB_FORWARD_SEARCH_HOST,
     QMDB_FORWARD_SEARCH_PORT,
+    QMDB_PORT_ATTEMPTS,
 )
 
 from .command_registry import _COMMAND_SPECS, register_command
@@ -578,13 +579,17 @@ def mfs(text):
         search_text = text.strip()
 
     # Try existing cpb and qmdb listeners before launching a new cpb process.
-    socket_addresses = [
-        (FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT),
-        (QMDB_FORWARD_SEARCH_HOST, QMDB_FORWARD_SEARCH_PORT),
+    # Several qmdb sessions can run at once on consecutive ports; each one
+    # receives the search and only a browser that finds the text comes
+    # forward.
+    socket_addresses = [(FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT)] + [
+        (QMDB_FORWARD_SEARCH_HOST, QMDB_FORWARD_SEARCH_PORT + offset)
+        for offset in range(QMDB_PORT_ATTEMPTS)
     ]
 
     def try_existing_listener():
         protocol_errors = []
+        delivered = False
         for address in socket_addresses:
             try:
                 send_forward_search(address, search_text)
@@ -593,6 +598,10 @@ def mfs(text):
             except ForwardSearchProtocolError as exc:
                 protocol_errors.append(str(exc))
                 continue
+            if address == socket_addresses[0]:
+                return True
+            delivered = True
+        if delivered:
             return True
         if protocol_errors:
             raise RuntimeError(

@@ -7,6 +7,8 @@ import socket
 FORWARD_SEARCH_HOST = "127.0.0.1"
 CPB_FORWARD_SEARCH_PORT = 51235
 QMDB_FORWARD_SEARCH_PORT = 51236
+# Concurrent qmdb sessions take the next free port above each base port.
+QMDB_PORT_ATTEMPTS = 20
 FORWARD_SEARCH_ACK = b"pydifft-forward-search-ok\n"
 FORWARD_SEARCH_CONNECTION_TIMEOUT = 1.0
 FORWARD_SEARCH_ACCEPT_TIMEOUT = 0.25
@@ -20,6 +22,7 @@ class ForwardSearchProtocolError(RuntimeError):
     """Raised when a port accepts TCP but is not a healthy pydifft listener."""
 
 
+# also used by: continuous.py and notebook/fast_build.py
 def bind_forward_search_server(address, service_name):
     """Bind a listening socket or fail before the service opens a browser."""
 
@@ -77,6 +80,7 @@ def serve_forward_search(server, stop_event, search_queue):
                 continue
 
 
+# also used by: command_line.py (mfs) and tests/test_forward_search.py
 def send_forward_search(address, search_text, timeout=1.0):
     """Deliver text and require an acknowledgment from a pydifft listener."""
 
@@ -113,6 +117,7 @@ def send_forward_search(address, search_text, timeout=1.0):
         client.close()
 
 
+# also used by: continuous.py and notebook/fast_build.py
 def drain_forward_search_queue(search_queue):
     """Return all currently queued searches without relying on Queue.empty."""
 

@@ -298,8 +298,8 @@ def test_wgrph_stops_preview_server_when_browser_window_closed(
         lambda *args, **kwargs: {"nodes": {"task_a": {"text": "Task A"}}},
     )
     monkeypatch.setattr(
-        "pydifftools.flowchart.watch_graph.start_chrome",
-        lambda _webdriver, _options, url: launch_urls.append(url) or object(),
+        "pydifftools.flowchart.watch_graph.start_preview_browser",
+        lambda url: launch_urls.append(url) or object(),
     )
     monkeypatch.setattr(
         "pydifftools.flowchart.watch_graph.browser_window_is_alive",

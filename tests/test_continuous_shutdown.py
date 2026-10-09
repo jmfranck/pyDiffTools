@@ -201,8 +201,9 @@ def test_cpb_waits_through_vim_style_save(monkeypatch, tmp_path, capsys):
 
 @pytest.mark.parametrize("save_style", ["in_place", "atomic_replace"])
 @pytest.mark.parametrize("distance", [0, 9, 20])
+@pytest.mark.parametrize("diff", [None, "jf_last"])
 def test_cpb_rebuilds_common_save_styles(
-    monkeypatch, tmp_path, save_style, distance,
+    monkeypatch, tmp_path, save_style, distance, diff,
 ):
     source = tmp_path / "content.md"
     source.write_text("before\n")
@@ -218,13 +219,16 @@ def test_cpb_rebuilds_common_save_styles(
         assert runtime["browser"].refreshed.wait(timeout=2)
 
     run_cpb_with_editor(source, runtime["browser"], editor,
-                        wrapnumber=72, trailing_dependent_phrase=distance)
+                        wrapnumber=72, trailing_dependent_phrase=distance,
+                        diff=diff)
 
     assert runtime["builds"] == ["before\n", "after\n"]
     assert [options["trailing_dependent_phrase"]
             for options in runtime["build_options"]] == [distance, distance]
     assert [options["wrapnumber"]
             for options in runtime["build_options"]] == [72, 72]
+    assert [options["diff"]
+            for options in runtime["build_options"]] == [diff, diff]
     assert runtime["browser"].refresh_calls == 1
     assert_clean_polling_shutdown(runtime)
 

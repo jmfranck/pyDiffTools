@@ -48,6 +48,8 @@ def test_help_then_subcommand_shows_subcommand_options(capsys):
     assert "cpb" in out
     assert "--comments-to-margin" in out
     assert "--no-comments" in out
+    assert "--diff REF" in out
+    assert "index" in out
 
 
 def test_short_and_long_help_are_interchangeable_for_subcommand_help(capsys):
@@ -233,7 +235,8 @@ def test_wmatch_cli_applies_shared_dependent_phrase_option(tmp_path, distance):
     assert new.read_text() == expected
 
 
-def test_cpb_build_passes_dependent_phrase_option_to_source_lint(monkeypatch):
+@pytest.mark.parametrize("diff", [None, "@", "jf_last"])
+def test_cpb_build_passes_options_to_source_lint(monkeypatch, diff):
     from pydifftools import continuous, wrap_sentences
 
     calls = []
@@ -251,10 +254,33 @@ def test_cpb_build_passes_dependent_phrase_option_to_source_lint(monkeypatch):
             "notes.html",
             wrapnumber=72,
             trailing_dependent_phrase=9,
+            diff=diff,
         )
     assert calls == [
         (
             "notes.md",
-            {"wrapnumber": 72, "git_head": True, "punctuation_slop": 9},
+            {"wrapnumber": 72, "git_index": True, "git_ref": diff,
+             "punctuation_slop": 9},
         )
     ]
+
+
+@pytest.mark.parametrize("diff", [None, "@", "jf_last", "HEAD~1"])
+def test_cpb_cli_passes_diff_baseline(monkeypatch, diff):
+    calls = []
+    monkeypatch.setitem(
+        command_line._COMMAND_SPECS["cpb"], "handler",
+        lambda **options: calls.append(options),
+    )
+    arguments = ["cpb", "notes.md"]
+    if diff is not None:
+        arguments += ["--diff", diff]
+    command_line.main(arguments)
+    assert calls[0]["diff"] == diff
+
+
+def test_cpb_diff_requires_a_value(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        command_line.main(["cpb", "notes.md", "--diff"])
+    assert excinfo.value.code == 2
+    assert "--diff" in capsys.readouterr().err

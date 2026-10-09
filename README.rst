@@ -17,6 +17,27 @@ included are (listed in order of fun/utility):
   `filename.md`, build the result,
   and displays it in your browser. 
 
+  Source diff linting minimizes line-break changes against the Git index
+  (staging area) by default, matching plain ``git diff``. Use
+  ``pydifft cpb filename.md --diff @`` to compare against HEAD, or
+  ``--diff jf_last`` to compare against a tag, branch, or commit hash.
+  The selected baseline is read again on each build. An unreadable explicit
+  baseline stops the build; an unavailable index baseline, such as for an
+  untracked file, falls back to ordinary source linting.
+  All diff-minimizing line-break fixes are applied automatically before
+  their notice appears. Each page shows as many changed hunks as fit in the
+  window, with a blank line separating hunks; larger changes are applied
+  just like single-break changes.
+  HTML comment contents also participate in diff alignment, including
+  hunks that begin inside a comment. Hidden text is exempt from ordinary
+  prose wrapping, sentence-break, and comment-tag spelling rules. Literal
+  comment delimiters in code or math are preserved.
+  Leading whitespace at matching line starts is restored in top-level
+  prose when both margins contain at most three spaces, and inside HTML
+  comments. Container indentation (lists, definitions, and quotations),
+  tabs or four-space code indentation outside comments, and protected
+  blocks retain their current margins.
+
   Continuous pandoc build.
   This works *very well* together
   with the `g/` vim command
@@ -150,6 +171,12 @@ included are (listed in order of fun/utility):
   ``_build``/``_display`` directories; with ``--watch`` it starts the HTTP
   server and automatically rebuilds the staged fragments whenever you edit
   a ``.qmd`` file.
+  Browser previews in ``qmdb``, ``cpb``, and ``wgrph`` share the same
+  Selenium launcher: Chrome/Chromium is preferred, with Firefox as a
+  fallback. Installed ``chromedriver`` and ``geckodriver`` are used directly
+  without online driver discovery; if only ``geckodriver`` is installed,
+  Firefox opens directly. With neither driver installed, Selenium handles
+  discovery. Chrome startup failures are reported before trying Firefox.
 - ``pydifft tree`` (or ``git tree`` with the alias installed) opens the last
   40 commits across all branches, in Git date order. Use the down arrow
   below the history to add the next 40 commits. Colors follow
