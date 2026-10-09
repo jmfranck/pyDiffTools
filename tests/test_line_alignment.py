@@ -79,7 +79,6 @@ def test_leading_indentation_edits_do_not_overlap_whitespace_restoration():
     ("> Quote.\n", " > Quote.\n"),
     ("> First.\n continuation.\n", "> First.\n  continuation.\n"),
     ("```\n Code.\n```\n", "```\n  Code.\n```\n"),
-    ("$$\n x = y\n$$\n", "$$\n  x = y\n$$\n"),
 ])
 def test_structural_indentation_is_preserved(reference, current):
     assert all(
@@ -177,13 +176,80 @@ def test_comment_alignment_preserves_reference_whitespace():
     assert restored == reference
 
 
-@pytest.mark.parametrize("delimiter", ["`", "$"])
-def test_literal_comment_delimiters_remain_opaque(delimiter):
+def test_literal_comment_delimiters_remain_opaque():
+    delimiter = "`"
     reference = f"Use {delimiter}<!-- hidden words -->{delimiter} here.\n"
     current = f"Use {delimiter}<!--hidden words-->{delimiter} here.\n"
     assert all(
         result["aligned"] == result["before"]
         for result in align_line_breaks(reference, current, width=79)
+    )
+
+
+@pytest.mark.parametrize("reference,current", [
+    (
+        r"$$\tau_c= \frac{4\pi\eta r^3}{3 k_B T}$${#eq:SDE}" + "\n",
+        "$$\n" + r"\tau_c= \frac{4\pi\eta r^3}{3 k_B T}"
+        + "\n$${#eq:SDE}\n",
+    ),
+    ("$$a + b$$\n", "$$\na +\nb\n$$\n"),
+    ("$$\n x = y\n$$\n", "$$\n\t  x = y\n$$\n"),
+    ("$$a + " + "b + " * 30 + "c$$\n",
+     "$$\na + " + "b + " * 30 + "c\n$$\n"),
+    (r"$$r(w_0) = \begin{cases}" + "\n"
+     + r"m w_0 + \delta & w_0 < 20 \\[8pt]" + "\n"
+     + r"c & w_0 \geq 20\end{cases}$$" + "\n",
+     "$$\n" + r"r(w_0) = \begin{cases}" + "\n"
+     + r"m w_0 + \delta & w_0 < 20 \\[8pt]" + "\n"
+     + r"c & w_0 \geq 20\end{cases}" + "\n$$\n"),
+    ("Use $<!-- hidden words -->$ here.\n",
+     "Use $<!--hidden words-->$ here.\n"),
+])
+def test_math_layout_restores_baseline_without_prose_lint(reference, current):
+    for result in reversed(align_line_breaks(reference, current, width=79)):
+        current = (
+            current[:result["start"]] + result["aligned"]
+            + current[result["stop"]:]
+        )
+    assert current == reference
+
+
+def test_inline_math_changed_value_keeps_edit_and_restores_whitespace():
+    reference = "$0.51\\ \\mathrm{mPa}\\cdot\\mathrm{s}$\n"
+    current = "$0.506\\\n\\mathrm{mPa}\\cdot\\mathrm{s}$\n"
+    (result,) = align_line_breaks(reference, current, width=79)
+    assert result["aligned"] == reference.replace("0.51", "0.506")
+
+
+def test_changed_first_word_still_restores_presentation_indentation():
+    reference = "  Old wording stays here.\n"
+    current = " New wording stays here.\n"
+    (result,) = align_line_breaks(reference, current, width=79)
+    assert result["aligned"] == "  New wording stays here.\n"
+
+
+def test_equation_hunk_starts_inside_display_math():
+    reference = "$$\n  a + b = c\n  + d\n$$\nVisible sentence.\n"
+    current = reference.replace("  a + b = c\n  + d", "\ta + b = c + d")
+    for result in reversed(align_line_breaks(reference, current, width=10)):
+        current = (
+            current[:result["start"]] + result["aligned"]
+            + current[result["stop"]:]
+        )
+    assert current == reference
+
+
+@pytest.mark.parametrize("text", [
+    "```tex\n$$x + y$$\n```\n",
+    "    $$x + y$$\n",
+    "Use `$$x + y$$` as literal code.\n",
+    r"An escaped \$ is ordinary text." + "\n",
+])
+def test_literal_math_markers_do_not_enable_alignment(text):
+    current = text.replace("x + y", "x  + y")
+    assert all(
+        result["aligned"] == result["before"]
+        for result in align_line_breaks(text, current, width=79)
     )
 
 

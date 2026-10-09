@@ -98,7 +98,7 @@ def align_line_breaks(
         markdown_blocks,
         check_prose,
         apply_markdown_issue_fix,
-        _html_comment_spans,
+        _markdown_spans,
         _mask_html_comments,
     )
 
@@ -107,56 +107,102 @@ def align_line_breaks(
         r"(?:(?P<marker>[-+*]|[0-9]+[.)])(?P<space>[ \t]+))?"
     )
 
-    def tokenize(text, prose, comments, base=0):
-        # {{{ words plus editable whitespace, retaining original offsets
+    def source_layout(text):
+        # {{{ classify structural whitespace independently of prose lint
+        comments, equations = _markdown_spans(text)
+        regions = comments + equations
+        masked = list(text)
+        for begin, end in regions:
+            masked[begin:end] = [
+                char if char in "\r\n" else " " for char in text[begin:end]
+            ]
+        structural = "".join(masked)
         rows = text.splitlines(keepends=True)
-        delimiters = []
+        allowed = [
+            flag and bool(line.strip())
+            for (flag, _), line in zip(
+                classify_lines(structural, filetype, strict=False), rows,
+            )
+        ]
+        margins = []
+        if filetype == "markdown":
+            for block in markdown_blocks(structural):
+                margins.extend(
+                    [block.kind == "prose"] * len(block.text.splitlines())
+                )
+        else:
+            margins = [False] * len(rows)
+        position = 0
+        prefixes = []
+        for row, line in enumerate(rows):
+            indent = re.match(r"[ \t]*", line)[0]
+            inside = any(begin <= position < end for begin, end in regions)
+            prefixes.append(prefix_pattern.match(indent if inside else line))
+            margins[row] = allowed[row] and (
+                inside or (
+                    margins[row] and "\t" not in indent and len(indent) < 4
+                )
+            )
+            position += len(line)
+        return comments, equations, allowed, margins, prefixes
+        # }}}
+
+    def tokenize(text, layout, base=0):
+        # {{{ words plus editable whitespace, retaining original offsets
+        comments, equations, allowed, margins, prefixes = layout
+        rows = text.splitlines(keepends=True)
+        cuts = set()
         for begin, end in comments:
             begin, end = begin - base, end - base
             if 0 <= begin < len(text) and text[begin:begin + 4] == "<!--":
-                delimiters.append((begin, begin + 4))
+                cuts.update((begin, begin + 4))
             if 0 <= end - 3 < len(text) and text[end - 3:end] == "-->":
-                delimiters.append((end - 3, end))
-        prefixes = [prefix_pattern.match(line) for line in rows]
+                cuts.update((end - 3, end))
+        for begin, end in equations:
+            cuts.update((begin - base, end - base))
         continuation = [
-            p["quote"]
-            + p["indent"]
-            + (
-                " " * (len(p["marker"]) + len(p["space"]))
-                if p["marker"]
-                else ""
-            )
+            p["quote"] + p["indent"]
+            + (" " * (len(p["marker"]) + len(p["space"]))
+               if p["marker"] else "")
             for p in prefixes
         ]
+        math_word = re.compile(
+            r"\$\$|\$|\\[A-Za-z]+|\\[^\s]|[A-Za-z]+|[0-9]+(?:\.[0-9]+)?|[^\s]"
+        )
         tokens = []
         position = 0
         for row, line in enumerate(rows):
-            for word in WORD.finditer(line, prefixes[row].end()):
-                begin, end = position + word.start(), position + word.end()
-                cursor = begin
-                for marker_start, marker_end in delimiters:
-                    if begin <= marker_start < end:
-                        if cursor < marker_start:
-                            tokens.append((row, cursor, marker_start))
-                        tokens.append((row, marker_start, marker_end))
-                        cursor = marker_end
-                if cursor < end:
-                    tokens.append((row, cursor, end))
+            begin = position + prefixes[row].end()
+            end = position + len(line)
+            boundaries = [begin, *sorted(c for c in cuts if begin < c < end),
+                          end]
+            for left, right in zip(boundaries, boundaries[1:]):
+                in_math = any(a <= base + left < b for a, b in equations)
+                pattern = math_word if in_math else WORD
+                tokens.extend(
+                    (row, match.start(), match.end())
+                    for match in pattern.finditer(text, left, right)
+                )
             position += len(line)
         gaps = {}
         for number, (left, right) in enumerate(zip(tokens, tokens[1:])):
             row, _, end = left
             next_row, start, _ = right
             raw = text[end:start]
-            if not (prose[row] and prose[next_row]):
+            if not (allowed[row] and allowed[next_row]):
                 continue
+            free = any(
+                begin <= base + left[1] and base + start < stop
+                for begin, stop in comments + equations
+            )
             if row == next_row:
                 if raw.strip(" \t"):
                     continue
-            elif (
+            elif not (free and not raw.strip(" \t\r\n")) and (
                 next_row != row + 1
                 or prefixes[next_row]["marker"]
-                or prefixes[next_row].group(0) != continuation[row]
+                or (prefixes[next_row].group(0) != continuation[row]
+                    and not (margins[row] and margins[next_row]))
                 or raw.strip(" \t\r\n")
                 != prefixes[next_row]["quote"].strip(" \t")
             ):
@@ -165,86 +211,52 @@ def align_line_breaks(
         return text, tokens, gaps, continuation
         # }}}
 
-    def lint(text, prose, comment_open):
+    def lint(text):
         if width is None:
-            return text, prose
-        # Each pass fixes a source line, never realigns its words.
+            return text
+        # Reclassify in the full source context after layout changes.
         for _ in range(max(1, len(text.split()))):
+            full_source = current[:start] + text + current[stop:]
+            masked = _mask_html_comments(full_source)
+            classified = classify_lines(masked, filetype, strict=False)
+            rows = text.splitlines(keepends=True)
+            flags = [
+                allowed and not (
+                    preserve_reference_lines and line in reference_lines
+                )
+                for (allowed, _), line in zip(
+                    classified[j1:j1 + len(rows)], rows,
+                )
+            ]
             issues = {}
             offset = 1
-            masked_lines = _mask_html_comments(
-                text, initially_open=comment_open
-            ).splitlines(keepends=True)
-            flags = [
-                allowed
-                and not (preserve_reference_lines and line in reference_lines)
-                for allowed, line in zip(prose, text.splitlines(keepends=True))
-            ]
+            masked_lines = masked[start:start + len(text)].splitlines(
+                keepends=True,
+            )
             for allowed, group in itertools.groupby(
-                zip(flags, masked_lines),
-                key=lambda item: item[0],
+                zip(flags, masked_lines), key=lambda item: item[0],
             ):
                 span = "".join(line for _, line in group)
                 if allowed:
                     for line, message in check_prose(
-                        span,
-                        width,
-                        punctuation_slop,
-                        offset,
+                        span, width, punctuation_slop, offset,
                     ):
                         issues.setdefault(line, message)
                 offset += span.count("\n")
             if not issues:
                 break
             for line in sorted(issues, reverse=True):
-                text = apply_markdown_issue_fix(text, line, issues[line])[0]
-                prose = prose[:line] + [True] + prose[line:]
-        return text, prose
+                full_source = apply_markdown_issue_fix(
+                    full_source, j1 + line, issues[line],
+                )[0]
+            text = full_source[start:len(full_source) - len(current[stop:])]
+        return text
 
     reference_lines = reference.splitlines(keepends=True)
     lines = current.splitlines(keepends=True)
-    reference_masked = _mask_html_comments(reference)
-    current_masked = _mask_html_comments(current)
-    reference_prose = [
-        flag and bool(line.strip())
-        for flag, line in classify_lines(
-            reference_masked, filetype, strict=False
-        )
-    ]
-    current_prose = [
-        flag and bool(line.strip())
-        for flag, line in classify_lines(
-            current_masked, filetype, strict=False
-        )
-    ]
-    # {{{ identify top-level prose margins without changing container structure
-    margins = []
-    for masked in (reference_masked, current_masked):
-        flags = []
-        if filetype == "markdown":
-            for block in markdown_blocks(masked):
-                flags.extend(
-                    [block.kind == "prose"] * len(block.text.splitlines())
-                )
-        else:
-            flags = [False] * len(masked.splitlines())
-        margins.append(flags)
-    reference_margins, current_margins = margins
-    # }}}
-    # {{{ align hidden text too, while keeping it excluded from prose lint
-    reference_comments = _html_comment_spans(reference)
-    current_comments = _html_comment_spans(current)
-    reference_alignment = reference_prose[:]
-    current_alignment = current_prose[:]
-    for text, flags, comments in (
-        (reference, reference_alignment, reference_comments),
-        (current, current_alignment, current_comments),
-    ):
-        for begin, end in comments:
-            first = text.count("\n", 0, begin)
-            last = text.count("\n", 0, max(begin, end - 1))
-            flags[first:last + 1] = [True] * (last - first + 1)
-    # }}}
+    reference_layout = source_layout(reference)
+    current_layout = source_layout(current)
+    current_comments, current_equations = current_layout[:2]
     reference_starts = [0]
     for line in reference_lines:
         reference_starts.append(reference_starts[-1] + len(line))
@@ -264,26 +276,31 @@ def align_line_breaks(
     for hunk, (_, i1, i2, j1, j2) in enumerate(hunks):
         old = tokenize(
             "".join(reference_lines[i1:i2]),
-            reference_alignment[i1:i2],
-            reference_comments, reference_starts[i1],
+            (*reference_layout[:2], *(
+                flags[i1:i2] for flags in reference_layout[2:]
+            )), reference_starts[i1],
         )
         new = tokenize(
             current[starts[j1] : starts[j2]],
-            current_alignment[j1:j2],
-            current_comments, starts[j1],
+            (*current_layout[:2], *(
+                flags[j1:j2] for flags in current_layout[2:]
+            )), starts[j1],
         )
         pairs.append((old, new))
-        for items, words, locations, base, comments in (
+        for items, words, locations, base, layout in (
             (old, old_words, old_locations, reference_starts[i1],
-             reference_comments),
-            (new, new_words, new_locations, starts[j1], current_comments),
+             reference_layout),
+            (new, new_words, new_locations, starts[j1], current_layout),
         ):
             source, tokens, _, _ = items
             for _, a, b in tokens:
                 hidden = any(
-                    begin <= base + a < end for begin, end in comments
+                    begin <= base + a < end for begin, end in layout[0]
                 )
-                words.append(f"{hunk}:{hidden}:{source[a:b]}")
+                math = any(
+                    begin <= base + a < end for begin, end in layout[1]
+                )
+                words.append(f"{hunk}:{hidden}:{math}:{source[a:b]}")
             locations.extend((hunk, number) for number in range(len(tokens)))
     matches = [{} for _ in hunks]
     for operation, a, b, c, d in minimal_opcodes(old_words, new_words):
@@ -296,9 +313,6 @@ def align_line_breaks(
     for hunk, (_, i1, i2, j1, j2) in enumerate(hunks):
         start, stop = starts[j1], starts[j2]
         before = current[start:stop]
-        comment_open = any(
-            begin < start < end for begin, end in current_comments
-        )
         width = None if callable(requested_width) else requested_width
         head = "".join(reference_lines[i1:i2])
         (_, old_tokens, old_gaps, _), (_, tokens, gaps, continuation) = pairs[
@@ -311,6 +325,7 @@ def align_line_breaks(
         old_first = {}
         for number, (row, _, _) in enumerate(old_tokens):
             old_first.setdefault(row, number)
+        matched_old = set(matches[hunk].values())
         leading = []
         seen = set()
         for number, (row, _, _) in enumerate(tokens):
@@ -318,32 +333,30 @@ def align_line_breaks(
                 continue
             seen.add(row)
             old_number = matches[hunk].get(number)
+            if old_number is None and number + 1 < len(tokens):
+                following = matches[hunk].get(number + 1)
+                if (
+                    following is not None and following > 0
+                    and tokens[number + 1][0] == row
+                    and following - 1 not in matched_old
+                    and old_first[old_tokens[following][0]] == following - 1
+                ):
+                    old_number = following - 1
             if old_number is None:
                 continue
             old_row = old_tokens[old_number][0]
             if old_first[old_row] != old_number:
                 continue
             line_start = starts[j1 + row]
-            old_start = reference_starts[i1 + old_row]
             prefix = re.match(r"[ \t]*", lines[j1 + row])[0]
             old_prefix = re.match(
                 r"[ \t]*", reference_lines[i1 + old_row]
             )[0]
-            hidden = all(
-                any(begin <= offset < end for begin, end in comments)
-                for offset, comments in (
-                    (line_start, current_comments),
-                    (old_start, reference_comments),
-                )
-            )
-            plain = (
-                current_prose[j1 + row] and reference_prose[i1 + old_row]
-                and current_margins[j1 + row]
-                and reference_margins[i1 + old_row]
-                and "\t" not in prefix + old_prefix
-                and max(len(prefix), len(old_prefix)) < 4
-            )
-            if prefix != old_prefix and (hidden or plain):
+            if (
+                prefix != old_prefix
+                and current_layout[3][j1 + row]
+                and reference_layout[3][i1 + old_row]
+            ):
                 leading.append((
                     line_start - start,
                     line_start - start + len(prefix),
@@ -373,37 +386,46 @@ def align_line_breaks(
                 output.extend((before[position:begin], space))
                 position = end
             output.append(before[position:])
-            prose = current_prose[j1:j2]
-            for number, space in reversed(list(spaces.items())):
-                row = tokens[number][0]
-                old_breaks = gaps[number].count("\n")
-                new_breaks = space.count("\n")
-                allowed = any(prose[row:row + old_breaks + 1])
-                prose[row:row + old_breaks + 1] = [allowed] * (new_breaks + 1)
-            return "".join(output), prose
+            return "".join(output)
 
         spans = []
         if gaps:
             # {{{ minimal word alignment restores reference whitespace first
+            reverse = {old: new for new, old in matches[hunk].items()}
             old_rows = {}
             for number, (row, _, _) in enumerate(old_tokens):
                 old_rows.setdefault(row, [number, number])[1] = number
-            for number, old_number in matches[hunk].items():
-                if number in gaps and old_number in old_gaps:
+            for number in gaps:
+                old_number = matches[hunk].get(number)
+                if old_number is None and number + 1 in matches[hunk]:
+                    candidate = matches[hunk][number + 1] - 1
+                    if candidate not in reverse:
+                        old_number = candidate
+                if old_number in old_gaps:
                     raw = old_gaps[old_number]
-                    inside_comment = any(
+                    inside_region = any(
                         begin <= start + tokens[number][1]
                         and start + tokens[number + 1][1] < end
-                        for begin, end in current_comments
+                        for begin, end in current_comments + current_equations
                     )
-                    if inside_comment:
+                    if (
+                        number not in matches[hunk] and "\n" in raw
+                        and "\n" not in gaps[number] and not inside_region
+                        and len("".join(
+                            before[:tokens[number][2]].split("\n")[-1].split()
+                        )) < 10
+                    ):
+                        continue
+                    if inside_region or (
+                        current_layout[3][j1 + tokens[number][0]]
+                        and current_layout[3][j1 + tokens[number + 1][0]]
+                    ):
                         whitespace[number] = re.sub(r"\r?\n", ending, raw)
                     else:
                         whitespace[number] = (
                             ending + continuation[tokens[number][0]]
                             if "\n" in raw else raw
                         )
-            reverse = {old: new for new, old in matches[hunk].items()}
             for row, (first, last) in old_rows.items():
                 if (
                     all(number in reverse for number in range(first, last + 1))
@@ -427,7 +449,7 @@ def align_line_breaks(
                     continue
                 if width is not None and len(old_line) > width:
                     continue
-                original_rows = set(render(whitespace)[0].splitlines())
+                original_rows = set(render(whitespace).splitlines())
                 inside_comment = any(
                     begin <= start + tokens[first][1]
                     and start + tokens[last][1] < end
@@ -445,7 +467,7 @@ def align_line_breaks(
                         )
                     elif "\n" in proposed[number]:
                         proposed[number] = " "
-                proposed_rows = render(proposed)[0].splitlines()
+                proposed_rows = render(proposed).splitlines()
                 if old_line not in {line.rstrip() for line in proposed_rows}:
                     continue
                 if any(
@@ -457,21 +479,30 @@ def align_line_breaks(
                     continue
                 whitespace = proposed
             # }}}
-        restored, restored_prose = render(whitespace)
+        restored = render(whitespace)
         if callable(requested_width):
             joined = any(
                 "\n" in raw and "\n" not in whitespace[number]
                 for number, raw in gaps.items()
             )
             width = requested_width(i1, restored, joined)
-        aligned, aligned_prose = lint(restored, restored_prose, comment_open)
-        linted, lint_prose = lint(before, current_prose[j1:j2], comment_open)
+        aligned = lint(restored)
+        linted = lint(before)
         # {{{ count adjustments between retained boundaries for CPB review
+        layouts = []
+        for text in (linted, aligned):
+            layout = source_layout(current[:start] + text + current[stop:])
+            layouts.append((
+                *layout[:2], *(
+                    flags[j1:j1 + len(text.splitlines())]
+                    for flags in layout[2:]
+                ),
+            ))
         _, lint_tokens, lint_gaps, _ = tokenize(
-            linted, lint_prose, _html_comment_spans(linted, comment_open),
+            linted, layouts[0], start,
         )
         _, aligned_tokens, aligned_gaps, _ = tokenize(
-            aligned, aligned_prose, _html_comment_spans(aligned, comment_open),
+            aligned, layouts[1], start,
         )
         moves = inserted = removed = 0
         previous = None

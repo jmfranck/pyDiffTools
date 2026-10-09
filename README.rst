@@ -28,15 +28,18 @@ included are (listed in order of fun/utility):
   their notice appears. Each page shows as many changed hunks as fit in the
   window, with a blank line separating hunks; larger changes are applied
   just like single-break changes.
-  HTML comment contents also participate in diff alignment, including
-  hunks that begin inside a comment. Hidden text is exempt from ordinary
-  prose wrapping, sentence-break, and comment-tag spelling rules. Literal
-  comment delimiters in code or math are preserved.
+  Diff alignment has separate eligibility rules from prose linting.
+  Equations and HTML comment contents participate in alignment, including
+  hunks that begin inside them. Display equations and hidden text remain
+  exempt from prose wrapping and sentence rules. Equation delimiters are
+  matched independently of their contents, and surviving matches on either
+  side of an edit restore whitespace while preserving changed values and
+  TeX commands. Literal delimiters in code are preserved.
   Leading whitespace at matching line starts is restored in top-level
   prose when both margins contain at most three spaces, and inside HTML
-  comments. Container indentation (lists, definitions, and quotations),
-  tabs or four-space code indentation outside comments, and protected
-  blocks retain their current margins.
+  comments and equations. Container indentation (lists, definitions, and
+  quotations), tabs or four-space code indentation outside those spans,
+  and protected blocks retain their current margins.
 
   Continuous pandoc build.
   This works *very well* together

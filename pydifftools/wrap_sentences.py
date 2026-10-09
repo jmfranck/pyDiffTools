@@ -1046,19 +1046,33 @@ def _iter_block_spans(blocks, wrapnumber, line_start=1):
         line += span
 
 
-# also used by: line_alignment.align_line_breaks for comment-aware alignment.
-def _html_comment_spans(content, initially_open=False):
-    """Find comment offsets, excluding literal delimiters in code or math."""
+# also used by: line_alignment.align_line_breaks to separate source structure
+# from prose lint eligibility.
+def _markdown_spans(content, initially_open=False):
+    """Find comments and closed math spans, excluding literal code markers."""
     spans = []
+    equations = []
     start = 0 if initially_open else None
     fence = None
     inline_code = None
     math = None
+    math_start = None
+    indented_code = False
+    previous_blank = True
     offset = 0
-    tokens = re.compile(r"<!--|-->|`+|(?<!\\)\$\$|(?<!\\)\$")
+    tokens = re.compile(r"<!--|-->|`+|\$\$|\$")
     for line in content.splitlines(keepends=True):
         opening = re.match(r"^[ \t]*(`{3,}|~{3,})", line)
         if start is None and inline_code is None and math is None:
+            if fence is None:
+                indented = line.startswith(("    ", "\t"))
+                if indented_code and not indented and line.strip():
+                    indented_code = False
+                if (previous_blank and indented) or indented_code:
+                    indented_code = True
+                    previous_blank = not line.strip()
+                    offset += len(line)
+                    continue
             if fence is not None:
                 if (
                     opening and opening[1][0] == fence[0]
@@ -1073,6 +1087,10 @@ def _html_comment_spans(content, initially_open=False):
                 continue
         for token in tokens.finditer(line):
             value = token[0]
+            if value in ("$", "$$"):
+                preceding = line[:token.start()]
+                if (len(preceding) - len(preceding.rstrip("\\"))) % 2:
+                    continue
             if start is not None:
                 if value == "-->":
                     spans.append((start, offset + token.end()))
@@ -1082,17 +1100,26 @@ def _html_comment_spans(content, initially_open=False):
                     inline_code = None
             elif math is not None:
                 if value == math:
+                    equations.append((math_start, offset + token.end()))
                     math = None
             elif value.startswith("`"):
                 inline_code = value
             elif value in ("$", "$$"):
                 math = value
+                math_start = offset + token.start()
             elif value == "<!--":
                 start = offset + token.start()
         offset += len(line)
+        previous_blank = not line.strip()
     if start is not None:
         spans.append((start, len(content)))
-    return spans
+    return spans, equations
+
+
+# also used by: line_alignment.align_line_breaks for comment-aware alignment.
+def _html_comment_spans(content, initially_open=False):
+    """Find comment offsets, excluding literal delimiters in code or math."""
+    return _markdown_spans(content, initially_open)[0]
 
 
 # also used by: line_alignment.align_line_breaks, which masks complete hunks.

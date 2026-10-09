@@ -1151,6 +1151,54 @@ def test_diff_lint_applies_leading_whitespace_fixes(tmp_path, ref, ending):
     )
 
 
+@pytest.mark.parametrize("ref", [None, "@", "jf_last"])
+@pytest.mark.parametrize("ending", ["\n", "\r\n"])
+def test_diff_lint_restores_equations_and_keeps_numeric_edit(
+    tmp_path, ref, ending,
+):
+    reference = (
+        "The SDE equation:\n"
+        r"$$\tau_c= \frac{4\pi\eta r^3}{3 k_B T}$${#eq:SDE}" + "\n"
+        "The Einstein relation:\n"
+        r"$$\eta = \frac{k_B T}{6\pi D r_{solv}},$$" + "\n"
+        "Taking logarithms yields:\n"
+        r"$$\log_{10}(\tau_c) =" + "\n"
+        r"c+\frac{E_a}{2.3026 RT},$${#eq:arrhenius}" + "\n"
+        "The viscosity is:\n"
+        "$0.51\\ \\mathrm{mPa}\\cdot\\mathrm{s}$\n"
+    )
+    path = committed_source(tmp_path, reference)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "tag", "jf_last"], check=True,
+    )
+    current = reference.replace("$$", "$$\n", 1).replace(
+        r"T}$${#eq:SDE}", "T}\n$${#eq:SDE}",
+    ).replace(
+        r"$$\eta", "$$\n" + r"\eta",
+    ).replace(
+        "},$$", "},\n$$",
+    ).replace(
+        r"$$\log", "$$\n" + r"\log",
+    ).replace(
+        "RT},$$", "RT},\n$$",
+    ).replace("$0.51\\ ", "$0.506\\\n")
+    path.write_bytes(current.replace("\n", ending).encode())
+
+    report = autofix_markdown_file(
+        path, wrapnumber=79, git_index=True, git_ref=ref,
+    )
+
+    assert path.read_bytes() == reference.replace(
+        "0.51", "0.506",
+    ).replace("\n", ending).encode()
+    assert report["fixes"] and report["warnings"] == []
+    assert not any(
+        autofix_markdown_file(
+            path, wrapnumber=79, git_index=True, git_ref=ref,
+        ).values()
+    )
+
+
 def test_comment_text_is_exempt_from_prose_fixes():
     comment = (
         "<!-- A hidden sentence. Another hidden sentence with a long "
