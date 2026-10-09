@@ -160,7 +160,7 @@ included are (listed in order of fun/utility):
   or set a commit as the comparison endpoint. The right-click menu can restore
   the working-directory endpoint. Diff window titles show the equivalent
   arguments, preferring tags, then branch names, then six-character hashes.
-  Run ``pydifft tree --install`` to add the matching ``git tree`` alias.
+  Run ``pydifft --add_to_git tree`` to add the matching ``git tree`` alias.
 - ``pydifft gd`` (or ``git gd`` with the alias installed) reviews unstaged
   changes, like bare ``git diff``.
   ``pydifft gd [git diff args...]`` shows the same Qt review table as the old
@@ -174,12 +174,31 @@ included are (listed in order of fun/utility):
   among the original, difference, and aligned new image. Images with an
   alpha channel are displayed over a checkerboard; when transparency
   changes, an additional red/blue alpha-difference view is included.
-  Run ``pydifft gd --install`` to add the matching ``git gd`` alias to
-  your global git config.
-  ``pydifft gd --add-to-git`` offers the same installation, retaining the
-  exact command of an existing global ``gd`` alias. If none is configured,
-  it installs ``!f() { pydifft gd "$@"; }; f``. Alias installation is shared
-  with ``pd`` and ``tree``.
+  Run ``pydifft --add_to_git gd`` to install the global ``git gd`` alias,
+  retaining the exact command of an existing global ``gd`` alias. If none
+  is configured, it installs ``!f() { pydifft gd "$@"; }; f``.
+  Configure ``difftool.mygvim.cmd`` for the GUI diff tool.
+- ``pydifft --add_to_git gd pd tree mergein`` installs any selected subset
+  of these global Git aliases in one invocation. Installation appears
+  alongside the subcommands in root help; the former per-command
+  ``--install`` and ``--add-to-git`` flags have been removed.
+- ``pydifft mergein BRANCH [--remote REMOTE]`` updates an incoming local
+  branch without switching branches, then merges it into the current
+  branch. Install ``git mergein`` with ``pydifft --add_to_git mergein``.
+  ``git mergein incoming/topic`` runs ``git fetch origin
+  incoming/topic:incoming/topic`` followed by ``git merge --no-ff
+  incoming/topic``. Use ``--remote upstream`` to select another remote;
+  ``origin`` is the default. Fetch failures stop the sequence, local
+  branch updates are not forced, and merge conflicts remain available
+  for normal Git resolution.
+
+  Installing ``mergein`` also installs its Bash completion in the user
+  Bash completion directory (honoring ``BASH_COMPLETION_USER_DIR`` and
+  ``XDG_DATA_HOME``). With standard Git Bash completion enabled,
+  ``git mergein`` suggests cached branches of the selected remote, using
+  bare branch names such as ``incoming/topic``. Completion does not
+  contact the remote; fetch to refresh the suggestions. The ``pydifft``
+  form supports the same suggestions when argcomplete is enabled.
 - `pydifft qmdinit [directory]` scaffolds a new Quarto-style project using
   the bundled templates and example ``project1`` hierarchy, then downloads
   MathJax into ``_template/mathjax`` so the builder can run immediately.
@@ -245,7 +264,7 @@ included are (listed in order of fun/utility):
   The former ``git-latexdiffnocompile.sh`` is a compatibility wrapper for
   ``pydifft pd --no-compile``.
 
-  Run ``pydifft pd --add-to-git`` to install the global ``git pd`` alias.
+  Run ``pydifft --add_to_git pd`` to install the global ``git pd`` alias.
   It accepts Git diff arguments: ``git pd 00ffaa -- filename.md`` compares
   that revision with the working file; bare ``git pd`` compares unstaged
   changes; ``git pd --cached`` compares staged changes; and

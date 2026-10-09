@@ -54,7 +54,7 @@ def git_project(tmp_path, monkeypatch):
 
 
 def test_pd_installs_alias_without_document_arguments(git_project, capsys):
-    command_line.main(["pd", "--add-to-git"])
+    command_line.main(["--add_to_git", "pd"])
     alias = subprocess.run(
         ["git", "config", "--global", "--get", "alias.pd"],
         check=True,
@@ -63,7 +63,7 @@ def test_pd_installs_alias_without_document_arguments(git_project, capsys):
     ).stdout.rstrip("\n")
     assert alias == '!f() { pydifft pd --git "$@"; }; f'
     assert "alias.pd" in capsys.readouterr().out
-    command_line.main(["pd", "--add-to-git"])
+    command_line.main(["--add_to_git", "pd"])
     assert subprocess.run(
         ["git", "config", "--global", "--get-all", "alias.pd"],
         check=True,
@@ -72,8 +72,7 @@ def test_pd_installs_alias_without_document_arguments(git_project, capsys):
     ).stdout.splitlines() == [alias]
 
 
-@pytest.mark.parametrize("flag", ["--install", "--add-to-git"])
-def test_gd_preserves_exact_existing_command(git_project, flag):
+def test_gd_preserves_exact_existing_command(git_project):
     custom = '!f() { printf "custom gd\\n"; pydifft gd "$@"; }; f  '
     subprocess.run(
         ["git", "config", "--global", "alias.gd", custom],
@@ -83,7 +82,7 @@ def test_gd_preserves_exact_existing_command(git_project, flag):
         ["git", "config", "--global", "other.setting", "retain this"],
         check=True,
     )
-    command_line.main(["gd", flag])
+    command_line.main(["--add_to_git", "gd"])
     assert (
         subprocess.run(
             ["git", "config", "--global", "--null", "--get", "alias.gd"],
@@ -105,7 +104,7 @@ def test_gd_preserves_exact_existing_command(git_project, flag):
 
 
 def test_gd_installs_current_default_when_missing(git_project, capsys):
-    command_line.main(["gd", "--add-to-git"])
+    command_line.main(["--add_to_git", "gd"])
     assert (
         subprocess.run(
             ["git", "config", "--global", "--get", "alias.gd"],
@@ -121,9 +120,9 @@ def test_gd_installs_current_default_when_missing(git_project, capsys):
 @pytest.mark.parametrize(
     "args",
     [
-        ["pd", "--add-to-git", "old.md"],
-        ["pd", "--add-to-git", "--no-compile"],
-        ["gd", "--add-to-git", "HEAD"],
+        ["--add_to_git", "pd", "old.md"],
+        ["--add_to_git", "pd", "--no-compile"],
+        ["--add_to_git", "gd", "HEAD"],
         ["pd"],
         ["pd", "old.md"],
     ],
@@ -274,7 +273,7 @@ def test_real_git_alias_pdf(git_project, monkeypatch, mode):
         )
     ):
         pytest.skip("real PDF tools are not on PATH")
-    command_line.main(["pd", "--add-to-git"])
+    command_line.main(["--add_to_git", "pd"])
     baseline = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         check=True,
@@ -345,7 +344,7 @@ def test_real_git_add_delete_rename(git_project, extension, kind):
     source.write_text(content)
     subprocess.run(["git", "add", "documents"], check=True)
     subprocess.run(["git", "commit", "-qm", "Document"], check=True)
-    command_line.main(["pd", "--add-to-git"])
+    command_line.main(["--add_to_git", "pd"])
     if kind == "added":
         source = source.with_name("added" + extension)
         source.write_text(content)
@@ -395,7 +394,7 @@ def test_real_git_no_compile_and_unchanged_file(git_project):
         )
     ):
         pytest.skip("real PDF diff tools are not on PATH")
-    command_line.main(["pd", "--add-to-git"])
+    command_line.main(["--add_to_git", "pd"])
     subprocess.run(
         [
             "git",

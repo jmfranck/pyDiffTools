@@ -41,6 +41,7 @@ packages = [
 
 [tool.setuptools.package-data]
 pydifftools = [
+    "completions/git-mergein",
     "diff-doc.js",
     "xml2xlsx.vbs",
     "comments.css",

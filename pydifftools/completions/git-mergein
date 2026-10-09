@@ -1,0 +1,41 @@
+# Loaded by Git's Bash completion through _completion_loader git-mergein.
+_git_mergein ()
+{
+    local remote=origin branch_seen=0 expect_remote=0 end_options=0
+    local i word ref symref ref_prefix candidate
+    for ((i = __git_cmd_idx + 1; i < cword; i++)); do
+        word=${words[i]}
+        if ((expect_remote)); then
+            remote=$word
+            expect_remote=0
+        elif ((end_options)); then
+            branch_seen=1
+        else
+            case "$word" in
+                --remote) expect_remote=1 ;;
+                --remote=*) remote=${word#--remote=} ;;
+                --) end_options=1 ;;
+                -*) ;;
+                *) branch_seen=1 ;;
+            esac
+        fi
+    done
+    if ((expect_remote)); then
+        __gitcomp_nl "$(__git remote)"
+    elif ((!end_options)) && [[ $cur == --remote=* ]]; then
+        __gitcomp_nl "$(__git remote)" "--remote=" "${cur#--remote=}"
+    elif ((!end_options)) && [[ $cur == -* ]]; then
+        __gitcomp "--remote --help"
+    elif ((!branch_seen)); then
+        ref_prefix="refs/remotes/$remote/"
+        local candidates=
+        while read -r ref symref; do
+            [[ $ref == "$ref_prefix"* && -z $symref ]] || continue
+            candidate=${ref#"$ref_prefix"}
+            [[ $candidate == HEAD ]] && continue
+            candidates+="$candidate"$'\n'
+        done < <(__git for-each-ref --format='%(refname) %(symref)' \
+            -- "$ref_prefix" 2>/dev/null)
+        __gitcomp_nl "$candidates"
+    fi
+}
