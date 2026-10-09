@@ -1082,6 +1082,75 @@ def test_diff_lint_selects_index_or_revision_for_nested_file(tmp_path, ref):
     ).stdout == latest
 
 
+@pytest.mark.parametrize("ref", [None, "@", "jf_last"])
+@pytest.mark.parametrize("ending", ["\n", "\r\n"])
+def test_diff_lint_restores_html_comment_layout(tmp_path, ref, ending):
+    reference = (
+        "Before unchanged.\n"
+        "<!-- this section seems to have been moved from after paragraph\n"
+        "that ends $w_1 \\propto d_i$ -->\n"
+        "These are much longer/slower than the previous result.\n"
+        "<!--\n"
+        "At 263 K (1000/T = 1000/3.80228),\n"
+        "(1) small RM aggregates ($w_0=3$),\n"
+        "observed $\\tau_c\\approx 6.2820\\;\\mathrm{ns}="
+        "10^{-8.201}\\;\\text{s}$,\n"
+        "(2) large RM aggregates ($w_0=20$),\n"
+        "observed $\\tau_c\\approx 164.51\\;\\mathrm{ps}="
+        "10^{-9.7838}\\;\\text{s}$.\n"
+        "-->\n"
+        "Thus, the observed signal comes almost entirely\n"
+        "from the internal rotation of the spin probe.\n"
+    )
+    path = committed_source(tmp_path, reference)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "tag", "jf_last"], check=True
+    )
+    current = reference.replace(
+        "moved from after paragraph\nthat ends",
+        "moved\nfrom after paragraph that ends",
+    ).replace(
+        "(1) small RM aggregates ($w_0=3$),\nobserved",
+        "(1) small RM aggregates ($w_0=3$), observed",
+    ).replace(
+        "\\approx 6.2820", "\\approx\n6.2820"
+    ).replace("-->\nThus", "--> Thus")
+    path.write_bytes(current.replace("\n", ending).encode())
+
+    report = autofix_markdown_file(
+        path, wrapnumber=79, git_index=True, git_ref=ref,
+    )
+
+    assert path.read_bytes() == reference.replace("\n", ending).encode()
+    assert report["fixes"] and report["warnings"] == []
+    assert not any(
+        autofix_markdown_file(
+            path, wrapnumber=79, git_index=True, git_ref=ref,
+        ).values()
+    )
+
+
+def test_comment_text_is_exempt_from_prose_fixes():
+    comment = (
+        "<!-- A hidden sentence. Another hidden sentence with a long "
+        "description, and a dependent phrase. \n<JFcomm> -->\n"
+    )
+    assert markdown_lint_issues_from_text(comment, wrapnumber=25) == []
+
+
+def test_new_html_comment_keeps_its_source_layout(tmp_path):
+    reference = "Visible prose.\n"
+    path = committed_source(tmp_path, reference)
+    current = reference + (
+        "<!-- New hidden sentence. Another sentence with many extra words. \n"
+        "<JFcomm> is just a literal example inside this comment. -->\n"
+    )
+    path.write_text(current)
+    report = autofix_markdown_file(path, wrapnumber=25, git_index=True)
+    assert path.read_text() == current
+    assert not any(report.values())
+
+
 def test_diff_lint_reads_updated_index_on_next_build(tmp_path):
     first = "Water inside\nsmall pools stays liquid.\n"
     second = "Water inside small pools\nstays liquid.\n"

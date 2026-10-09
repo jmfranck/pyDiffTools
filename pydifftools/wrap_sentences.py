@@ -1046,16 +1046,74 @@ def _iter_block_spans(blocks, wrapnumber, line_start=1):
         line += span
 
 
+# also used by: line_alignment.align_line_breaks for comment-aware alignment.
+def _html_comment_spans(content, initially_open=False):
+    """Find comment offsets, excluding literal delimiters in code or math."""
+    spans = []
+    start = 0 if initially_open else None
+    fence = None
+    inline_code = None
+    math = None
+    offset = 0
+    tokens = re.compile(r"<!--|-->|`+|(?<!\\)\$\$|(?<!\\)\$")
+    for line in content.splitlines(keepends=True):
+        opening = re.match(r"^[ \t]*(`{3,}|~{3,})", line)
+        if start is None and inline_code is None and math is None:
+            if fence is not None:
+                if (
+                    opening and opening[1][0] == fence[0]
+                    and len(opening[1]) >= len(fence)
+                ):
+                    fence = None
+                offset += len(line)
+                continue
+            if opening:
+                fence = opening[1]
+                offset += len(line)
+                continue
+        for token in tokens.finditer(line):
+            value = token[0]
+            if start is not None:
+                if value == "-->":
+                    spans.append((start, offset + token.end()))
+                    start = None
+            elif inline_code is not None:
+                if value == inline_code:
+                    inline_code = None
+            elif math is not None:
+                if value == math:
+                    math = None
+            elif value.startswith("`"):
+                inline_code = value
+            elif value in ("$", "$$"):
+                math = value
+            elif value == "<!--":
+                start = offset + token.start()
+        offset += len(line)
+    if start is not None:
+        spans.append((start, len(content)))
+    return spans
+
+
+# also used by: line_alignment.align_line_breaks, which masks complete hunks.
+def _mask_html_comments(content, initially_open=False):
+    """Hide comment characters while preserving offsets and line endings."""
+    masked = list(content)
+    for start, stop in _html_comment_spans(content, initially_open):
+        masked[start:stop] = [
+            char if char in "\r\n" else " " for char in content[start:stop]
+        ]
+    return "".join(masked)
+
+
 def markdown_lint_issues_from_text(
     content, wrapnumber=45, punctuation_slop=20
 ):
     """Return Markdown writing issues, including unfinished source spans."""
-    def mask_comment(match):
-        return "".join("\n" if char == "\n" else " " for char in match[0])
-
-    prose_content = re.sub(
-        r"<!--.*?(?:-->|\Z)", mask_comment, content, flags=re.DOTALL
-    )
+    masked_content = _mask_html_comments(content)
+    comment_spans = _html_comment_spans(content)
+    masked_lines = masked_content.splitlines()
+    prose_content = masked_content
     # trailing spaces are reported separately below, and a double space
     # (a hard line break) must not look like a sentence ending mid-line
     prose_content = re.sub(r"[ \t]+$", "", prose_content, flags=re.M)
@@ -1073,20 +1131,26 @@ def markdown_lint_issues_from_text(
     # {{{ report single trailing spaces, misspelled comment tags and
     # detached crossref markers
     fence = None
-    for number, line in enumerate(content.splitlines(), start=1):
+    offset = 0
+    for number, raw_line in enumerate(content.splitlines(keepends=True), 1):
+        line = raw_line.rstrip("\r\n")
+        last_character = offset + len(line) - 1
+        offset += len(raw_line)
         opening = re.match(r"[ \t]*(\x60{3,}|~{3,})", line)
         if opening and (fence is None or opening[1].startswith(fence)):
             fence = None if fence else opening[1]
             continue
         if fence is not None:
             continue
-        if re.search(r"(?<! ) $", line):
+        if re.search(r"(?<! ) $", line) and not any(
+            start <= last_character < stop for start, stop in comment_spans
+        ):
             issues.append((
                 number,
                 "trailing space: remove the single space at the end of this "
                 "line (two spaces are a deliberate hard line break)",
             ))
-        misspelled = MISSPELLED_COMMENT_TAG.search(line)
+        misspelled = MISSPELLED_COMMENT_TAG.search(masked_lines[number - 1])
         if misspelled:
             issues.append((
                 number,
@@ -1313,7 +1377,9 @@ def apply_markdown_issue_fix(content, line_number, message):
             "width. I moved the extra words onto new lines."
         )
     elif message.startswith("sentence ends mid-line"):
-        boundary = SENTENCE_BOUNDARY.search(old_line)
+        boundary = SENTENCE_BOUNDARY.search(
+            _mask_html_comments(content).splitlines()[index]
+        )
         if boundary is None or boundary.group(2) != " ":
             raise ValueError(
                 "Cannot find the sentence break on Markdown line "

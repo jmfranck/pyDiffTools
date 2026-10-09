@@ -28,6 +28,10 @@ included are (listed in order of fun/utility):
   their notice appears. Each page shows as many changed hunks as fit in the
   window, with a blank line separating hunks; larger changes are applied
   just like single-break changes.
+  HTML comment contents also participate in diff alignment, including
+  hunks that begin inside a comment. Hidden text is exempt from ordinary
+  prose wrapping, sentence-break, and comment-tag spelling rules. Literal
+  comment delimiters in code or math are preserved.
 
   Continuous pandoc build.
   This works *very well* together
