@@ -17,6 +17,18 @@ included are (listed in order of fun/utility):
   `filename.md`, build the result,
   and displays it in your browser. 
 
+  Source diff linting minimizes line-break changes against the Git index
+  (staging area) by default, matching plain ``git diff``. Use
+  ``pydifft cpb filename.md --diff @`` to compare against HEAD, or
+  ``--diff jf_last`` to compare against a tag, branch, or commit hash.
+  The selected baseline is read again on each build. An unreadable explicit
+  baseline stops the build; an unavailable index baseline, such as for an
+  untracked file, falls back to ordinary source linting.
+  All diff-minimizing line-break fixes are applied automatically before
+  their notice appears. Each page shows as many changed hunks as fit in the
+  window, with a blank line separating hunks; larger changes are applied
+  just like single-break changes.
+
   Continuous pandoc build.
   This works *very well* together
   with the `g/` vim command

@@ -75,6 +75,8 @@ def minimal_opcodes(before, after):
     return result
 
 
+# also used by: match_spaces.run, wrap_sentences.autofix_markdown_file,
+# and tests/test_line_alignment.py.
 def align_line_breaks(
     reference,
     current,
@@ -87,7 +89,7 @@ def align_line_breaks(
 
     Align words with minimal diff, reuse whitespace after matching words,
     then preserve complete reference lines and enforce line linting. CPB
-    reviews multiple adjustments; wmatch applies the proposed layout.
+    and wmatch apply the aligned layout automatically.
     Width can be a number or a function choosing a limit after restoration.
     """
     from .wrap_sentences import (

@@ -1342,38 +1342,55 @@ def apply_markdown_issue_fix(content, line_number, message):
 
 
 def autofix_markdown_file(
-    filename, wrapnumber=55, punctuation_slop=20, git_head=False
+    filename, wrapnumber=55, punctuation_slop=20, git_head=False,
+    git_ref=None, git_index=False,
 ):
     """Apply safe source line breaks and report unfinished source spans.
 
-    With `git_head`, line breaks in the hunks that differ from the file's
-    git HEAD version are first placed to keep that diff small (see
-    "layout" in the returned report for hunks that would need more than
-    one line break moved).
+    With `git_index` or `git_head`, use the index or HEAD as the baseline.
+    An explicit `git_ref` enables alignment and overrides both flags.
+    All line-break alignments are applied automatically to keep the diff
+    small while enforcing the source wrapping rules.
     """
     with open(filename, encoding="utf-8", newline="") as fp:
         content = fp.read()
     fixes = []
-    layout = []
     baseline = None
-    if git_head:
+    if git_ref is not None or git_index or git_head:
+        # {{{ read the chosen Git baseline before making source fixes
         directory, basename = os.path.split(os.path.abspath(filename))
+        revision = git_ref if git_ref is not None else (
+            "" if git_index else "HEAD"
+        )
+        baseline_label = "Git index" if revision == "" else f"git {revision}"
+        baseline_error = (
+            f"Cannot read diff-lint baseline {git_ref!r} for {filename}. "
+            "Check that the ref exists and contains this file."
+        )
+        if git_ref == "":
+            raise RuntimeError(baseline_error)
         try:
             with subprocess.Popen(
-                ["git", "-C", directory, "show", "HEAD:./" + basename],
+                ["git", "-C", directory, "show", "--end-of-options",
+                 revision + ":./" + basename],
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
             ) as shown:
-                output = shown.communicate()[0]
+                output, stderr = shown.communicate()
             if shown.returncode == 0:
                 baseline = output.decode("utf-8")
-        except FileNotFoundError:
-            # git is not installed
-            pass
+            elif git_ref is not None:
+                raise RuntimeError(
+                    baseline_error + "\n" + stderr.decode("utf-8", "replace")
+                )
+        except (OSError, UnicodeDecodeError) as exc:
+            if git_ref is not None:
+                raise RuntimeError(baseline_error + f"\n{exc}") from exc
+        # }}}
     if baseline is not None:
         from .line_alignment import align_line_breaks
 
-        # {{{ apply single adjustments and report larger shared alignments
+        # {{{ apply all shared alignments and report the changes made
         results = align_line_breaks(
             baseline, content, width=wrapnumber,
             punctuation_slop=punctuation_slop,
@@ -1383,32 +1400,26 @@ def autofix_markdown_file(
         for result in results:
             line = result["line"] + shift
             moves = result["moves"]
-            chosen = result["aligned"] if moves == 1 else result["linted"]
+            chosen = result["aligned"]
             if chosen != result["before"]:
                 reasons = []
-                if result["linted"] != result["before"]:
+                if not moves and result["linted"] != result["before"]:
                     reasons.append(
                         "One or more lines broke the source wrapping rules. "
                         "I moved trailing phrases or extra words to new "
                         "lines and started sentences on new lines."
                     )
-                if moves == 1:
+                if moves:
                     reasons.append(
-                        "One or more edits moved a line break away from "
-                        "where git HEAD has it. I put those breaks back so "
-                        "the unchanged lines stay unchanged."
+                        "One or more edits moved line breaks away from "
+                        f"where {baseline_label} has them. "
+                        "I put those breaks back to minimize the diff, "
+                        "while enforcing the source wrapping rules."
                     )
                 fixes.append({
                     "line": line, "reason": " ".join(reasons),
                     "before": result["before"].rstrip("\r\n"),
                     "after": chosen.rstrip("\r\n"),
-                })
-            if moves > 1:
-                layout.append({
-                    "line": line, "moves": moves,
-                    "head": result["head"].rstrip("\r\n"),
-                    "current": chosen.rstrip("\r\n"),
-                    "suggested": result["aligned"].rstrip("\r\n"),
                 })
             updates.append((result["start"], result["stop"], chosen))
             shift += chosen.count("\n") - result["before"].count("\n")
@@ -1462,7 +1473,7 @@ def autofix_markdown_file(
     return {
         "fixes": fixes,
         "warnings": unclosed_markdown_spans(content),
-        "layout": layout,
+        "layout": [],
     }
 
 

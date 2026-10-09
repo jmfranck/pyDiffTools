@@ -728,10 +728,7 @@ def test_appended_words_restore_head_lines_and_stay_within_width(tmp_path):
     report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
 
     fixed = path.read_text()
-    (notice,) = report["layout"]
-    assert notice["moves"] == 2
-    fixed = fixed.replace(notice["current"], notice["suggested"], 1)
-    path.write_text(fixed)
+    assert report["fixes"] and report["layout"] == []
     assert markdown_lint_issues_from_text(fixed, 79) == []
     # the HEAD line stays intact and the added words get one new line
     assert (
@@ -795,7 +792,7 @@ def test_joined_head_lines_below_width_restore_the_deleted_break(tmp_path):
     assert "put those breaks back" in report["fixes"][0]["reason"]
 
 
-def test_two_deleted_head_breaks_are_reported_without_rewriting(tmp_path):
+def test_two_deleted_head_breaks_are_restored_automatically(tmp_path):
     head = "Water inside\nsmall pools\nstays liquid.\n"
     joined = head.replace("\n", " ").rstrip() + "\n"
     path = committed_source(tmp_path, head)
@@ -803,12 +800,11 @@ def test_two_deleted_head_breaks_are_reported_without_rewriting(tmp_path):
 
     report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
 
-    assert path.read_text() == joined
-    assert report["fixes"] == []
-    (notice,) = report["layout"]
-    assert notice["moves"] == 2
-    assert notice["current"] == joined.rstrip()
-    assert notice["suggested"] == head.rstrip()
+    assert path.read_text() == head
+    assert report["layout"] == []
+    (fix,) = report["fixes"]
+    assert fix["before"] == joined.rstrip()
+    assert fix["after"] == head.rstrip()
 
 
 @pytest.mark.parametrize("dimensions_already_separate", [False, True])
@@ -845,17 +841,12 @@ def test_rm_esr_restores_full_head_lines_in_rewritten_sentence(
 
     report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
 
-    assert path.read_text() == edited
-    assert report["fixes"] == []
-    (notice,) = report["layout"]
-    assert notice["moves"] == (2 if dimensions_already_separate else 3)
     expected = edited.replace(
         "the ESR measurements presented",
         "the\nESR measurements\npresented",
     ).replace("tube (1.50", "tube\n(1.50")
-    assert edited.replace(
-        notice["current"], notice["suggested"], 1
-    ) == expected
+    assert path.read_text() == expected
+    assert report["fixes"] and report["layout"] == []
     from pydifftools.match_spaces import run
 
     reference = tmp_path / "reference.md"
@@ -864,8 +855,7 @@ def test_rm_esr_restores_full_head_lines_in_rewritten_sentence(
     matched.write_text(edited)
     run([str(reference), str(matched)])
     assert matched.read_text() == expected
-    # Applying the complete suggestion preserves both unchanged HEAD lines.
-    path.write_text(expected)
+    # Automatic alignment preserves both unchanged HEAD lines.
     assert numstat(path) == (8, 8)
 
 
@@ -876,13 +866,14 @@ def test_embedded_head_line_restores_both_boundaries_together(tmp_path):
 
     report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
 
-    assert path.read_text() == edited
-    assert report["fixes"] == []
-    (notice,) = report["layout"]
-    assert notice["moves"] == 2
-    assert notice["suggested"] == (
+    expected = (
         "Changed before\nESR measurements\nchanged after."
     )
+    assert path.read_text() == expected + "\n"
+    assert report["layout"] == []
+    (fix,) = report["fixes"]
+    assert fix["before"] == edited.rstrip()
+    assert fix["after"] == expected
 
 
 @pytest.mark.parametrize("count", [1, 5, 30])
@@ -909,16 +900,9 @@ def test_cpb_and_wmatch_restore_scattered_reference_lines(tmp_path, count):
 
     report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
 
-    assert path.read_text() == current
-    assert report["fixes"] == []
-    assert len(report["layout"]) == count
-    proposed = current
-    for notice in report["layout"]:
-        assert notice["moves"] == 2
-        proposed = proposed.replace(
-            notice["current"], notice["suggested"], 1
-        )
-    assert proposed == expected
+    assert path.read_text() == expected
+    assert len(report["fixes"]) == count
+    assert report["layout"] == []
     reference = tmp_path / "reference.md"
     reference.write_text(head)
     run([str(reference), str(path)])
@@ -930,7 +914,7 @@ def test_cpb_and_wmatch_restore_scattered_reference_lines(tmp_path, count):
     assert path.read_text() == expected
 
 
-def test_two_moved_line_breaks_in_one_hunk_are_only_reported(tmp_path):
+def test_two_moved_line_breaks_in_one_hunk_are_fixed(tmp_path):
     path = committed_source(tmp_path, HEAD_PARAGRAPH)
     edited = HEAD_PARAGRAPH.replace(
         "amplitudes of the\nspectral lines",
@@ -943,11 +927,11 @@ def test_two_moved_line_breaks_in_one_hunk_are_only_reported(tmp_path):
 
     report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
 
-    assert path.read_text() == edited
-    ((notice),) = report["layout"]
-    assert notice["moves"] == 2
-    assert notice["line"] == 3
-    assert notice["suggested"] + "\n" in HEAD_PARAGRAPH
+    assert path.read_text() == HEAD_PARAGRAPH
+    assert report["layout"] == []
+    (fix,) = report["fixes"]
+    assert fix["line"] == 3
+    assert fix["after"] + "\n" in HEAD_PARAGRAPH
 
 
 def test_removed_words_keep_their_line_break(tmp_path):
@@ -1033,9 +1017,201 @@ def test_rewritten_sentence_reuses_whitespace_between_matched_words(tmp_path):
     )
 
 
+@pytest.mark.parametrize("ref", [None, "@", "jf_last", "baseline", "hash"])
+def test_diff_lint_selects_index_or_revision_for_nested_file(tmp_path, ref):
+    head = "Water inside\nsmall pools\nstays liquid.\n"
+    latest = "Water inside small\npools stays\nliquid.\n"
+    staged = "Water\ninside small pools\nstays liquid.\n"
+    committed_source(tmp_path, head)
+    directory = tmp_path / "nested folder"
+    directory.mkdir()
+    path = directory / "source notes.md"
+    path.write_text(head)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "."], check=True
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "-c", "user.name=t",
+         "-c", "user.email=t@example.org", "commit", "-qm", "nested"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "tag", "jf_last"], check=True
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "branch", "baseline"], check=True
+    )
+    if ref == "hash":
+        ref = subprocess.run(
+            ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+    path.write_text(latest)
+    subprocess.run(
+        ["git", "-C", str(directory), "add", path.name], check=True
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "-c", "user.name=t",
+         "-c", "user.email=t@example.org", "commit", "-qm", "new HEAD"],
+        check=True,
+    )
+    path.write_text(staged)
+    subprocess.run(
+        ["git", "-C", str(directory), "add", path.name], check=True
+    )
+    path.write_text("Water inside small pools stays liquid.\n")
+
+    report = autofix_markdown_file(
+        path, wrapnumber=79, git_index=True, git_ref=ref,
+        # Explicit refs must also override legacy HEAD selection.
+        git_head=True,
+    )
+
+    expected = staged if ref is None else (latest if ref == "@" else head)
+    label = "Git index" if ref is None else f"git {ref}"
+    assert path.read_text() == expected
+    assert label in report["fixes"][0]["reason"]
+    assert report["layout"] == []
+    assert subprocess.run(
+        ["git", "-C", str(directory), "show", ":./" + path.name],
+        capture_output=True, text=True, check=True,
+    ).stdout == staged
+    assert subprocess.run(
+        ["git", "-C", str(directory), "show", "HEAD:./" + path.name],
+        capture_output=True, text=True, check=True,
+    ).stdout == latest
+
+
+def test_diff_lint_reads_updated_index_on_next_build(tmp_path):
+    first = "Water inside\nsmall pools stays liquid.\n"
+    second = "Water inside small pools\nstays liquid.\n"
+    path = committed_source(tmp_path, first)
+    for baseline in (first, second):
+        path.write_text(baseline)
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", path.name], check=True
+        )
+        path.write_text("Water inside small pools stays liquid.\n")
+        autofix_markdown_file(path, wrapnumber=79, git_index=True)
+        assert path.read_text() == baseline
+
+
+@pytest.mark.parametrize("baseline", ["index", "missing-ref", "@", ""])
+@pytest.mark.parametrize("in_repo", [False, True])
+def test_diff_lint_unavailable_baseline_policy(tmp_path, baseline, in_repo):
+    if in_repo:
+        committed_source(tmp_path, "Committed source.\n")
+    path = tmp_path / "untracked.md"
+    original = "Water stays liquid. \n"
+    path.write_text(original)
+    if baseline == "index":
+        report = autofix_markdown_file(path, git_index=True)
+        assert path.read_text() == "Water stays liquid.\n"
+        assert report["fixes"] and not report["layout"]
+    else:
+        with pytest.raises(RuntimeError, match="diff-lint baseline") as error:
+            autofix_markdown_file(path, git_index=True, git_ref=baseline)
+        assert repr(baseline) in str(error.value)
+        assert str(path) in str(error.value)
+        assert path.read_text() == original
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_diff_lint_without_git(monkeypatch, tmp_path, explicit):
+    from pydifftools import wrap_sentences
+
+    path = tmp_path / "source.md"
+    path.write_text("Water stays liquid. \n")
+
+    def missing_git(*args, **kwargs):
+        raise FileNotFoundError("git is unavailable")
+
+    monkeypatch.setattr(wrap_sentences.subprocess, "Popen", missing_git)
+    if explicit:
+        with pytest.raises(RuntimeError, match="git is unavailable"):
+            autofix_markdown_file(path, git_ref="@")
+        assert path.read_text() == "Water stays liquid. \n"
+    else:
+        autofix_markdown_file(path, git_index=True)
+        assert path.read_text() == "Water stays liquid.\n"
+
+
+def test_qt_diff_fixes_fill_pages_with_double_line_breaks(tmp_path):
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication, QDialog, QPushButton
+    from PySide6.QtWidgets import QLabel, QTextEdit
+
+    from pydifftools.continuous import show_markdown_fix_dialog
+
+    app = QApplication.instance() or QApplication([])
+    count = 60
+    head = "\n\n".join(
+        f"Former intro {j}\nStable component {j}\nformer outro {j}."
+        for j in range(count)
+    ) + "\n"
+    current = "\n\n".join(
+        f"Changed intro {j} Stable component {j} changed outro {j}."
+        for j in range(count)
+    ) + "\n"
+    path = committed_source(tmp_path, head)
+    path.write_text(current)
+    report = autofix_markdown_file(path, wrapnumber=79, git_index=True)
+    expected = "\n\n".join(
+        f"Changed intro {j}\nStable component {j}\nchanged outro {j}."
+        for j in range(count)
+    ) + "\n"
+    # Every hunk must already be applied before the notice opens.
+    assert path.read_text() == expected
+    assert len(report["fixes"]) == count
+    pages = []
+
+    def inspect():
+        dialog = next(
+            widget for widget in app.topLevelWidgets()
+            if isinstance(widget, QDialog) and widget.isVisible()
+        )
+        preview = dialog.findChild(QTextEdit)
+        pages.append({
+            "text": preview.toPlainText(),
+            "heading": dialog.findChildren(QLabel)[0].text(),
+            "details": dialog.findChildren(QLabel)[1].text(),
+            "scroll": preview.verticalScrollBar().maximum(),
+            "spare": (
+                preview.viewport().height()
+                - preview.document().size().height()
+            ),
+            "row_height": (
+                preview.document().firstBlock().layout().lineAt(0).height()
+            ),
+        })
+        button = dialog.findChild(QPushButton)
+        if button.text() == "Next":
+            QTimer.singleShot(0, inspect)
+        button.click()
+
+    QTimer.singleShot(0, inspect)
+    show_markdown_fix_dialog(report)
+
+    assert 1 < len(pages) < count
+    assert all(len(page["text"].split("\n\n")) > 1 for page in pages[:-1])
+    assert all(page["scroll"] == 0 for page in pages)
+    # Each next hunk would add one original line plus its blank separator.
+    assert all(page["spare"] < 2 * page["row_height"] for page in pages[:-1])
+    assert all("automatically" in page["heading"] for page in pages)
+    assert all("Git index" in page["details"] for page in pages)
+    assert [
+        int(number) for page in pages
+        for number in re.findall(r"Stable component (\d+)", page["text"])
+    ] == list(range(count))
+    assert not any(
+        autofix_markdown_file(path, wrapnumber=79, git_index=True).values()
+    )
+
+
 @pytest.mark.parametrize("deleted_breaks", [False, True])
-def test_qt_layout_notice_marks_suggestions_on_original_source(
-    tmp_path, deleted_breaks
+@pytest.mark.parametrize("baseline", ["HEAD", "index", "jf_last"])
+def test_qt_diff_fix_notice_marks_applied_changes_on_original_source(
+    tmp_path, deleted_breaks, baseline
 ):
     pytest.importorskip("PySide6")
     from PySide6.QtCore import QTimer
@@ -1050,6 +1226,9 @@ def test_qt_layout_notice_marks_suggestions_on_original_source(
         if deleted_breaks else HEAD_PARAGRAPH
     )
     path = committed_source(tmp_path, head_text)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "tag", "jf_last"], check=True
+    )
     edited = (
         head_text.replace("\n", " ").rstrip() + "\n"
         if deleted_breaks else
@@ -1061,7 +1240,11 @@ def test_qt_layout_notice_marks_suggestions_on_original_source(
         )
     )
     path.write_text(edited)
-    report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
+    report = autofix_markdown_file(
+        path, wrapnumber=79, git_head=True,
+        git_index=baseline == "index",
+        git_ref="jf_last" if baseline == "jf_last" else None,
+    )
     seen = {}
 
     def inspect():
@@ -1071,17 +1254,23 @@ def test_qt_layout_notice_marks_suggestions_on_original_source(
             if isinstance(widget, QDialog) and widget.isVisible()
         )
         seen["heading"] = dialog.findChildren(QLabel)[0].text()
+        seen["details"] = dialog.findChildren(QLabel)[1].text()
         seen["preview"] = dialog.findChild(QTextEdit).toPlainText()
         dialog.findChild(QPushButton).click()
 
     QTimer.singleShot(0, inspect)
     show_markdown_fix_dialog(report)
 
-    assert "differ from git HEAD in 2 places" in seen["heading"]
+    label = "Git index" if baseline == "index" else f"git {baseline}"
+    assert "fixed this source hunk automatically" in seen["heading"]
+    assert label in seen["details"]
+    assert "minimize the diff" in seen["details"]
+    assert "left them" not in seen["details"]
+    assert path.read_text() == head_text
     original = "\n".join(
         row[7:] for row in seen["preview"].splitlines()
     ).replace("↳×", "").replace("↳", "")
-    assert original == report["layout"][0]["current"]
+    assert original == report["fixes"][0]["before"]
     assert seen["preview"].count("↳") == (2 if deleted_breaks else 3)
     if deleted_breaks:
         assert "Water inside↳ small pools↳ stays liquid." in seen["preview"]
