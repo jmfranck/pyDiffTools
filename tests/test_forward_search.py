@@ -1,3 +1,4 @@
+import io
 import queue
 import socket
 import threading
@@ -236,6 +237,7 @@ def test_qmdb_port_binding_failure_prevents_build_and_browser(
     monkeypatch.setattr(
         fast_build, "QMDB_FORWARD_SEARCH_PORT", owner.getsockname()[1]
     )
+    monkeypatch.setattr(fast_build, "QMDB_PORT_ATTEMPTS", 1)
     monkeypatch.setattr(
         fast_build,
         "BrowserReloader",
@@ -337,3 +339,132 @@ def test_qmdb_closes_listener_observer_http_server_and_browser(
     assert httpd.shutdown_calls == 1
     assert httpd.close_calls == 1
     assert reloader.browser.quit_calls == 1
+
+
+def test_mfs_delivers_to_every_qmdb_session(monkeypatch, tmp_path):
+    first = start_listener()
+    base = first[0].getsockname()[1]
+    try:
+        second = start_listener((forward_search.FORWARD_SEARCH_HOST, base + 1))
+    except RuntimeError:
+        stop_listener(first[0], first[1], first[3])
+        pytest.skip("neighboring test port is in use")
+    monkeypatch.setattr(
+        command_line, "FORWARD_SEARCH_PORT", available_address()[1]
+    )
+    monkeypatch.setattr(command_line, "QMDB_FORWARD_SEARCH_PORT", base)
+    monkeypatch.setattr(command_line, "QMDB_PORT_ATTEMPTS", 2)
+    monkeypatch.setattr(
+        command_line.os,
+        "fork",
+        lambda: pytest.fail("mfs must not fork when qmdb acknowledges"),
+    )
+    monkeypatch.chdir(tmp_path)
+    try:
+        command_line.mfs("needle")
+        assert first[2].get(timeout=1) == "needle"
+        assert second[2].get(timeout=1) == "needle"
+    finally:
+        for server, stop_event, _queue, thread in (first, second):
+            stop_listener(server, stop_event, thread)
+
+
+def test_second_qmdb_takes_next_ports_and_accepts_rebuild(
+    monkeypatch, tmp_path
+):
+    owner = forward_search.bind_forward_search_server(
+        (forward_search.FORWARD_SEARCH_HOST, 0), "existing qmdb"
+    )
+    base = owner.getsockname()[1]
+    built = threading.Event()
+    build_calls = []
+    http_ports = []
+    handlers = []
+    urls = []
+    httpd = FakeHttpServer()
+
+    class Machine:
+        nodes = {"doc.qmd": object()}
+
+        def build(self, **kwargs):
+            build_calls.append(kwargs)
+            if "rerun_cells" in kwargs:
+                built.set()
+
+    def fake_http_server(address, handler):
+        http_ports.append(address[1])
+        if len(http_ports) == 1:
+            raise OSError(fast_build.errno.EADDRINUSE, "in use")
+        handlers.append(handler)
+        return httpd
+
+    class Reloader:
+        browser = None
+
+        def __init__(self, url):
+            urls.append(url)
+
+        def refresh(self):
+            return
+
+        def is_alive(self):
+            # Exercise the rebuild endpoint before the session closes.
+            handler = handlers[0].__new__(handlers[0])
+            body = b'{"src": "doc.qmd", "idx": 2}'
+            handler.path = fast_build.RERUN_ENDPOINT
+            handler.headers = {
+                "Origin": "http://localhost:8001",
+                "Host": "localhost:8001",
+                "Content-Length": str(len(body)),
+            }
+            handler.rfile = io.BytesIO(body)
+            responses = []
+            handler.send_response = responses.append
+            handler.end_headers = lambda: None
+            handler.do_POST()
+            assert responses == [202]
+            assert built.wait(timeout=2)
+            return False
+
+    class Observer:
+        def schedule(self, *_args, **_kwargs):
+            return
+
+        def start(self):
+            return
+
+        def stop(self):
+            return
+
+        def join(self):
+            return
+
+    monkeypatch.setattr(
+        fast_build.RenderNotebook,
+        "from_project",
+        classmethod(lambda cls, **_k: Machine()),
+    )
+    monkeypatch.setattr(fast_build, "load_rendered_files", lambda: [])
+    monkeypatch.setattr(fast_build, "ThreadingHTTPServer", fake_http_server)
+    monkeypatch.setattr(fast_build, "_serve_forever", lambda _httpd: None)
+    monkeypatch.setattr(fast_build, "BrowserReloader", Reloader)
+    monkeypatch.setattr(fast_build, "Observer", Observer)
+    monkeypatch.setattr(fast_build, "QMDB_FORWARD_SEARCH_PORT", base)
+    monkeypatch.setattr(fast_build, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(fast_build, "DISPLAY_DIR", tmp_path / "_display")
+    monkeypatch.setattr(fast_build.time, "sleep", lambda _seconds: None)
+
+    try:
+        fast_build.watch_and_serve()
+    finally:
+        owner.close()
+
+    assert http_ports == [8000, 8001]
+    assert urls == ["http://localhost:8001/"]
+    # The fallback forward-search port was released on shutdown.
+    forward_search.bind_forward_search_server(
+        (forward_search.FORWARD_SEARCH_HOST, base + 1), "released"
+    ).close()
+    (rerun,) = [call for call in build_calls if "rerun_cells" in call]
+    assert rerun["rerun_cells"] == {("doc.qmd", 2)}
+    assert rerun["changed_paths"] == [tmp_path / "doc.qmd"]

@@ -2,6 +2,7 @@
 """Minimal build script using Pandoc instead of Quarto."""
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -29,6 +30,7 @@ from pydifftools.browser_lifecycle import (
 from pydifftools.forward_search import (
     FORWARD_SEARCH_HOST,
     QMDB_FORWARD_SEARCH_PORT as SHARED_QMDB_FORWARD_SEARCH_PORT,
+    QMDB_PORT_ATTEMPTS,
     bind_forward_search_server,
     drain_forward_search_queue,
     serve_forward_search,
@@ -57,6 +59,66 @@ CODE_DISPLAY_MODES = {
     CODE_DISPLAY_ALWAYS,
     CODE_DISPLAY_NONE,
 }
+# {{{ Rebuild endpoint URL (changeable parameters)
+RERUN_ENDPOINT = "/__pydifft/rerun"
+# }}}
+# {{{ Right-click "SOURCE" to rebuild a notebook through the qmdb server
+RERUN_SCRIPT = """
+(function () {
+  var menu = null;
+  function closeMenu() {
+    if (menu) {
+      menu.remove();
+      menu = null;
+    }
+  }
+  document.addEventListener("contextmenu", function (e) {
+    closeMenu();
+    var summary = e.target.closest("details.pydifft-source > summary");
+    var cell = summary && summary.closest("[data-script][data-index]");
+    if (!cell) {
+      return;
+    }
+    e.preventDefault();
+    menu = document.createElement("div");
+    menu.textContent = "Rebuild";
+    menu.style.cssText = "position:fixed;z-index:2147483647;"
+      + "background:#fff;color:#000;border:1px solid #888;"
+      + "box-shadow:2px 2px 6px rgba(0,0,0,.3);padding:4px 16px;"
+      + "font:14px sans-serif;cursor:pointer;"
+      + "left:" + e.clientX + "px;top:" + e.clientY + "px";
+    menu.addEventListener("click", function (event) {
+      event.stopPropagation();
+      closeMenu();
+      fetch("%s", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          src: cell.getAttribute("data-script"),
+          idx: parseInt(cell.getAttribute("data-index"), 10)
+        })
+      }).then(function (response) {
+        if (!response.ok) {
+          throw new Error("server answered " + response.status);
+        }
+        summary.textContent = "SOURCE (rebuilding\\u2026)";
+      }).catch(function (error) {
+        alert("Rebuild needs the running qmdb server: " + error.message);
+      });
+    });
+    document.body.appendChild(menu);
+  });
+  document.addEventListener("click", closeMenu);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") {
+      closeMenu();
+    }
+  });
+  window.addEventListener("scroll", closeMenu, {passive: true});
+  window.addEventListener("blur", closeMenu);
+})();
+""" % RERUN_ENDPOINT
+# }}}
 NB_CAPTURE_IMPORT = "from pydifftools.notebook.display import nb_capture"
 NB_CAPTURE_INJECTION_VERSION = "nb_capture_auto_import_v1"
 NOTEBOOK_CACHE_DIR = Path("_nbcache")
@@ -934,6 +996,7 @@ class RenderNotebook:
         webtex=False,
         changed_paths=None,
         refresh_callback=None,
+        rerun_cells=(),
     ):
         """Reconcile the project and drive every affected node to display."""
         if self.code_display not in CODE_DISPLAY_MODES:
@@ -1066,6 +1129,7 @@ class RenderNotebook:
                 csl=csl,
                 webtex=webtex,
                 progress_callback=notebook_callback,
+                rerun_cells=rerun_cells,
             )
         # }}}
 
@@ -1368,8 +1432,13 @@ def execute_code_blocks(
     csl=None,
     webtex: bool = False,
     progress_callback=None,
+    rerun_cells=(),
 ):
-    """Run code blocks as Jupyter notebooks with caching."""
+    """Run code blocks as Jupyter notebooks with caching.
+
+    Groups containing any ``(src, idx)`` in ``rerun_cells`` ignore their
+    cached notebook and execute again.
+    """
     cache_dir = NOTEBOOK_CACHE_DIR
     if not cache_dir.is_absolute():
         cache_dir = PROJECT_ROOT / cache_dir
@@ -1440,7 +1509,9 @@ def execute_code_blocks(
                     cached=cached,
                 )
 
-        if nb_path.exists():
+        if nb_path.exists() and not any(
+            (src, idx) in rerun_cells for idx in group_indices
+        ):
             nb = nbformat.read(nb_path, as_version=4)
             for offset, cell in enumerate(nb.cells):
                 publish("cached", offset, cell, cached=True)
@@ -1626,6 +1697,7 @@ MATHJAX_DIR = Path("_template/mathjax").resolve()
 PROJECT_ROOT = Path(".").resolve()
 QMDB_FORWARD_SEARCH_HOST = FORWARD_SEARCH_HOST
 QMDB_FORWARD_SEARCH_PORT = SHARED_QMDB_FORWARD_SEARCH_PORT
+QMDB_HTTP_PORT = 8000
 
 
 class NoCacheHTTPRequestHandler(SimpleHTTPRequestHandler):
@@ -2255,6 +2327,14 @@ def substitute_code_placeholders(
             f'<style id="pygments-style">{style}</style>', create_parent=False
         )
         head[0].append(style_node)
+    if (
+        head
+        and code_display == CODE_DISPLAY_COLLAPSED
+        and not root.xpath('//script[@id="pydifft-rerun-script"]')
+    ):
+        script = lxml_html.Element("script", id="pydifft-rerun-script")
+        script.text = RERUN_SCRIPT
+        head[0].append(script)
     changed = False
     for node in list(root.xpath("//div[@data-script][@data-index]")):
         src = node.get("data-script")
@@ -2279,7 +2359,8 @@ def substitute_code_placeholders(
             if code_display == CODE_DISPLAY_COLLAPSED:
                 details = lxml_html.fragment_fromstring(
                     '<details class="pydifft-source">'
-                    "<summary>SOURCE</summary>"
+                    '<summary title="Right-click to rebuild (re-run) '
+                    'this notebook">SOURCE</summary>'
                     "</details>",
                     create_parent=False,
                 )
@@ -2386,34 +2467,105 @@ def watch_and_serve(
         # immediately instead of launching a server loop that waits for a
         # browser connection.
         return machine.build(webtex=webtex)
-    port = 8000
     render_files = load_rendered_files()
 
     if render_files:
         start_page = Path(render_files[0]).with_suffix(".html").as_posix()
     else:
         start_page = ""
-    url = f"http://localhost:{port}/{start_page}"
 
     print("Watching project root:")
     print(" ", PROJECT_ROOT)
+    refresher = None
+    build_lock = threading.Lock()
+
+    def serialized_build(**kwargs):
+        with build_lock:
+            return machine.build(**kwargs)
 
     class Handler(NoCacheHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(DISPLAY_DIR), **kwargs)
 
-    try:
-        httpd = ThreadingHTTPServer(("0.0.0.0", port), Handler)
-    except OSError as exc:  # pragma: no cover - depends on local environment
-        print(f"Could not start server on port {port}: {exc}")
-        return
-    try:
-        forward_search_server = bind_forward_search_server(
-            (QMDB_FORWARD_SEARCH_HOST, QMDB_FORWARD_SEARCH_PORT), "qmdb"
+        def do_POST(self):
+            # {{{ Re-run the notebook behind a right-clicked SOURCE label
+            if self.path != RERUN_ENDPOINT:
+                self.send_error(404)
+                return
+            origin = self.headers.get("Origin")
+            if origin and origin.split("://", 1)[-1] != self.headers.get(
+                "Host"
+            ):
+                self.send_error(403)
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 4096:
+                    raise ValueError(length)
+                request = json.loads(self.rfile.read(length))
+                src = request["src"]
+                idx = request["idx"]
+                if src not in machine.nodes or not isinstance(idx, int):
+                    raise ValueError(request)
+            except (ValueError, KeyError, TypeError):
+                self.send_error(400)
+                return
+            print(f"Rebuild requested: {src} cell {idx}")
+            threading.Thread(
+                target=serialized_build,
+                kwargs={
+                    "webtex": webtex,
+                    "changed_paths": [PROJECT_ROOT / src],
+                    "refresh_callback": (
+                        refresher.refresh if refresher else None
+                    ),
+                    "rerun_cells": {(src, idx)},
+                },
+                daemon=True,
+            ).start()
+            self.send_response(202)
+            self.end_headers()
+            # }}}
+
+    # {{{ Use the first free preview port so several projects can run
+    httpd = None
+    for port in range(QMDB_HTTP_PORT, QMDB_HTTP_PORT + QMDB_PORT_ATTEMPTS):
+        try:
+            httpd = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+        except OSError as exc:  # pragma: no cover - depends on environment
+            if exc.errno != errno.EADDRINUSE:
+                print(f"Could not start server on port {port}: {exc}")
+                return
+            continue
+        break
+    if httpd is None:
+        print(
+            "Could not start server: ports "
+            f"{QMDB_HTTP_PORT}-{QMDB_HTTP_PORT + QMDB_PORT_ATTEMPTS - 1}"
+            " are all in use"
         )
-    except Exception:
-        httpd.server_close()
-        raise
+        return
+    url = f"http://localhost:{port}/{start_page}"
+    for offset in range(QMDB_PORT_ATTEMPTS):
+        try:
+            forward_search_server = bind_forward_search_server(
+                (
+                    QMDB_FORWARD_SEARCH_HOST,
+                    QMDB_FORWARD_SEARCH_PORT + offset,
+                ),
+                "qmdb",
+            )
+        except Exception as exc:
+            # A busy port raises RuntimeError; try the next one.
+            if (
+                isinstance(exc, RuntimeError)
+                and offset + 1 < QMDB_PORT_ATTEMPTS
+            ):
+                continue
+            httpd.server_close()
+            raise
+        break
+    # }}}
     forward_search_stop = threading.Event()
     forward_search_queue = queue.Queue()
     forward_search_thread = threading.Thread(
@@ -2425,7 +2577,6 @@ def watch_and_serve(
         ),
         daemon=True,
     )
-    refresher = None
     initial_executor = None
     initial_future = None
     observer = None
@@ -2436,17 +2587,16 @@ def watch_and_serve(
         # The endpoint is live before BrowserReloader constructs a browser.
         forward_search_thread.start()
         forward_search_thread_started = True
-        print(f"Serving {DISPLAY_DIR} at http://localhost:{port}")
+        print(
+            f"Serving {DISPLAY_DIR} at http://localhost:{port}"
+            " (forward search on port "
+            f"{forward_search_server.getsockname()[1]})"
+        )
         Path(DISPLAY_DIR).mkdir(parents=True, exist_ok=True)
         threading.Thread(
             target=_serve_forever, args=(httpd,), daemon=True
         ).start()
         refresher = BrowserReloader(url)
-        build_lock = threading.Lock()
-
-        def serialized_build(**kwargs):
-            with build_lock:
-                return machine.build(**kwargs)
 
         # Build asynchronously so the browser opens promptly.
         initial_executor = ThreadPoolExecutor(max_workers=1)

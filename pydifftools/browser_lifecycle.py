@@ -9,6 +9,7 @@ import sys
 dialog_callbacks = []
 
 
+# also used by: continuous.py, notebook/fast_build.py, flowchart/watch_graph.py
 def start_browser():
     """Prefer Chrome/Chromium, using installed drivers before discovery.
 
@@ -101,6 +102,7 @@ def prepare_for_dialog():
         callback()
 
 
+# also used by: continuous.py, notebook/fast_build.py, flowchart/watch_graph.py
 def browser_window_is_alive(browser):
     # Keep all browser liveness checks in one place so watch commands share
     # the same shutdown behavior when a user closes the browser window.
@@ -154,8 +156,9 @@ def forward_search_in_browser(browser, search_text):
     )
     if not found:
         print("forward search did not find text:", search_text)
-    # Bring the browser window to the foreground in Linux window managers.
-    if os.name == "posix" and shutil.which("wmctrl"):
+    # Bring the browser window to the foreground in Linux window managers,
+    # but only when it found the text, since every qmdb session hears it.
+    if found and os.name == "posix" and shutil.which("wmctrl"):
         window_title = browser.execute_script("return document.title;")
         if window_title:
             # Try common browser title forms used by desktop environments.

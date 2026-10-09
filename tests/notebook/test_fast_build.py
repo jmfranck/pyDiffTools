@@ -258,7 +258,7 @@ def test_postprocess_adds_shared_pygments_stylesheet_link(fb, tmp_path):
 def test_notebook_source_collapses_by_default(fb, tmp_path):
     page = tmp_path / "page.html"
     page.write_text(
-        "<html><body>"
+        "<html><head></head><body>"
         '<div data-script="doc.qmd" data-index="1"></div>'
         "</body></html>"
     )
@@ -270,9 +270,21 @@ def test_notebook_source_collapses_by_default(fb, tmp_path):
     )
 
     html = page.read_text()
-    assert '<details class="pydifft-source"><summary>SOURCE</summary>' in html
+    assert (
+        '<details class="pydifft-source"><summary title="Right-click to '
+        'rebuild (re-run) this notebook">SOURCE</summary>'
+    ) in html
     assert '<div class="highlight"><pre>' in html
     assert "RESULT" in html
+    assert html.count('id="pydifft-rerun-script"') == 1
+    assert fb.RERUN_ENDPOINT in html
+    # A second pass (incremental output substitution) adds no second copy.
+    fb.substitute_code_placeholders(
+        page,
+        {("doc.qmd", 1): "<pre>RESULT</pre>"},
+        {("doc.qmd", 1): "print('hello')"},
+    )
+    assert page.read_text().count('id="pydifft-rerun-script"') == 1
 
 
 def test_notebook_source_display_modes(fb, tmp_path):
@@ -918,6 +930,60 @@ def test_reset_chunks_reuse_cache_independently(fb, monkeypatch):
     assert ("split.qmd", 1, 1, "running") not in events
     assert ("split.qmd", 2, 2, "running") in events
     assert ("split.qmd", 2, 2, "complete") in events
+
+
+def test_rerun_cells_bypass_cache_for_their_group_only(fb, monkeypatch):
+    events = []
+
+    def fake_preprocess(self, nb, resources=None, km=None):
+        for index, cell in enumerate(nb.cells):
+            self.cell_callback("running", index, cell)
+            cell.outputs = []
+            self.cell_callback("complete", index, cell)
+        return nb, resources
+
+    monkeypatch.setattr(
+        fb.ProgressExecutePreprocessor, "preprocess", fake_preprocess
+    )
+    blocks = {
+        "split.qmd": [
+            ("print('first')", "first-hash", False),
+            ("%reset -f\nprint('second')", "second-hash", False),
+        ]
+    }
+    fb.execute_code_blocks(blocks)
+    fb.execute_code_blocks(
+        blocks,
+        progress_callback=(
+            lambda src, notebook, cell, state, **kwargs: events.append(
+                (src, notebook, cell, state)
+            )
+        ),
+        rerun_cells={("split.qmd", 2)},
+    )
+
+    assert ("split.qmd", 1, 1, "cached") in events
+    assert ("split.qmd", 1, 1, "running") not in events
+    assert ("split.qmd", 2, 2, "running") in events
+    assert ("split.qmd", 2, 2, "cached") not in events
+
+
+def test_build_forwards_rerun_cells_to_notebook_execution(fb, monkeypatch):
+    seen = []
+
+    def execute(blocks, **kwargs):
+        seen.append(kwargs["rerun_cells"])
+        outputs = {}
+        codes = {}
+        for src, cells in blocks.items():
+            for index, (code, *_rest) in enumerate(cells, start=1):
+                outputs[(src, index)] = "<pre>TEST_OUTPUT</pre>"
+                codes[(src, index)] = code
+        return outputs, codes
+
+    monkeypatch.setattr(fb, "execute_code_blocks", execute)
+    fb.RenderNotebook.from_project().build(rerun_cells={("a.qmd", 2)})
+    assert seen == [{("a.qmd", 2)}]
 
 
 def test_tree_shows_notebook_cell_states_on_source_line(fb):

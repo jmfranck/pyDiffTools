@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from pydifftools import continuous, outline
+from pydifftools import command_line, continuous, outline
 from pydifftools.continuous import run_pandoc, confirm_restore_comment_filter
 from pydifftools.command_line import mfs
 from pydifftools.command_registry import _COMMAND_SPECS
@@ -953,9 +953,12 @@ def test_mfs_starts_cpb_when_socket_missing(tmp_path):
     os.chdir(tmp_path)
     try:
         with patch("pydifftools.command_line.send_forward_search", fake_send):
-            with patch("pydifftools.command_line.os.fork", return_value=123):
-                with patch("pydifftools.command_line.time.sleep"):
-                    mfs("needle")
+            with patch("pydifftools.command_line.QMDB_PORT_ATTEMPTS", 1):
+                with patch(
+                    "pydifftools.command_line.os.fork", return_value=123
+                ):
+                    with patch("pydifftools.command_line.time.sleep"):
+                        mfs("needle")
         assert len(calls) == 3
         assert [search_text for _, search_text in calls] == ["needle"] * 3
     finally:
@@ -977,15 +980,19 @@ def test_mfs_waits_up_to_20_seconds_for_socket(tmp_path):
     cwd = os.getcwd()
     os.chdir(tmp_path)
     try:
-        with patch("pydifftools.command_line.send_forward_search", fake_send):
-            with patch("pydifftools.command_line.os.fork", return_value=123):
-                with patch("pydifftools.command_line.time.sleep", fake_sleep):
-                    try:
-                        mfs("needle")
-                        assert False, "Expected mfs to raise RuntimeError"
-                    except RuntimeError as exc:
-                        assert "within 20 seconds" in str(exc)
-        # We try cpb and qmdb sockets each time: one initial pass plus
+        with patch(
+            "pydifftools.command_line.send_forward_search", fake_send
+        ), patch("pydifftools.command_line.QMDB_PORT_ATTEMPTS", 1), patch(
+            "pydifftools.command_line.os.fork", return_value=123
+        ), patch(
+            "pydifftools.command_line.time.sleep", fake_sleep
+        ):
+            try:
+                mfs("needle")
+                assert False, "Expected mfs to raise RuntimeError"
+            except RuntimeError as exc:
+                assert "within 20 seconds" in str(exc)
+        # We try cpb and one qmdb socket each time: one initial pass plus
         # 80 retry passes gives 162 connection attempts total.
         assert calls["send"] == 162
         assert calls["sleep"] == 80
@@ -1012,11 +1019,16 @@ def test_mfs_uses_qmdb_socket_when_cpb_socket_missing(tmp_path):
             with patch("pydifftools.command_line.os.fork", fake_fork):
                 mfs("needle")
         assert calls["fork"] == 0
-        assert len(calls["send"]) == 2
-        assert [search_text for _, search_text in calls["send"]] == [
-            "needle",
-            "needle",
+        # Every qmdb session on the consecutive ports hears the search.
+        attempts = command_line.QMDB_PORT_ATTEMPTS
+        assert len(calls["send"]) == 1 + attempts
+        assert [address[1] for address, _ in calls["send"][1:]] == [
+            command_line.QMDB_FORWARD_SEARCH_PORT + offset
+            for offset in range(attempts)
         ]
+        assert {search_text for _, search_text in calls["send"]} == {
+            "needle"
+        }
     finally:
         os.chdir(cwd)
 
