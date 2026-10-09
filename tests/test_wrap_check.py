@@ -1130,6 +1130,27 @@ def test_diff_lint_restores_html_comment_layout(tmp_path, ref, ending):
     )
 
 
+@pytest.mark.parametrize("ref", [None, "@"])
+@pytest.mark.parametrize("ending", ["\n", "\r\n"])
+def test_diff_lint_applies_leading_whitespace_fixes(tmp_path, ref, ending):
+    reference = "  Visible words.\n<!--\n\tHidden words.\n-->\n"
+    path = committed_source(tmp_path, reference)
+    current = reference.replace("  Visible", " Visible").replace("\t", "   ")
+    path.write_bytes(current.replace("\n", ending).encode())
+
+    report = autofix_markdown_file(
+        path, wrapnumber=79, git_index=True, git_ref=ref,
+    )
+
+    assert path.read_bytes() == reference.replace("\n", ending).encode()
+    assert report["fixes"] and report["warnings"] == []
+    assert not any(
+        autofix_markdown_file(
+            path, wrapnumber=79, git_index=True, git_ref=ref,
+        ).values()
+    )
+
+
 def test_comment_text_is_exempt_from_prose_fixes():
     comment = (
         "<!-- A hidden sentence. Another hidden sentence with a long "

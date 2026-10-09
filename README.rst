@@ -32,6 +32,11 @@ included are (listed in order of fun/utility):
   hunks that begin inside a comment. Hidden text is exempt from ordinary
   prose wrapping, sentence-break, and comment-tag spelling rules. Literal
   comment delimiters in code or math are preserved.
+  Leading whitespace at matching line starts is restored in top-level
+  prose when both margins contain at most three spaces, and inside HTML
+  comments. Container indentation (lists, definitions, and quotations),
+  tabs or four-space code indentation outside comments, and protected
+  blocks retain their current margins.
 
   Continuous pandoc build.
   This works *very well* together

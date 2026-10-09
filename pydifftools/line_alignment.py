@@ -95,6 +95,7 @@ def align_line_breaks(
     from .wrap_sentences import (
         WORD,
         classify_lines,
+        markdown_blocks,
         check_prose,
         apply_markdown_issue_fix,
         _html_comment_spans,
@@ -216,6 +217,20 @@ def align_line_breaks(
             current_masked, filetype, strict=False
         )
     ]
+    # {{{ identify top-level prose margins without changing container structure
+    margins = []
+    for masked in (reference_masked, current_masked):
+        flags = []
+        if filetype == "markdown":
+            for block in markdown_blocks(masked):
+                flags.extend(
+                    [block.kind == "prose"] * len(block.text.splitlines())
+                )
+        else:
+            flags = [False] * len(masked.splitlines())
+        margins.append(flags)
+    reference_margins, current_margins = margins
+    # }}}
     # {{{ align hidden text too, while keeping it excluded from prose lint
     reference_comments = _html_comment_spans(reference)
     current_comments = _html_comment_spans(current)
@@ -292,13 +307,71 @@ def align_line_breaks(
         whitespace = dict(gaps)
         ending = "\r\n" if "\r\n" in before else "\n"
 
+        # {{{ restore presentation indentation at matching line starts
+        old_first = {}
+        for number, (row, _, _) in enumerate(old_tokens):
+            old_first.setdefault(row, number)
+        leading = []
+        seen = set()
+        for number, (row, _, _) in enumerate(tokens):
+            if row in seen:
+                continue
+            seen.add(row)
+            old_number = matches[hunk].get(number)
+            if old_number is None:
+                continue
+            old_row = old_tokens[old_number][0]
+            if old_first[old_row] != old_number:
+                continue
+            line_start = starts[j1 + row]
+            old_start = reference_starts[i1 + old_row]
+            prefix = re.match(r"[ \t]*", lines[j1 + row])[0]
+            old_prefix = re.match(
+                r"[ \t]*", reference_lines[i1 + old_row]
+            )[0]
+            hidden = all(
+                any(begin <= offset < end for begin, end in comments)
+                for offset, comments in (
+                    (line_start, current_comments),
+                    (old_start, reference_comments),
+                )
+            )
+            plain = (
+                current_prose[j1 + row] and reference_prose[i1 + old_row]
+                and current_margins[j1 + row]
+                and reference_margins[i1 + old_row]
+                and "\t" not in prefix + old_prefix
+                and max(len(prefix), len(old_prefix)) < 4
+            )
+            if prefix != old_prefix and (hidden or plain):
+                leading.append((
+                    line_start - start,
+                    line_start - start + len(prefix),
+                    old_prefix,
+                ))
+        # }}}
+
         def render(spaces):
+            edits = [
+                (tokens[number][2], tokens[number + 1][1], space)
+                for number, space in spaces.items()
+            ]
+            for begin, end, prefix in leading:
+                for index, (left, right, space) in enumerate(edits):
+                    if left < begin and end == right:
+                        if "\n" in space:
+                            edits[index] = (
+                                left, right, space[:space.rfind("\n") + 1]
+                                + prefix,
+                            )
+                        break
+                else:
+                    edits.append((begin, end, prefix))
             output = []
             position = 0
-            for number, space in spaces.items():
-                end, following = tokens[number][2], tokens[number + 1][1]
-                output.extend((before[position:end], space))
-                position = following
+            for begin, end, space in sorted(edits):
+                output.extend((before[position:begin], space))
+                position = end
             output.append(before[position:])
             prose = current_prose[j1:j2]
             for number, space in reversed(list(spaces.items())):

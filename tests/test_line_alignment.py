@@ -46,6 +46,61 @@ def test_partial_matching_lines_restore_whitespace_first(tmp_path):
     assert new.read_text() == expected
 
 
+@pytest.mark.parametrize("old_prefix,new_prefix", [
+    ("", " "), ("  ", ""), (" ", "   "),
+])
+@pytest.mark.parametrize("body", ["Stable.\n", "Same words changed here.\n"])
+def test_presentation_indentation_restores_matching_line_starts(
+    old_prefix, new_prefix, body,
+):
+    reference = old_prefix + body.replace("changed", "original")
+    current = new_prefix + body
+    (result,) = align_line_breaks(reference, current, width=79)
+    assert result["aligned"] == old_prefix + body
+    assert all(
+        item["aligned"] == item["before"]
+        for item in align_line_breaks(reference, result["aligned"], width=79)
+    )
+
+
+def test_leading_indentation_edits_do_not_overlap_whitespace_restoration():
+    reference = "  Same words\n  continue here.\n"
+    current = " Same  words\n continue here.\n"
+    (result,) = align_line_breaks(reference, current, width=79)
+    assert result["aligned"] == reference
+
+
+@pytest.mark.parametrize("reference,current", [
+    ("Code words.\n", "    Code words.\n"),
+    ("    Code words.\n", " Code words.\n"),
+    ("\tCode words.\n", "Code words.\n"),
+    ("- Parent.\n  - Child.\n", "- Parent.\n   - Child.\n"),
+    ("- Item.\n\n  Continuation.\n", "- Item.\n\n   Continuation.\n"),
+    ("> Quote.\n", " > Quote.\n"),
+    ("> First.\n continuation.\n", "> First.\n  continuation.\n"),
+    ("```\n Code.\n```\n", "```\n  Code.\n```\n"),
+    ("$$\n x = y\n$$\n", "$$\n  x = y\n$$\n"),
+])
+def test_structural_indentation_is_preserved(reference, current):
+    assert all(
+        result["aligned"] == result["before"]
+        for result in align_line_breaks(reference, current, width=79)
+    )
+
+
+@pytest.mark.parametrize("old_prefix,new_prefix", [
+    ("", "    "), ("\t", " "), ("    ", ""),
+])
+def test_indentation_inside_comment_restores_baseline(old_prefix, new_prefix):
+    reference = "<!--\n" + old_prefix + "Hidden words.\n-->\n"
+    current = "<!--\n" + new_prefix + "Hidden words.\n-->\n"
+    (result,) = align_line_breaks(reference, current, width=79)
+    assert (
+        current[:result["start"]] + result["aligned"]
+        + current[result["stop"]:]
+    ) == reference
+
+
 @pytest.mark.parametrize("reference,current", [
     (
         "<!--same hidden\nwords-->Visible prose.\n",
