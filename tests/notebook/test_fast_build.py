@@ -287,6 +287,38 @@ def test_notebook_source_collapses_by_default(fb, tmp_path):
     assert page.read_text().count('id="pydifft-rerun-script"') == 1
 
 
+def test_included_notebook_keeps_rerun_script_in_final_page(fb, tmp_path):
+    build_dir = tmp_path / "build"
+    display_dir = tmp_path / "display"
+    build_dir.mkdir()
+    display_dir.mkdir()
+    child = build_dir / "child.html"
+    child.write_text(
+        "<html><head></head><body>"
+        '<div data-script="child.qmd" data-index="1"></div>'
+        "</body></html>"
+    )
+    fb.substitute_code_placeholders(
+        child,
+        {("child.qmd", 1): "<pre>RESULT</pre>"},
+        {("child.qmd", 1): "print('hello')"},
+    )
+    page = display_dir / "parent.html"
+    page.write_text(
+        "<html><head></head><body>"
+        '<div data-include="child.html"></div>'
+        '<div data-include="child.html"></div>'
+        "</body></html>"
+    )
+    fb.postprocess_html(page, build_dir, display_dir)
+    html = page.read_text()
+    assert html.count('class="pydifft-source"') == 2
+    assert html.count('id="pydifft-rerun-script"') == 1
+    assert fb.RERUN_ENDPOINT in html
+    fb.postprocess_html(page, build_dir, display_dir)
+    assert page.read_text().count('id="pydifft-rerun-script"') == 1
+
+
 def test_notebook_source_display_modes(fb, tmp_path):
     always_page = tmp_path / "always.html"
     always_page.write_text(

@@ -2195,6 +2195,21 @@ def add_navigation(html_path: Path, pages: list[dict], current: str):
     tree.write(str(html_path), encoding="utf-8", method="html")
 
 
+def _ensure_rerun_script(root):
+    """Attach the handler to the document that actually shows SOURCE."""
+    if not root.xpath('//details[@class="pydifft-source"]/summary'):
+        return
+    if root.xpath('//script[@id="pydifft-rerun-script"]'):
+        return
+    head = root.find("head")
+    if head is None:
+        head = lxml_html.Element("head")
+        root.insert(0, head)
+    script = lxml_html.Element("script", id="pydifft-rerun-script")
+    script.text = RERUN_SCRIPT
+    head.append(script)
+
+
 # also used by: tests/notebook/test_fast_build.py, which calls or
 # monkeypatches this notebook-builder entry point.
 def postprocess_html(html_path: Path, include_root: Path, resource_root: Path):
@@ -2300,6 +2315,9 @@ def postprocess_html(html_path: Path, include_root: Path, resource_root: Path):
                 create_parent=False,
             )
             head[0].append(link)
+    # Includes contribute their bodies, so their head scripts are lost.
+    # Install the handler once on the final page after expanding includes.
+    _ensure_rerun_script(root)
     html_path.write_text(lxml_html.tostring(root, encoding="unicode"))
 
 
@@ -2327,14 +2345,6 @@ def substitute_code_placeholders(
             f'<style id="pygments-style">{style}</style>', create_parent=False
         )
         head[0].append(style_node)
-    if (
-        head
-        and code_display == CODE_DISPLAY_COLLAPSED
-        and not root.xpath('//script[@id="pydifft-rerun-script"]')
-    ):
-        script = lxml_html.Element("script", id="pydifft-rerun-script")
-        script.text = RERUN_SCRIPT
-        head[0].append(script)
     changed = False
     for node in list(root.xpath("//div[@data-script][@data-index]")):
         src = node.get("data-script")
@@ -2394,6 +2404,7 @@ def substitute_code_placeholders(
             node.append(frag)
         changed = True
     if changed:
+        _ensure_rerun_script(root)
         tree.write(str(html_path), encoding="utf-8", method="html")
 
 
