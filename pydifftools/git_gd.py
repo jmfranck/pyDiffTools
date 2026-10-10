@@ -2,7 +2,7 @@
 
 Install the matching git alias automatically with::
 
-    pydifft gd --install
+    pydifft --add_to_git gd
 
 or manually with::
 
@@ -24,9 +24,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .command_registry import register_command
-from .git_aliases import install_git_alias
 
-INSTALL_ALIAS_VALUE = '!f() { pydifft gd "$@"; }; f'
 DIFFTOOL_NAME = "mygvim"
 RENAME_DIFFTOOL_NAME = "pydifft-gd-rename"
 IMAGE_DIFFTOOL_NAME = "pydifft-gd-image"
@@ -437,50 +435,15 @@ def main(argv: Sequence[str]) -> int:
     "With no arguments, review unstaged changes, like git diff.\n"
     "Use pydifft tree to browse Git history.\n\n"
     "Install the matching git alias automatically with:\n"
-    "  pydifft gd --add-to-git (or --install)\n\n"
+    "  pydifft --add_to_git gd\n\n"
     "or add it yourself with:\n"
     "  git config --global alias.gd '!f() { pydifft gd \"$@\"; }; f'\n\n"
     "This command shells out to git difftool --tool=mygvim, so keep\n"
     "difftool.mygvim.cmd configured in your git config.",
-    help={
-        "install": (
-            "Install or update the global git alias so `git gd` "
-            "runs this subcommand."
-        ),
-    },
-    argument_options={
-        "add_to_git": {
-            "help": (
-                "Install the global git gd alias, preserving its current "
-                "command."
-            ),
-        },
-    },
 )
-def gd(arguments, install=False, add_to_git=False):
-    """Mirror ``git_gd_qt.py`` and optionally install ``git gd``."""
+def gd(arguments):
+    """Mirror ``git_gd_qt.py``."""
 
-    if install or add_to_git:
-        if arguments:
-            flag = "--add-to-git" if add_to_git else "--install"
-            raise SystemExit(f"pydifft gd {flag} does not take diff args")
-        # {{{ install the Git alias and check difftool configuration
-        install_git_alias(
-            "gd", INSTALL_ALIAS_VALUE, preserve_existing=True,
-        )
-        tool_cmd = subprocess.run(
-            ["git", "config", "--global", "--get", "difftool.mygvim.cmd"],
-            capture_output=True,
-            text=True,
-        )
-        if tool_cmd.returncode != 0 or not tool_cmd.stdout.strip():
-            print(
-                "Reminder: configure difftool.mygvim.cmd so git difftool "
-                "knows "
-                "which GUI diff tool to launch."
-            )
-        # }}}
-        return
     return_code = main(arguments)
     if return_code != 0:
         raise SystemExit(return_code)
@@ -492,17 +455,11 @@ def gd(arguments, install=False, add_to_git=False):
     "Use the down arrow to load the next 40 commits in date order.\n"
     "Click a commit to compare it with the working directory;\n"
     "right-click to copy its hash or choose a comparison endpoint.\n\n"
-    "Run pydifft tree --install to install the git tree alias.",
-    help={"install": "Install or update the global git tree alias."},
+    "Run pydifft --add_to_git tree to install the git tree alias.",
 )
-def tree(install=False):
-    """Open the history browser or install its Git alias."""
+def tree():
+    """Open the history browser."""
     try:
-        if install:
-            install_git_alias(
-                "tree", '!f() { pydifft tree "$@"; }; f',
-            )
-            return
         from PySide6.QtWidgets import QApplication
         from .git_gd_history import HistoryWindow, load_history
 

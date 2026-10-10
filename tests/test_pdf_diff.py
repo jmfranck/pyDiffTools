@@ -69,14 +69,13 @@ def test_cli_flag_placement_and_help(project, monkeypatch, capsys, flag_first):
             "old": str(old),
             "new": str(new),
             "no_compile": True,
-            "add_to_git": False,
         }
     ]
     command_line.main(["--help", "pd"])
     help_text = capsys.readouterr().out
-    assert "[OLD] [NEW]" in help_text
+    assert "OLD NEW" in help_text
     assert "--no-compile" in help_text
-    assert "--add-to-git" in help_text
+    assert "pydifft --add_to_git pd" in help_text
     spec = command_line._COMMAND_SPECS["pd"]["arguments"][0]
     assert spec["completion_allowednames"] == ["*.md", "*.tex"]
 

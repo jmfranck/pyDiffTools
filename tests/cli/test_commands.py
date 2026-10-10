@@ -17,7 +17,6 @@ from pydifftools.forward_search import ForwardSearchUnavailable
 from pydifftools.git_gd import (
     DiffEntry,
     IMAGE_DIFFTOOL_NAME,
-    INSTALL_ALIAS_VALUE,
     build_difftool_command,
     build_entries,
     build_image_difftool_command,
@@ -212,6 +211,15 @@ def test_argcomplete_completes_subcommand_prefix(monkeypatch):
     suggestions = _collect_argcomplete_suggestions(monkeypatch, "pydifft wg")
 
     assert suggestions == ["wgrph"]
+
+
+@pytest.mark.parametrize("line", [
+    "pydifft --add_to_git ", "pydifft --add_to_git gd ",
+])
+def test_argcomplete_lists_git_installation_choices(monkeypatch, line):
+    assert sorted(_collect_argcomplete_suggestions(monkeypatch, line)) == [
+        "gd", "mergein", "pd", "tree",
+    ]
 
 
 def test_argcomplete_wgrph_filters_to_yaml_files(monkeypatch, tmp_path):
@@ -618,7 +626,7 @@ def test_gd_install_sets_git_alias(monkeypatch, capsys):
 
     from pydifftools import command_line
 
-    command_line.main(["gd", "--install"])
+    command_line.main(["--add_to_git", "gd"])
     assert calls[0]["cmd"] == [
         "git", "config", "--global", "--null", "--get", "alias.gd",
     ]
@@ -627,7 +635,7 @@ def test_gd_install_sets_git_alias(monkeypatch, capsys):
         "config",
         "--global",
         "alias.gd",
-        INSTALL_ALIAS_VALUE,
+        '!f() { pydifft gd "$@"; }; f',
     ]
     assert calls[1]["check"] is True
     out = capsys.readouterr().out
@@ -639,8 +647,8 @@ def test_gd_install_rejects_diff_args():
     from pydifftools import command_line
 
     with pytest.raises(SystemExit) as excinfo:
-        command_line.main(["gd", "--install", "HEAD~1"])
-    assert "does not take diff args" in str(excinfo.value)
+        command_line.main(["--add_to_git", "gd", "HEAD~1"])
+    assert excinfo.value.code == 2
 
 
 def test_gd_build_entries_sorts_by_change_count(monkeypatch):
@@ -883,7 +891,7 @@ def test_tree_install_sets_git_alias(monkeypatch, capsys):
 
     run = Mock()
     monkeypatch.setattr("pydifftools.git_gd.subprocess.run", run)
-    command_line.main(["tree", "--install"])
+    command_line.main(["--add_to_git", "tree"])
     run.assert_called_once_with(
         ["git", "config", "--global", "alias.tree",
          '!f() { pydifft tree "$@"; }; f'],

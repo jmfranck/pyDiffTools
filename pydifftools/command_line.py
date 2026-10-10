@@ -37,6 +37,9 @@ from .searchacro import replace_acros
 from .rearrange_tex import run as rearrange_tex_run
 from .git_gd import gd  # registers git difftool review command
 from .pdf_diff import pd, git_pd  # registers PDF diff command
+from .git_aliases import (
+    GIT_ALIASES, install_git_alias, mergein_completer,
+)
 from .flowchart.watch_graph import wgrph
 from .flowchart.graph import load_graph_yaml
 from .notebook.tex_to_qmd import tex2qmd
@@ -911,8 +914,14 @@ def build_parser():
     )
     parser.epilog = _subcommand_help_hint(parser.prog)
     parser._pydifft_subparsers = {}
-    subparsers = parser.add_subparsers(dest="command")
-    subparsers.required = True
+    subparsers = parser.add_subparsers(dest="command", title="commands")
+    # Consume installer names exclusively, including during completion.
+    # argparse does not validate REMAINDER choices; main checks them first.
+    subparsers.container.add_argument(
+        "--add_to_git", nargs=argparse.REMAINDER, choices=list(GIT_ALIASES),
+        help=("Install one or more global Git aliases: gd, pd, tree, mergein "
+              "(without a subcommand)."),
+    )
     for name, spec in _COMMAND_SPECS.items():
         subparser = subparsers.add_parser(
             name,
@@ -935,6 +944,8 @@ def build_parser():
             if name == "wgrph" and action.dest == "t":
                 # Offer case-insensitive completions for incomplete task names.
                 action.completer = wgrph_task_completer
+            if name == "mergein" and action.dest in ("branch", "remote"):
+                action.completer = mergein_completer
         subparser.set_defaults(_handler=spec["handler"])
         parser._pydifft_subparsers[name] = subparser
     return parser
@@ -994,6 +1005,25 @@ def main(argv=None):
             parser._pydifft_subparsers[subcommand].print_help()
             return
     namespace = parser.parse_args(argv)
+    if namespace.add_to_git is not None:
+        if not namespace.add_to_git:
+            parser.error("--add_to_git requires at least one command name")
+        unknown_names = [
+            name for name in namespace.add_to_git if name not in GIT_ALIASES
+        ]
+        if unknown_names:
+            parser.error(
+                "unknown Git alias name(s): " + ", ".join(unknown_names)
+            )
+        if namespace.command is not None:
+            parser.error("--add_to_git cannot be combined with a subcommand")
+        for name in dict.fromkeys(namespace.add_to_git):
+            install_git_alias(
+                name, GIT_ALIASES[name], preserve_existing=(name == "gd"),
+            )
+        return
+    if namespace.command is None:
+        parser.error("a subcommand or --add_to_git is required")
     # Shared wrapping arguments are validated identically for each command.
     if hasattr(namespace, "wrapnumber") and namespace.wrapnumber < 1:
         parser._pydifft_subparsers[namespace.command].error(
@@ -1025,6 +1055,7 @@ def main(argv=None):
     handler_kwargs = dict(vars(namespace))
     handler_kwargs.pop("_handler", None)
     handler_kwargs.pop("command", None)
+    handler_kwargs.pop("add_to_git", None)
     # {{{ explain Chrome and ChromeDriver version mismatches
     from selenium.common.exceptions import SessionNotCreatedException
 

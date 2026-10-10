@@ -140,7 +140,7 @@ def test_other_chrome_session_errors_are_not_hidden(monkeypatch):
 def test_gd_help_mentions_install_alias(capsys):
     command_line.main(["--help", "gd"])
     out = capsys.readouterr().out
-    assert "--install" in out
+    assert "pydifft --add_to_git gd" in out
     assert "alias.gd" in out
     assert "difftool.mygvim.cmd" in out
 

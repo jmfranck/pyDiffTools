@@ -10,7 +10,6 @@ import sys
 import tempfile
 
 from .command_registry import register_command
-from .git_aliases import install_git_alias
 
 
 @register_command(
@@ -19,7 +18,7 @@ from .git_aliases import install_git_alias
         "Compare OLD and NEW using mylatexdiff-preamble.sty. Write "
         "NEW_diff.tex beside NEW and compile NEW_diff.pdf unless "
         "--no-compile is supplied. Both inputs must be .md or both .tex.\n\n"
-        "Run pydifft pd --add-to-git to install git pd.\n"
+        "Run pydifft --add_to_git pd to install git pd.\n"
         "Then git pd REV -- FILE compares REV with the working file;\n"
         "git pd also accepts other git diff arguments and --no-compile."
     ),
@@ -28,31 +27,17 @@ from .git_aliases import install_git_alias
         "old": {
             "metavar": "OLD",
             "help": "Older document version.",
-            "nargs": "?",
-            "default": None,
         },
         "new": {
             "metavar": "NEW",
             "help": "Newer document version.",
-            "nargs": "?",
-            "default": None,
         },
         "no_compile": {
             "help": "Keep the diff TeX without compiling a PDF.",
         },
-        "add_to_git": {
-            "help": "Install or update the global git pd alias.",
-        },
     },
 )
-def pd(old, new, no_compile=False, add_to_git=False):
-    if add_to_git:
-        if old is not None or new is not None or no_compile:
-            raise SystemExit("pd: --add-to-git does not take diff arguments")
-        install_git_alias("pd", '!f() { pydifft pd --git "$@"; }; f')
-        return
-    if old is None or new is None:
-        raise SystemExit("pd: provide OLD and NEW, or use --add-to-git")
+def pd(old, new, no_compile=False):
     render_pdf_diff(old, new, no_compile=no_compile)
 
 
