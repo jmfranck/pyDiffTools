@@ -5,6 +5,7 @@ from pathlib import Path
 
 from pydifftools.line_alignment import align_line_breaks, minimal_opcodes
 from pydifftools import line_alignment
+from pydifftools import wrap_sentences
 from pydifftools.match_spaces import run
 from pydifftools.wrap_sentences import (
     autofix_markdown_file,
@@ -232,6 +233,52 @@ def test_equation_hunk_starts_inside_display_math():
     reference = "$$\n  a + b = c\n  + d\n$$\nVisible sentence.\n"
     current = reference.replace("  a + b = c\n  + d", "\ta + b = c + d")
     for result in reversed(align_line_breaks(reference, current, width=10)):
+        current = (
+            current[:result["start"]] + result["aligned"]
+            + current[result["stop"]:]
+        )
+    assert current == reference
+
+
+def test_many_hunks_do_not_reparse_the_whole_document(monkeypatch):
+    reference = "".join(
+        f"Paragraph {number} has stable reference words\n"
+        "and continues on a second line.\n\n"
+        for number in range(40)
+    )
+    current = reference.replace("words\nand", "words and")
+    scanned = []
+    original = wrap_sentences._markdown_spans
+
+    def record_scans(text, *args, **kwargs):
+        scanned.append(len(text))
+        return original(text, *args, **kwargs)
+
+    monkeypatch.setattr(wrap_sentences, "_markdown_spans", record_scans)
+    results = align_line_breaks(reference, current, width=79)
+    assert len(results) == 40
+    for result in reversed(results):
+        current = (
+            current[:result["start"]] + result["aligned"]
+            + current[result["stop"]:]
+        )
+    assert current == reference
+    # Parsing work stays proportional to document size as hunks accumulate.
+    assert sum(scanned) < 20 * len(reference)
+
+
+@pytest.mark.parametrize("block", [
+    "  <!--\nHidden sentence. Stay here.\n\nHidden words\ncontinue.\n-->\n",
+    "$$\na = b\n\n  + c\n  + d\n$$\n",
+    "```\nLiteral code.\n\nMore literal code.\n```\n",
+])
+def test_bounded_context_preserves_blocks_with_blank_lines(block):
+    reference = "Introductory paragraph.\n\n" + block + "\nFinal paragraph.\n"
+    current = reference.replace("words\ncontinue", "words continue").replace(
+        "  + c\n  + d", "  + c + d",
+    )
+    results = align_line_breaks(reference, current, width=25)
+    for result in reversed(results):
         current = (
             current[:result["start"]] + result["aligned"]
             + current[result["stop"]:]

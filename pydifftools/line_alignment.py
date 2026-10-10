@@ -1,6 +1,7 @@
 """Align changed words, restore reference whitespace, then check lines."""
 
 from pathlib import Path
+from bisect import bisect_left, bisect_right
 import itertools
 import re
 import subprocess
@@ -107,10 +108,16 @@ def align_line_breaks(
         r"(?:(?P<marker>[-+*]|[0-9]+[.)])(?P<space>[ \t]+))?"
     )
 
+    def region_at(regions, position):
+        index = bisect_left(regions, (position + 1,)) - 1
+        if index >= 0 and position < regions[index][1]:
+            return regions[index]
+        return None
+
     def source_layout(text):
         # {{{ classify structural whitespace independently of prose lint
         comments, equations = _markdown_spans(text)
-        regions = comments + equations
+        regions = sorted(comments + equations)
         masked = list(text)
         for begin, end in regions:
             masked[begin:end] = [
@@ -136,7 +143,7 @@ def align_line_breaks(
         prefixes = []
         for row, line in enumerate(rows):
             indent = re.match(r"[ \t]*", line)[0]
-            inside = any(begin <= position < end for begin, end in regions)
+            inside = region_at(regions, position) is not None
             prefixes.append(prefix_pattern.match(indent if inside else line))
             margins[row] = allowed[row] and (
                 inside or (
@@ -150,6 +157,7 @@ def align_line_breaks(
     def tokenize(text, layout, base=0):
         # {{{ words plus editable whitespace, retaining original offsets
         comments, equations, allowed, margins, prefixes = layout
+        regions = sorted(comments + equations)
         rows = text.splitlines(keepends=True)
         cuts = set()
         for begin, end in comments:
@@ -177,7 +185,7 @@ def align_line_breaks(
             boundaries = [begin, *sorted(c for c in cuts if begin < c < end),
                           end]
             for left, right in zip(boundaries, boundaries[1:]):
-                in_math = any(a <= base + left < b for a, b in equations)
+                in_math = region_at(equations, base + left) is not None
                 pattern = math_word if in_math else WORD
                 tokens.extend(
                     (row, match.start(), match.end())
@@ -191,10 +199,8 @@ def align_line_breaks(
             raw = text[end:start]
             if not (allowed[row] and allowed[next_row]):
                 continue
-            free = any(
-                begin <= base + left[1] and base + start < stop
-                for begin, stop in comments + equations
-            )
+            region = region_at(regions, base + left[1])
+            free = region is not None and base + start < region[1]
             if row == next_row:
                 if raw.strip(" \t"):
                     continue
@@ -214,9 +220,12 @@ def align_line_breaks(
     def lint(text):
         if width is None:
             return text
-        # Reclassify in the full source context after layout changes.
+        # Reclassify the enclosing blocks after layout changes.
         for _ in range(max(1, len(text.split()))):
-            full_source = current[:start] + text + current[stop:]
+            full_source = (
+                current[context_start:start] + text
+                + current[stop:context_stop]
+            )
             masked = _mask_html_comments(full_source)
             classified = classify_lines(masked, filetype, strict=False)
             rows = text.splitlines(keepends=True)
@@ -225,14 +234,14 @@ def align_line_breaks(
                     preserve_reference_lines and line in reference_lines
                 )
                 for (allowed, _), line in zip(
-                    classified[j1:j1 + len(rows)], rows,
+                    classified[context_row:context_row + len(rows)], rows,
                 )
             ]
             issues = {}
             offset = 1
-            masked_lines = masked[start:start + len(text)].splitlines(
-                keepends=True,
-            )
+            masked_lines = masked[
+                local_start:local_start + len(text)
+            ].splitlines(keepends=True)
             for allowed, group in itertools.groupby(
                 zip(flags, masked_lines), key=lambda item: item[0],
             ):
@@ -247,9 +256,11 @@ def align_line_breaks(
                 break
             for line in sorted(issues, reverse=True):
                 full_source = apply_markdown_issue_fix(
-                    full_source, j1 + line, issues[line],
+                    full_source, context_row + line, issues[line],
                 )[0]
-            text = full_source[start:len(full_source) - len(current[stop:])]
+            text = full_source[
+                local_start:len(full_source) - len(current[stop:context_stop])
+            ]
         return text
 
     reference_lines = reference.splitlines(keepends=True)
@@ -263,6 +274,20 @@ def align_line_breaks(
     starts = [0]
     for line in lines:
         starts.append(starts[-1] + len(line))
+    # {{{ bound hunk context at blank lines outside protected source spans
+    regions = sorted(current_comments + current_equations)
+    region_starts = [begin for begin, _ in regions]
+    boundaries = [0]
+    for row, (allowed, line) in enumerate(classify_lines(
+        _mask_html_comments(current), filetype, strict=False,
+    )):
+        region = bisect_left(region_starts, starts[row + 1]) - 1
+        inside = region >= 0 and regions[region][1] > starts[row]
+        if allowed and not line.strip() and not inside:
+            boundaries.append(row + 1)
+    if boundaries[-1] != len(lines):
+        boundaries.append(len(lines))
+    # }}}
     results = []
     requested_width = width
     hunks = [
@@ -294,12 +319,8 @@ def align_line_breaks(
         ):
             source, tokens, _, _ = items
             for _, a, b in tokens:
-                hidden = any(
-                    begin <= base + a < end for begin, end in layout[0]
-                )
-                math = any(
-                    begin <= base + a < end for begin, end in layout[1]
-                )
+                hidden = region_at(layout[0], base + a) is not None
+                math = region_at(layout[1], base + a) is not None
                 words.append(f"{hunk}:{hidden}:{math}:{source[a:b]}")
             locations.extend((hunk, number) for number in range(len(tokens)))
     matches = [{} for _ in hunks]
@@ -312,6 +333,12 @@ def align_line_breaks(
     # }}}
     for hunk, (_, i1, i2, j1, j2) in enumerate(hunks):
         start, stop = starts[j1], starts[j2]
+        context_first = boundaries[bisect_right(boundaries, j1) - 1]
+        context_last = boundaries[bisect_left(boundaries, j2)]
+        context_start = starts[context_first]
+        context_stop = starts[context_last]
+        local_start = start - context_start
+        context_row = j1 - context_first
         before = current[start:stop]
         width = None if callable(requested_width) else requested_width
         head = "".join(reference_lines[i1:i2])
@@ -403,10 +430,10 @@ def align_line_breaks(
                         old_number = candidate
                 if old_number in old_gaps:
                     raw = old_gaps[old_number]
-                    inside_region = any(
-                        begin <= start + tokens[number][1]
-                        and start + tokens[number + 1][1] < end
-                        for begin, end in current_comments + current_equations
+                    region = region_at(regions, start + tokens[number][1])
+                    inside_region = (
+                        region is not None
+                        and start + tokens[number + 1][1] < region[1]
                     )
                     if (
                         number not in matches[hunk] and "\n" in raw
@@ -450,10 +477,9 @@ def align_line_breaks(
                 if width is not None and len(old_line) > width:
                     continue
                 original_rows = set(render(whitespace).splitlines())
-                inside_comment = any(
-                    begin <= start + tokens[first][1]
-                    and start + tokens[last][1] < end
-                    for begin, end in current_comments
+                region = region_at(current_comments, start + tokens[first][1])
+                inside_comment = (
+                    region is not None and start + tokens[last][1] < region[1]
                 )
                 if inside_comment and old_line in {
                     line.rstrip() for line in original_rows
@@ -487,22 +513,25 @@ def align_line_breaks(
             )
             width = requested_width(i1, restored, joined)
         aligned = lint(restored)
-        linted = lint(before)
+        linted = aligned if restored == before else lint(before)
         # {{{ count adjustments between retained boundaries for CPB review
         layouts = []
         for text in (linted, aligned):
-            layout = source_layout(current[:start] + text + current[stop:])
+            layout = source_layout(
+                current[context_start:start] + text
+                + current[stop:context_stop]
+            )
             layouts.append((
                 *layout[:2], *(
-                    flags[j1:j1 + len(text.splitlines())]
+                    flags[context_row:context_row + len(text.splitlines())]
                     for flags in layout[2:]
                 ),
             ))
         _, lint_tokens, lint_gaps, _ = tokenize(
-            linted, layouts[0], start,
+            linted, layouts[0], local_start,
         )
         _, aligned_tokens, aligned_gaps, _ = tokenize(
-            aligned, layouts[1], start,
+            aligned, layouts[1], local_start,
         )
         moves = inserted = removed = 0
         previous = None
