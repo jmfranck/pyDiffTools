@@ -19,8 +19,8 @@ included are (listed in order of fun/utility):
 
   Source diff linting minimizes line-break changes against the Git index
   (staging area) by default, matching plain ``git diff``. Use
-  ``pydifft cpb filename.md --diff @`` to compare against HEAD, or
-  ``--diff jf_last`` to compare against a tag, branch, or commit hash.
+  ``pydifft cpb filename.md --diff-base @`` to compare against HEAD, or
+  ``--diff-base jf_last`` to compare against a tag, branch, or commit hash.
   The selected baseline is read again on each build. An unreadable explicit
   baseline stops the build; an unavailable index baseline, such as for an
   untracked file, falls back to ordinary source linting.

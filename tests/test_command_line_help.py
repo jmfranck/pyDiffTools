@@ -48,7 +48,7 @@ def test_help_then_subcommand_shows_subcommand_options(capsys):
     assert "cpb" in out
     assert "--comments-to-margin" in out
     assert "--no-comments" in out
-    assert "--diff REF" in out
+    assert "--diff-base REF" in out
     assert "index" in out
 
 
@@ -274,13 +274,13 @@ def test_cpb_cli_passes_diff_baseline(monkeypatch, diff):
     )
     arguments = ["cpb", "notes.md"]
     if diff is not None:
-        arguments += ["--diff", diff]
+        arguments += ["--diff-base", diff]
     command_line.main(arguments)
     assert calls[0]["diff"] == diff
 
 
-def test_cpb_diff_requires_a_value(capsys):
+def test_cpb_diff_base_requires_a_value(capsys):
     with pytest.raises(SystemExit) as excinfo:
-        command_line.main(["cpb", "notes.md", "--diff"])
+        command_line.main(["cpb", "notes.md", "--diff-base"])
     assert excinfo.value.code == 2
-    assert "--diff" in capsys.readouterr().err
+    assert "--diff-base" in capsys.readouterr().err

@@ -1174,7 +1174,10 @@ class Handler(FileSystemEventHandler):
         ),
     },
     filename_extensions={"filename": ".md"},
-    argument_options={**WRAPPING_ARGUMENTS, "diff": {"metavar": "REF"}},
+    argument_options={
+        **WRAPPING_ARGUMENTS,
+        "diff": {"flags": ["--diff-base"], "metavar": "REF"},
+    },
 )
 def cpb(
     filename, comments_to_margin=False, no_comments=False,
