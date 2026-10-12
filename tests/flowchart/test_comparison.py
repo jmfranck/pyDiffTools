@@ -266,6 +266,10 @@ def test_rename_box_and_rich_word_diff(plan):
 
 
 def test_baseline_persists_on_reload_and_navigation(plan, monkeypatch):
+    monkeypatch.setattr(
+        "pydifftools.flowchart.watch_graph.start_preview_browser",
+        lambda _url: object(),
+    )
     baseline = PlanComparison(plan, "HEAD")
     handler = GraphEventHandler(
         plan,
