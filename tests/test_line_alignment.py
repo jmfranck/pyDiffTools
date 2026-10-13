@@ -47,6 +47,129 @@ def test_partial_matching_lines_restore_whitespace_first(tmp_path):
     assert new.read_text() == expected
 
 
+@pytest.mark.parametrize("reference,current", [
+    (
+        r"the TEMPO-SO~4~ probe ($32.9;\text{kJ}/\text{mol}$"
+        "(@fig:DodecaTSO4TempCycle, blue),\nwhich\n",
+        r"the TEMPO-SO~4~ probe ($32.9;\text{kJ}/\text{mol}$"
+        " (@fig:DodecaTSO4TempCycle, blue),\nwhich\n",
+    ),
+    (
+        r"the TEMPO-SO~4~ probe inside small RMs dispersed in"
+        "\ndodecane ($32.9;\\text{kJ}/\\text{mol}$ : "
+        "@fig:DodecaTSO4TempCycle, blue),\nwhich\n",
+        r"the TEMPO-SO~4~ probe inside small RMs dispersed in"
+        "\ndodecane ($32.9;\\text{kJ}/\\text{mol}$: "
+        "@fig:DodecaTSO4TempCycle, blue),\nwhich\n",
+    ),
+    ("First $x$ (reference).\n", "First $x$(reference).\n"),
+    ("First $x$: reference.\n", "First $x$ : reference.\n"),
+    ("First words continue here.\n", "First words  \ncontinue here.\n"),
+    ("A long unchanged introductory line stays here.\n"
+     "First words\\\ncontinue here.\n",
+     "A long unchanged introductory line stays here.\n"
+     "First words\\ continue here.\n"),
+    ("Keep ordinary spaces.\n", "Keep\u00a0ordinary\u2004spaces.\n"),
+    (r"Use $\text{a,b}$ here." + "\n",
+     r"Use $\text{a, b}$ here." + "\n"),
+    (r"Use $\text{a, b}$ here." + "\n",
+     r"Use $\text{a,b}$ here." + "\n"),
+    (r"Use $\text{a,{b,c}}$ here." + "\n",
+     r"Use $\text{a, {b, c}}$ here." + "\n"),
+    (r"Use $\text{a \text{b} c,d}$ here." + "\n",
+     r"Use $\text{a \text{b} c, d}$ here." + "\n"),
+    (r"Use $\alpha{}b$ here." + "\n",
+     r"Use $\alpha b$ here." + "\n"),
+    (r"Use $\custom{a,b}$ here." + "\n",
+     r"Use $\custom{a, b}$ here." + "\n"),
+    ("Use $<!-- hidden words -->$ here.\n",
+     "Use $<!--hidden words-->$ here.\n"),
+])
+def test_rendered_spacing_survives_shared_alignment_and_wmatch(
+    tmp_path, reference, current,
+):
+    for result in align_line_breaks(reference, current, width=1000):
+        assert result["aligned"] == result["before"]
+    old, new = tmp_path / "old.md", tmp_path / "new.md"
+    old.write_text(reference)
+    new.write_text(current)
+    run([str(old), str(new)], wrapnumber=1000)
+    assert new.read_text() == current
+
+
+def test_removed_hard_break_is_not_restored_by_alignment(tmp_path):
+    reference = "First words  \ncontinue here.\n"
+    current = "First words continue here.\n"
+    (result,) = align_line_breaks(reference, current)
+    assert "  \n" not in result["aligned"]
+    old, new = tmp_path / "old.md", tmp_path / "new.md"
+    old.write_text(reference)
+    new.write_text(current)
+    run([str(old), str(new)])
+    assert "  \n" not in new.read_text()
+
+
+@pytest.mark.parametrize("context", ["{}", "Use ${}$ here."])
+@pytest.mark.parametrize("before,after", [
+    ("alpha,beta", "alpha, beta"),
+    ("alpha, beta", "alpha,beta"),
+    ("alpha(beta)", "alpha (beta)"),
+    ("alpha (beta)", "alpha(beta)"),
+    ("alpha:beta", "alpha :beta"),
+    ("alpha :beta", "alpha:beta"),
+])
+def test_alignment_preserves_last_space_everywhere(
+    tmp_path, context, before, after,
+):
+    reference = context.format(before) + "\n"
+    current = context.format(after) + "\n"
+    for result in align_line_breaks(reference, current):
+        assert result["aligned"] == result["before"]
+    old, new = tmp_path / "old.md", tmp_path / "new.md"
+    old.write_text(reference)
+    new.write_text(current)
+    run([str(old), str(new)])
+    assert new.read_text() == current
+
+
+def test_extra_spaces_and_presentation_margins_can_be_cleaned(tmp_path):
+    reference = "Keep one separator here.\n"
+    current = " Keep   one \t separator here.\n"
+    (result,) = align_line_breaks(reference, current, width=79)
+    assert result["aligned"] == reference
+    old, new = tmp_path / "old.md", tmp_path / "new.md"
+    old.write_text(reference)
+    new.write_text(current)
+    run([str(old), str(new)])
+    assert new.read_text() == reference
+    new.write_text(reference.rstrip("\n") + " \n")
+    autofix_markdown_file(new, wrapnumber=79)
+    assert new.read_text() == reference
+
+
+def test_cpb_preserves_rendered_spacing_while_restoring_source_breaks(
+    tmp_path,
+):
+    import subprocess
+
+    reference = (
+        "A probe inside small RMs\ndispersed in dodecane "
+        "($32.9;\\text{kJ}/\\text{mol}$ : @fig:cycle, blue),\nwhich\n"
+    )
+    current = reference.replace("RMs\ndispersed", "RMs dispersed").replace(
+        "$ :", "$:"
+    )
+    path = tmp_path / "source.md"
+    subprocess.run(["git", "init", str(tmp_path)], check=True,
+                   capture_output=True)
+    path.write_text(reference)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "source.md"],
+                   check=True, capture_output=True)
+    path.write_text(current)
+    autofix_markdown_file(path, wrapnumber=1000, git_index=True)
+    assert path.read_text() == reference.replace("$ :", "$:")
+
+
 @pytest.mark.parametrize("old_prefix,new_prefix", [
     ("", " "), ("  ", ""), (" ", "   "),
 ])
@@ -80,6 +203,10 @@ def test_leading_indentation_edits_do_not_overlap_whitespace_restoration():
     ("> Quote.\n", " > Quote.\n"),
     ("> First.\n continuation.\n", "> First.\n  continuation.\n"),
     ("```\n Code.\n```\n", "```\n  Code.\n```\n"),
+    ("Introduction.\n\n  Indented paragraph.\n",
+     "Introduction.\n\n Indented paragraph.\n"),
+    ("Introduction.\n\n Indented paragraph.\n",
+     "Introduction.\n\n  Indented paragraph.\n"),
 ])
 def test_structural_indentation_is_preserved(reference, current):
     assert all(
@@ -177,6 +304,63 @@ def test_comment_alignment_preserves_reference_whitespace():
     assert restored == reference
 
 
+@pytest.mark.parametrize("ending", ["\n", "\r\n"])
+@pytest.mark.parametrize("body", [
+    r"$$R_c \approx (100\,\text{nm·K})/\Delta T$$",
+    r"$$R_c \approx 100/28 \approx 3.6\,\text{nm}$$",
+    "Attached(punctuation),without spaces.",
+])
+def test_hidden_source_layout_matches_across_attached_punctuation(
+    tmp_path, body, ending,
+):
+    import subprocess
+
+    reference = (
+        "Visible prose.\n<!--\nRS: Calculation:\n" + body + "\n-->\n"
+        "Visible $x$ (reference): preserve this space.\n"
+    ).replace("\n", ending)
+    changed_body = body.replace("$$", "$$\n", 1)
+    if body.endswith("$$"):
+        changed_body = changed_body[:-2] + "\n$$"
+    else:
+        changed_body = body.replace("(", " ( ").replace(
+            "),", " ) ,\n"
+        )
+    current = reference.replace(body, changed_body.replace("\n", ending))
+    restored = current
+    for result in reversed(align_line_breaks(reference, current, width=79)):
+        restored = (
+            restored[:result["start"]] + result["aligned"]
+            + restored[result["stop"]:]
+        )
+    assert restored == reference
+    old, new = tmp_path / "old.md", tmp_path / "new.md"
+    old.write_bytes(reference.encode())
+    new.write_bytes(current.encode())
+    run([str(old), str(new)])
+    # wmatch reads text with universal newline handling.
+    assert new.read_text() == reference.replace(ending, "\n")
+    subprocess.run(["git", "init", str(tmp_path)], check=True,
+                   capture_output=True)
+    new.write_bytes(reference.encode())
+    subprocess.run(["git", "-C", str(tmp_path), "add", "new.md"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name",
+                    "Test"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email",
+                    "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "Base"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(tmp_path), "tag", "jf_last"],
+                   check=True)
+    new.write_bytes(current.encode())
+    autofix_markdown_file(new, wrapnumber=79, git_ref="jf_last")
+    assert new.read_bytes() == reference.encode()
+    assert not autofix_markdown_file(
+        new, wrapnumber=79, git_ref="jf_last",
+    )["fixes"]
+
+
 def test_literal_comment_delimiters_remain_opaque():
     delimiter = "`"
     reference = f"Use {delimiter}<!-- hidden words -->{delimiter} here.\n"
@@ -203,8 +387,6 @@ def test_literal_comment_delimiters_remain_opaque():
      "$$\n" + r"r(w_0) = \begin{cases}" + "\n"
      + r"m w_0 + \delta & w_0 < 20 \\[8pt]" + "\n"
      + r"c & w_0 \geq 20\end{cases}" + "\n$$\n"),
-    ("Use $<!-- hidden words -->$ here.\n",
-     "Use $<!--hidden words-->$ here.\n"),
 ])
 def test_math_layout_restores_baseline_without_prose_lint(reference, current):
     for result in reversed(align_line_breaks(reference, current, width=79)):

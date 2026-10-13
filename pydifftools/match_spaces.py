@@ -92,7 +92,6 @@ def match_text(
     trailing_dependent_phrase=DEFAULT_TRAILING_DEPENDENT_PHRASE,
 ):
     """Align reference lines and wrap only overflowing edited prose."""
-    text2 = text2.replace("\u00a0", " ").replace("\u2004", " ")
     # {{{ choose the nearby reference width before any line linting
     reference_lines = classify_lines(text1, filetype)
     prose_rows = [

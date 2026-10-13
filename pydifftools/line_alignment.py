@@ -88,7 +88,7 @@ def align_line_breaks(
 ):
     """Return changed hunks with original, linted and proposed layouts.
 
-    Align words with minimal diff, reuse whitespace after matching words,
+    Align words with minimal diff, reuse equivalent source whitespace,
     then preserve complete reference lines and enforce line linting. CPB
     and wmatch apply the aligned layout automatically.
     Width can be a number or a function choosing a limit after restoration.
@@ -148,6 +148,9 @@ def align_line_breaks(
             margins[row] = allowed[row] and (
                 inside or (
                     margins[row] and "\t" not in indent and len(indent) < 4
+                    and not (
+                        row and not rows[row - 1].strip() and len(indent) >= 2
+                    )
                 )
             )
             position += len(line)
@@ -174,7 +177,7 @@ def align_line_breaks(
                if p["marker"] else "")
             for p in prefixes
         ]
-        math_word = re.compile(
+        span_word = re.compile(
             r"\$\$|\$|\\[A-Za-z]+|\\[^\s]|[A-Za-z]+|[0-9]+(?:\.[0-9]+)?|[^\s]"
         )
         tokens = []
@@ -186,7 +189,11 @@ def align_line_breaks(
                           end]
             for left, right in zip(boundaries, boundaries[1:]):
                 in_math = region_at(equations, base + left) is not None
-                pattern = math_word if in_math else WORD
+                hidden = region_at(comments, base + left) is not None
+                # Hidden source has no rendered word boundaries. Separate
+                # punctuation there too, so layout changes do not turn
+                # "$$R_c" into unmatched "$$" and "R_c" tokens.
+                pattern = span_word if in_math or hidden else WORD
                 tokens.extend(
                     (row, match.start(), match.end())
                     for match in pattern.finditer(text, left, right)
@@ -348,6 +355,39 @@ def align_line_breaks(
         whitespace = dict(gaps)
         ending = "\r\n" if "\r\n" in before else "\n"
 
+        def equivalent_gap(number, replacement):
+            # {{{ keep rendered separators and explicit Markdown hard breaks
+            raw = gaps[number]
+            left = start + tokens[number][1]
+            right = start + tokens[number + 1][1]
+            region = region_at(current_comments, left)
+            if region is not None and right < region[1]:
+                return True
+            region = region_at(current_equations, left)
+            if region is not None and right < region[1]:
+                # Display delimiters can sit on their own source lines.
+                # All other math gaps obey the same rule as prose; no
+                # knowledge of TeX commands or text macros is needed.
+                if current[region[0]:region[0] + 2] == "$$" and (
+                    tokens[number][1] + start == region[0]
+                    or tokens[number + 1][2] + start == region[1]
+                ):
+                    return True
+                return bool(raw) == bool(replacement)
+            # Collapsing a whitespace run retains one separator. It cannot
+            # create a separator from an empty gap or remove the last one.
+            # Line margins are handled separately, with structural margins
+            # excluded. Two spaces before a newline are a Markdown hard
+            # break, and a newline after a backslash is explicit as well.
+            if any(re.search(r" {2,}\r?\n", gap)
+                   for gap in (raw, replacement)) or (
+                before[tokens[number][2] - 1:tokens[number][2]] == "\\"
+                and ("\n" in raw or "\n" in replacement)
+            ):
+                return raw == replacement
+            return bool(raw) == bool(replacement)
+            # }}}
+
         # {{{ restore presentation indentation at matching line starts
         old_first = {}
         for number, (row, _, _) in enumerate(old_tokens):
@@ -430,6 +470,8 @@ def align_line_breaks(
                         old_number = candidate
                 if old_number in old_gaps:
                     raw = old_gaps[old_number]
+                    if not equivalent_gap(number, raw):
+                        continue
                     region = region_at(regions, start + tokens[number][1])
                     inside_region = (
                         region is not None
@@ -494,6 +536,11 @@ def align_line_breaks(
                     elif "\n" in proposed[number]:
                         proposed[number] = " "
                 proposed_rows = render(proposed).splitlines()
+                if any(
+                    not equivalent_gap(number, proposed[number])
+                    for number in needed
+                ):
+                    continue
                 if old_line not in {line.rstrip() for line in proposed_rows}:
                     continue
                 if any(
