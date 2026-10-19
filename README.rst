@@ -251,7 +251,9 @@ included are (listed in order of fun/utility):
     * ``cpb`` and ``wmatch`` share a matcher that finds changed hunks, aligns
       their words using Git's minimal diff, and restores reference whitespace.
       It then considers extra breaks that preserve an unchanged reference line
-      without stranding a tiny edited fragment, and checks wrapping rules.
+      without stranding an edited fragment of three words or fewer, and checks
+      wrapping rules. When matching a baseline, edited lines may exceed the
+      character width by at most four words before wrapping is required.
 
     * ``--wrapnumber`` sets the maximum width (79 for ``cpb`` and ``wmatch``).
       Wmatch also uses nearby reference widths for large edits, retaining

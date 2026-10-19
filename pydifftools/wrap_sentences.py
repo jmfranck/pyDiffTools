@@ -880,8 +880,13 @@ def wr(
             fp.write(result)
 
 
-def check_prose(content, wrapnumber, punctuation_slop, line_start=1):
+def check_prose(
+    content, wrapnumber, punctuation_slop, line_start=1, overflow_words=0,
+):
     """Report source lines in `content` that break wr's rules.
+
+    Diff alignment can set overflow_words to tolerate that many words ending
+    beyond the character width. Ordinary wrapping checks use a strict limit.
 
     Checks mirror wrap_prose's own paragraph/sentence/macro
     splitting so the two commands never disagree about what counts as a
@@ -953,7 +958,18 @@ def check_prose(content, wrapnumber, punctuation_slop, line_start=1):
                                 + len(words[actual_end])
                                 - positions[fragment_offset]
                             )
-                            if actual_end > wr_end:
+                            # Diff alignment can keep a few extra words to
+                            # avoid moving the sentence tail onto a new line.
+                            # Count against the character limit, independently
+                            # of an earlier preferred punctuation break.
+                            excess = sum(
+                                positions[j] + len(words[j])
+                                - positions[fragment_offset] > wrapnumber
+                                for j in range(fragment_offset, actual_end + 1)
+                            )
+                            if actual_end > wr_end and not (
+                                overflow_words and 0 < excess <= overflow_words
+                            ):
                                 overflow = words[wr_end + 1]
                                 rule = (
                                     "line too long"
@@ -1134,7 +1150,7 @@ def _mask_html_comments(content, initially_open=False):
 
 
 def markdown_lint_issues_from_text(
-    content, wrapnumber=45, punctuation_slop=20
+    content, wrapnumber=45, punctuation_slop=20, overflow_words=0,
 ):
     """Return Markdown writing issues, including unfinished source spans."""
     masked_content = _mask_html_comments(content)
@@ -1149,7 +1165,9 @@ def markdown_lint_issues_from_text(
         for line, width, span in _iter_block_spans(
             markdown_blocks(prose_content), wrapnumber
         )
-        for issue in check_prose(span, width, punctuation_slop, line)
+        for issue in check_prose(
+            span, width, punctuation_slop, line, overflow_words,
+        )
     ]
     issues.extend(
         (issue["line"], issue["message"])
@@ -1523,7 +1541,8 @@ def autofix_markdown_file(
     # issue at a time re-lints the whole file for every single fix.
     for _ in range(100):
         issues = markdown_lint_issues_from_text(
-            content, wrapnumber=wrapnumber, punctuation_slop=punctuation_slop
+            content, wrapnumber=wrapnumber, punctuation_slop=punctuation_slop,
+            overflow_words=4 if baseline is not None else 0,
         )
         fixable = {}
         for line_number, message in issues:

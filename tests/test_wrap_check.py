@@ -754,6 +754,42 @@ def test_stray_line_break_in_an_unchanged_line_is_rejoined(tmp_path):
     assert "put those breaks back" in report["fixes"][0]["reason"]
 
 
+@pytest.mark.parametrize("count", [3, 4, 5])
+@pytest.mark.parametrize("word", ["a", "substantial"])
+@pytest.mark.parametrize("command", ["cpb", "wmatch"])
+def test_diff_wrap_allows_only_four_words_beyond_width(
+    tmp_path, count, word, command,
+):
+    from pydifftools.match_spaces import run
+
+    first = "Stable reference words fill the first line"
+    width = len(first)
+    reference = first + "\nand the reference sentence finishes here.\n"
+    path = committed_source(tmp_path, reference)
+    current = reference.replace(
+        first, first.replace("Stable", "Edited") + " " + " ".join(
+            [word] * count
+        ),
+    )
+    path.write_text(current)
+    old = tmp_path / "reference.md"
+    old.write_text(reference)
+    for _ in range(2):
+        if command == "cpb":
+            autofix_markdown_file(
+                path, wrapnumber=width, punctuation_slop=0, git_head=True,
+            )
+        else:
+            run([str(old), str(path)], width, 0)
+        result = path.read_text()
+        assert result.split() == current.split()
+        if count <= 4:
+            assert result == current
+        else:
+            assert result != current
+            assert result.splitlines()[0] == first.replace("Stable", "Edited")
+
+
 def test_one_moved_line_break_is_moved_back(tmp_path):
     path = committed_source(tmp_path, HEAD_PARAGRAPH)
     path.write_text(
@@ -843,7 +879,7 @@ def test_rm_esr_restores_full_head_lines_in_rewritten_sentence(
 
     expected = edited.replace(
         "the ESR measurements presented",
-        "the\nESR measurements\npresented",
+        "the ESR measurements\npresented",
     ).replace("tube (1.50", "tube\n(1.50")
     assert path.read_text() == expected
     assert report["fixes"] and report["layout"] == []
@@ -855,25 +891,21 @@ def test_rm_esr_restores_full_head_lines_in_rewritten_sentence(
     matched.write_text(edited)
     run([str(reference), str(matched)])
     assert matched.read_text() == expected
-    # Automatic alignment preserves both unchanged HEAD lines.
-    assert numstat(path) == (8, 8)
+    # Avoid a new two-word row just to preserve the ESR reference line.
+    assert numstat(path) == (8, 9)
 
 
-def test_embedded_head_line_restores_both_boundaries_together(tmp_path):
+def test_embedded_head_line_does_not_strand_short_changed_lines(tmp_path):
     path = committed_source(tmp_path, "Before\nESR measurements\nAfter.\n")
     edited = "Changed before ESR measurements changed after.\n"
     path.write_text(edited)
 
     report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
 
-    expected = (
-        "Changed before\nESR measurements\nchanged after."
-    )
+    expected = edited.rstrip()
     assert path.read_text() == expected + "\n"
     assert report["layout"] == []
-    (fix,) = report["fixes"]
-    assert fix["before"] == edited.rstrip()
-    assert fix["after"] == expected
+    assert report["fixes"] == []
 
 
 @pytest.mark.parametrize("count", [1, 5, 30])
@@ -886,13 +918,13 @@ def test_cpb_and_wmatch_restore_scattered_reference_lines(tmp_path, count):
         for number in range(count)
     ) + "\n"
     current = "\n\n".join(
-        f"Changed intro {number} Stable component {number} "
-        f"changed outro {number}."
+        f"Changed opening intro {number} Stable component {number} "
+        f"changed closing outro {number}."
         for number in range(count)
     ) + "\n"
     expected = "\n\n".join(
-        f"Changed intro {number}\nStable component {number}\n"
-        f"changed outro {number}."
+        f"Changed opening intro {number}\nStable component {number}\n"
+        f"changed closing outro {number}."
         for number in range(count)
     ) + "\n"
     path = committed_source(tmp_path, head)
@@ -1288,14 +1320,16 @@ def test_qt_diff_fixes_fill_pages_with_double_line_breaks(tmp_path):
         for j in range(count)
     ) + "\n"
     current = "\n\n".join(
-        f"Changed intro {j} Stable component {j} changed outro {j}."
+        f"Changed opening intro {j} Stable component {j} "
+        f"changed closing outro {j}."
         for j in range(count)
     ) + "\n"
     path = committed_source(tmp_path, head)
     path.write_text(current)
     report = autofix_markdown_file(path, wrapnumber=79, git_index=True)
     expected = "\n\n".join(
-        f"Changed intro {j}\nStable component {j}\nchanged outro {j}."
+        f"Changed opening intro {j}\nStable component {j}\n"
+        f"changed closing outro {j}."
         for j in range(count)
     ) + "\n"
     # Every hunk must already be applied before the notice opens.

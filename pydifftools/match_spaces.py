@@ -1,6 +1,7 @@
 from difflib import SequenceMatcher
 from bisect import bisect_left
 import math
+import re
 from .line_alignment import align_line_breaks
 from .wrapping_options import (
     DEFAULT_WIDTH,
@@ -117,7 +118,12 @@ def match_text(
         return (
             local
             if any(
-                len(line) > (local if joined else 1.5 * local)
+                len(line) > local and (
+                    joined or sum(
+                        match.end() > local
+                        for match in re.finditer(r"\S+", line)
+                    ) > 4
+                )
                 for line in restored.splitlines()
             )
             else fallback_width

@@ -247,7 +247,9 @@ def test_wmatch_reuses_wr_rules_and_preserves_other_lines(tmp_path, operation):
     )
     new.write_text(changed + "\n" + rest)
     run([str(old), str(new)])
-    expected = wrap_prose(changed + "\n", 40) + rest
+    expected = wrap_prose(changed + "\n", 40).replace(
+        "has enough\nwords\n", "has enough words\n",
+    ) + rest
     assert new.read_text() == expected
     run([str(old), str(new)])
     assert new.read_text() == expected
@@ -304,7 +306,11 @@ def test_wmatch_fallback_width_and_long_word(tmp_path):
     text = "Start " + "extra words " * 20 + long_word + " end.\n"
     new.write_text(text)
     run([str(old), str(new)])
-    assert new.read_text() == wrap_prose(text, 80)
+    expected = wrap_prose(text, 79).replace(
+        "extra words\nextra words\n" + long_word + "\nend.\n",
+        "extra words extra words " + long_word + " end.\n",
+    )
+    assert new.read_text() == expected
     assert long_word in new.read_text()
 
 

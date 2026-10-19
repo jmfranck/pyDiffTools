@@ -256,6 +256,7 @@ def align_line_breaks(
                 if allowed:
                     for line, message in check_prose(
                         span, width, punctuation_slop, offset,
+                        overflow_words=4,
                     ):
                         issues.setdefault(line, message)
                 offset += span.count("\n")
@@ -477,14 +478,20 @@ def align_line_breaks(
                         region is not None
                         and start + tokens[number + 1][1] < region[1]
                     )
-                    if (
-                        number not in matches[hunk] and "\n" in raw
-                        and "\n" not in gaps[number] and not inside_region
-                        and len("".join(
-                            before[:tokens[number][2]].split("\n")[-1].split()
-                        )) < 10
+                    if "\n" in raw and "\n" not in gaps[number] and (
+                        not inside_region
                     ):
-                        continue
+                        original_rows = set(render(whitespace).splitlines())
+                        proposed = dict(whitespace)
+                        proposed[number] = raw
+                        inherited = {line.rstrip() for line in reference_lines}
+                        if any(
+                            line not in original_rows
+                            and line.rstrip() not in inherited
+                            and 0 < len(line.split()) <= 3
+                            for line in render(proposed).splitlines()
+                        ):
+                            continue
                     if inside_region or (
                         current_layout[3][j1 + tokens[number][0]]
                         and current_layout[3][j1 + tokens[number + 1][0]]
@@ -546,7 +553,7 @@ def align_line_breaks(
                 if any(
                     line not in original_rows
                     and line.rstrip() not in inherited
-                    and 0 < len("".join(line.split())) < 10
+                    and 0 < len(line.split()) <= 3
                     for line in proposed_rows
                 ):
                     continue

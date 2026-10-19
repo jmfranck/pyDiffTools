@@ -489,13 +489,17 @@ def test_batched_word_diff_keeps_hunks_isolated(monkeypatch):
         "Other introduction\nsame reference words\nother closing.\n"
     )
     current = (
-        "Changed introduction same reference words changed closing.\n"
+        "Changed words in introduction same reference words "
+        "changed words in closing.\n"
         "\nUnchanged anchor.\n\n"
-        "Updated introduction same reference words updated closing.\n"
+        "Updated words in introduction same reference words "
+        "updated words in closing.\n"
     )
     expected = [
-        "Changed introduction\nsame reference words\nchanged closing.\n",
-        "Updated introduction\nsame reference words\nupdated closing.\n",
+        "Changed words in introduction\nsame reference words\n"
+        "changed words in closing.\n",
+        "Updated words in introduction\nsame reference words\n"
+        "updated words in closing.\n",
     ]
     calls = []
     original_run = line_alignment.subprocess.run
@@ -516,10 +520,26 @@ def test_optional_preservation_break_does_not_strand_a_tiny_fragment():
     )
     current = "X stable reference words rewritten closing.\n"
     (result,) = align_line_breaks(reference, current)
-    # Reference whitespace is restored after "words", but separating "X"
-    # just to preserve the next reference line would make a tiny new row.
-    assert result["aligned"] == (
-        "X stable reference words\nrewritten closing.\n"
+    # Restoring either boundary would strand a short changed fragment.
+    assert result["aligned"] == current
+
+
+@pytest.mark.parametrize("count", [1, 2, 3, 4])
+@pytest.mark.parametrize("side", ["before", "after"])
+def test_optional_break_uses_word_count_for_long_fragments(count, side):
+    reference = "Former opening\nstable reference words\nformer closing.\n"
+    fragment = " ".join(["substantial"] * count)
+    current = (
+        fragment + " stable reference words with a rewritten closing.\n"
+        if side == "before" else
+        "Here is a rewritten opening stable reference words " + fragment
+        + ".\n"
+    )
+    (result,) = align_line_breaks(reference, current)
+    # Four words justify an optional break to preserve a complete old line.
+    # One to three long words must stay with the adjacent reference words.
+    assert ("\nstable reference words\n" in result["aligned"]) == (
+        count > 3
     )
 
 
