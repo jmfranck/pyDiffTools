@@ -108,6 +108,17 @@ included are (listed in order of fun/utility):
   ``python .github/scripts/update_comment_filter_history.py``; the release
   workflow also refreshes it before building distributions.
 
+  To run Lua filters before pandoc-crossref, declare an ordered list in
+  the Markdown YAML header::
+
+      filters-before-crossref:
+        - filters/panel-references.lua
+
+  Paths are resolved relative to the Markdown file. Each declared filter
+  runs once, in listed order, and is excluded from the adjacent Lua filters
+  that normally run afterward. Missing files produce a build error.
+  Documents without this setting retain the existing filter order.
+
   Declare a single local ``.bib`` file with ``bibliography: references.bib``
   in the Markdown YAML header; relative paths are resolved beside the
   Markdown file. Without that declaration, ``cpb`` uses a single adjacent

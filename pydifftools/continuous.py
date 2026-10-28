@@ -826,6 +826,7 @@ def run_pandoc(
         # }}}
     # {{{ select the declared bibliography before adjacent-file discovery
     bibliography_declared = False
+    metadata = None
     bibliography_paths = []
     front_matter = re.match(
         r"\A\ufeff?---[^\S\n]*\n(.*?)\n(?:---|\.\.\.)[^\S\n]*(?:\n|$)",
@@ -850,6 +851,27 @@ def run_pandoc(
                     else os.path.abspath(os.path.join(source_dir, value))
                     for value in declared
                 ]
+    # }}}
+    # {{{ resolve explicitly ordered filters before cross-reference processing
+    filters_before_crossref = []
+    if isinstance(metadata, dict) and "filters-before-crossref" in metadata:
+        declared_filters = metadata["filters-before-crossref"]
+        if not isinstance(declared_filters, list) or not all(
+            isinstance(value, str) and value for value in declared_filters
+        ):
+            raise ValueError(
+                "cpb: filters-before-crossref must be a list of file paths "
+                f"in {filename}"
+            )
+        for value in declared_filters:
+            filter_path = Path(source_dir, value).resolve()
+            if not filter_path.is_file():
+                raise FileNotFoundError(
+                    "cpb: filters-before-crossref file not found: "
+                    f"{value!r} (resolved to {filter_path})"
+                )
+            if str(filter_path) not in filters_before_crossref:
+                filters_before_crossref.append(str(filter_path))
     # }}}
     localfiles = {}
     for k in ["csl", "bib"]:
@@ -886,7 +908,12 @@ def run_pandoc(
         "author-info-blocks.lua": 1,
     }
     localfiles["lua"] = sorted(
-        [f for f in os.listdir(source_dir) if f.endswith(".lua")],
+        [
+            f for f in os.listdir(source_dir)
+            if f.endswith(".lua")
+            and str(Path(source_dir, f).resolve())
+            not in filters_before_crossref
+        ],
         key=lambda name: (lua_priority.get(name, 2), name),
     )
     # Include any javascript files next to the markdown source by injecting
@@ -908,6 +935,10 @@ def run_pandoc(
         html_file,
         filename,
     ]
+    before_crossref_args = []
+    for filter_path in filters_before_crossref:
+        before_crossref_args.extend(["--lua-filter", filter_path])
+    command[1:1] = before_crossref_args
     if not bibliography_declared and localfiles["bib"]:
         bibliography_paths = [localfiles["bib"]]
     for bibliography_path in bibliography_paths:
