@@ -524,6 +524,61 @@ def test_optional_preservation_break_does_not_strand_a_tiny_fragment():
     assert result["aligned"] == current
 
 
+@pytest.mark.parametrize("comma", ["", ","])
+@pytest.mark.parametrize("location", ["elsewhere", "same_hunk"])
+def test_repeated_short_line_does_not_exempt_an_inserted_fragment(
+    comma, location,
+):
+    citation = "(@fig:TEMPOOH_vs_TEMPOSO4(b))"
+    if location == "elsewhere":
+        old_prefix = new_prefix = "which\n\nUnchanged anchor.\n\n"
+    else:
+        old_prefix = "which\noriginal opening words\n"
+        new_prefix = "which changed opening words\n"
+    reference = (
+        old_prefix + citation + comma + "\nlikely arises from larger\n"
+    )
+    current = (
+        new_prefix + citation + ",\nwhich likely arises from larger\n"
+    )
+    results = align_line_breaks(reference, current, width=55)
+    for result in reversed(results):
+        current = (
+            current[:result["start"]] + result["aligned"]
+            + current[result["stop"]:]
+        )
+    assert citation + ",\nwhich likely arises from larger\n" in current
+
+
+def test_matched_short_line_can_still_be_restored():
+    reference = (
+        "Former opening has four words\nwhich\n"
+        "following stable words remain here\n"
+    )
+    current = (
+        "Changed opening has four words which "
+        "following stable words remain here\n"
+    )
+    (result,) = align_line_breaks(reference, current)
+    assert result["aligned"] == reference.replace("Former", "Changed")
+
+
+@pytest.mark.parametrize("fragment,restore", [
+    (r"$\alpha\beta\gamma$", False),
+    ("link){#one two three four}", True),
+])
+def test_fragment_word_count_handles_math_and_attribute_tokens(
+    fragment, restore,
+):
+    reference = "Former opening\nstable reference words\nformer closing.\n"
+    current = (
+        fragment
+        + " stable reference words rewritten closing has four words.\n"
+    )
+    (result,) = align_line_breaks(reference, current)
+    assert ("\nstable reference words\n" in result["aligned"]) == restore
+
+
 @pytest.mark.parametrize("count", [1, 2, 3, 4])
 @pytest.mark.parametrize("side", ["before", "after"])
 def test_optional_break_uses_word_count_for_long_fragments(count, side):

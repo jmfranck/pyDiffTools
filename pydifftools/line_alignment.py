@@ -490,15 +490,21 @@ def align_line_breaks(
                         continue
                     for direction, first in ((-1, number), (1, number + 1)):
                         last = first
-                        words = 1
-                        while first > 0 if direction < 0 else (
-                            last < len(tokens) - 1
+                        words = len(before[
+                            tokens[first][1]:tokens[first][2]
+                        ].split())
+                        while words <= 3 and (
+                            (direction < 0 and first > 0)
+                            or (direction > 0 and last < len(tokens) - 1)
                         ):
                             gap = first - 1 if direction < 0 else last
                             raw = proposed.get(gap, token_gaps[gap])
                             if "\n" in raw:
                                 break
-                            words += bool(raw)
+                            adjacent = first - 1 if direction < 0 else last + 1
+                            words += len(before[
+                                tokens[adjacent][1]:tokens[adjacent][2]
+                            ].split()) - (not raw)
                             if words > 3:
                                 break
                             if direction < 0:
