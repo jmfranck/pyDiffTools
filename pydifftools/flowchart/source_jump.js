@@ -1,11 +1,11 @@
-// Add a small local-only source jump action to cpb and flowchart previews.
+// Add a small local-only source jump action to cpb, qmdb and flowchart previews.
 (function () {
   const endpoint = window.pydifftSourceJumpEndpoint;
   if (!endpoint) {
     return;
   }
   const excludedSourceElements =
-    '.math,.MathJax,mjx-container,.katex,math,' +
+    '.pydifft-obs-prefix,.math,.MathJax,mjx-container,.katex,math,' +
     'script[type^="math/tex"],' +
     'a[href*="#fig:"],a[href*="#fig-"],a[href*="#fig%3A"]';
 
@@ -27,6 +27,7 @@
   });
 
   let phrase = '';
+  let source = null;
 
   // Preserve HTML tag boundaries without adding spaces to words such as
   // H<sub>2</sub>O. Python treats this reserved marker as a formatting gap.
@@ -43,6 +44,9 @@
 
   function showMenu(event, text) {
     phrase = normalizeSourceText(text || '');
+    const sourceElement = event.target && event.target.closest
+      ? event.target.closest('[data-pydifft-source]') : null;
+    source = sourceElement ? sourceElement.dataset.pydifftSource : null;
     if (!phrase) {
       hideMenu();
       return;
@@ -102,6 +106,11 @@
         text += ' ';
         return;
       }
+      if (node.nodeType === Node.ELEMENT_NODE &&
+          (node.tagName === 'BR' || node.tagName === 'IMG')) {
+        text += ' ';
+        return;
+      }
       const tagBoundary = node !== block && node.nodeType === Node.ELEMENT_NODE;
       if (tagBoundary) {
         text += '\uE000';
@@ -144,7 +153,7 @@
     fetch(endpoint, {
       method: 'POST',
       mode: 'no-cors',
-      body: phrase,
+      body: source ? JSON.stringify({source: source, phrase: phrase}) : phrase,
     }).catch(function () {
       // The preview may be closing while the local editor request is sent.
     });

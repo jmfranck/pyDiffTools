@@ -1,3 +1,4 @@
+import json
 import io
 import queue
 import socket
@@ -380,6 +381,7 @@ def test_second_qmdb_takes_next_ports_and_accepts_rebuild(
     build_calls = []
     http_ports = []
     handlers = []
+    jumps = []
     urls = []
     httpd = FakeHttpServer()
 
@@ -424,6 +426,20 @@ def test_second_qmdb_takes_next_ports_and_accepts_rebuild(
             handler.do_POST()
             assert responses == [202]
             assert built.wait(timeout=2)
+            handler.path = fast_build.SOURCE_JUMP_ENDPOINT
+            for source, status in [
+                ("doc.qmd", 204), ("../outside.qmd", 400),
+                ("doc.html", 400),
+            ]:
+                body = json.dumps({
+                    "source": source, "phrase": "Source text."
+                }).encode()
+                handler.headers["Content-Length"] = str(len(body))
+                handler.rfile = io.BytesIO(body)
+                handler.send_error = responses.append
+                handler.do_POST()
+                assert responses[-1] == status
+            assert jumps == [(tmp_path / "doc.qmd", "Source text.")]
             return False
 
     class Observer:
@@ -445,6 +461,10 @@ def test_second_qmdb_takes_next_ports_and_accepts_rebuild(
         classmethod(lambda cls, **_k: Machine()),
     )
     monkeypatch.setattr(fast_build, "load_rendered_files", lambda: [])
+    monkeypatch.setattr(
+        fast_build, "jump_to_source",
+        lambda source, phrase: jumps.append((source, phrase)),
+    )
     monkeypatch.setattr(fast_build, "ThreadingHTTPServer", fake_http_server)
     monkeypatch.setattr(fast_build, "_serve_forever", lambda _httpd: None)
     monkeypatch.setattr(fast_build, "BrowserReloader", Reloader)

@@ -230,6 +230,15 @@ def test_postprocess_nested_includes(fb, tmp_path, monkeypatch):
     html = target.read_text()
     assert "LEAF" in html
     assert "data-include" not in html
+    root = fb.lxml_html.fromstring(html)
+    leaf = root.xpath('//*[text()="LEAF"]')[0]
+    assert leaf.get("data-pydifft-source") == "leaf.qmd"
+    assert html.count('id="pydifft-source-jump"') == 1
+    fb.postprocess_html(target, build_dir, build_dir)
+    root = fb.lxml_html.fromstring(target.read_text())
+    assert root.xpath('//*[text()="LEAF"]')[0].get(
+        "data-pydifft-source"
+    ) == "leaf.qmd"
 
 
 def test_postprocess_adds_shared_pygments_stylesheet_link(fb, tmp_path):
@@ -799,8 +808,8 @@ print('hello')
     assert fb.RenderNotebook.count_code_blocks(text) == 1
 
 
-# TODO ☐: I really disapprove of calling things "monkeypatch" without further
-#         explanation
+# Pytest's monkeypatch fixture changes the working directory temporarily
+# and restores it automatically after the test.
 def test_noexec_magic_marks_block_without_execution(fb, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     src = Path("doc.qmd")
@@ -1361,3 +1370,79 @@ def test_render_notebook_status_tags_and_tree_output(fb, monkeypatch):
     assert "unrun ipynb" in tree_text
     assert "waiting on include build" in tree_text
     assert "missing html" in tree_text
+
+
+def test_observation_images_keep_blue_text_and_source_menu(fb):
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
+
+    Path("obs.qmd").write_text(
+        '# Observations\n\n<obs author="JM" time="today">'
+        "Before image.<br/>\n"
+        "![](pixel.png)<br/>\n"
+        "After image.\n\n"
+        "Another paragraph.\n</obs>\n\nOutside observation.\n"
+    )
+    Path("pixel.png").write_bytes(base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0l"
+        "EQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    ))
+    config = yaml.safe_load(Path("_quarto.yml").read_text())
+    config["project"]["render"] = ["obs.qmd"]
+    Path("_quarto.yml").write_text(yaml.safe_dump(config))
+    fb.RenderNotebook.from_project().build()
+    page = Path("_display/obs.html").resolve()
+    raw = page.read_text()
+    page.write_text(
+        "<html><head></head><body><obs>Before image.<br/>"
+        "<img src='pixel.png'>After image.<p>Another paragraph.</p></obs>"
+        '<div data-script="obs.qmd" data-index="0"></div></body></html>'
+    )
+    fb.substitute_code_placeholders(
+        page, {("obs.qmd", 0): ""}, {("obs.qmd", 0): "pass"}
+    )
+    fb.postprocess_html(page, fb.BUILD_DIR, fb.DISPLAY_DIR)
+    parsed = fb.lxml_html.fromstring(page.read_text())
+    observation = parsed.xpath('//div[@class="pydifft-observation"]')[0]
+    assert "Another paragraph." in observation.text_content()
+    page.write_text(raw)
+    options = Options()
+    options.add_argument("--headless=new")
+    browser = webdriver.Chrome(
+        service=Service("/usr/bin/chromedriver"), options=options
+    )
+    try:
+        browser.get(page.as_uri())
+        result = browser.execute_script(
+            "const obs = document.querySelector('.pydifft-observation');"
+            "const texts = [];"
+            "const walker = document.createTreeWalker("
+            "  document.body, NodeFilter.SHOW_TEXT);"
+            "while (walker.nextNode()) {"
+            "  const node = walker.currentNode;"
+            "  if (/Before image|After image|Another paragraph/.test("
+            "      node.textContent)) {"
+            "    texts.push(getComputedStyle(node.parentElement).color);"
+            "  }"
+            "}"
+            "window.fetch = (url, options) => {"
+            "  window.sentJump = [url, JSON.parse(options.body)];"
+            "  return Promise.resolve();"
+            "};"
+            "obs.dispatchEvent(new MouseEvent('contextmenu', {"
+            "  bubbles:true, cancelable:true, clientX:20, clientY:20"
+            "}));"
+            "const menu = document.getElementById('pydifft-source-jump-menu');"
+            "const visible = menu.style.display;"
+            "menu.querySelector('button').click();"
+            "return {colors:texts, visible:visible, jump:window.sentJump,"
+            "  prefix:obs.querySelector('.pydifft-obs-prefix').textContent};"
+        )
+        assert result["colors"] == ["rgb(0, 0, 255)"] * 3
+        assert result["prefix"] == "today JM:"
+        assert result["visible"] == "block"
+        assert result["jump"][0] == fb.SOURCE_JUMP_ENDPOINT
+        assert result["jump"][1]["source"] == "obs.qmd"
+    finally:
+        browser.quit()

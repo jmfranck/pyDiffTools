@@ -21,6 +21,7 @@ import shutil
 import queue
 import yaml
 from pydifftools.command_registry import register_command
+from pydifftools.source_jump import jump_to_source, MAX_SOURCE_JUMP_BYTES
 from pydifftools.browser_lifecycle import (
     browser_window_is_alive,
     close_browser_window,
@@ -61,6 +62,7 @@ CODE_DISPLAY_MODES = {
 }
 # {{{ Rebuild endpoint URL (changeable parameters)
 RERUN_ENDPOINT = "/__pydifft/rerun"
+SOURCE_JUMP_ENDPOINT = "/__pydifft/jump"
 # }}}
 # {{{ Right-click "SOURCE" to rebuild a notebook through the qmdb server
 RERUN_SCRIPT = """
@@ -80,6 +82,7 @@ RERUN_SCRIPT = """
       return;
     }
     e.preventDefault();
+    e.stopImmediatePropagation();
     menu = document.createElement("div");
     menu.textContent = "Rebuild";
     menu.style.cssText = "position:fixed;z-index:2147483647;"
@@ -2210,11 +2213,32 @@ def _ensure_rerun_script(root):
     head.append(script)
 
 
+def _normalize_observation_html(text):
+    """Keep raw observation boundaries intact across paragraphs and figures."""
+    # HTML parsers close unknown inline tags at </p>. A block-capable
+    # container keeps the closing tag bounding all of the observed prose.
+    text = re.sub(
+        r"<obs\b([^>]*)>",
+        r'<div class="pydifft-observation"\1>',
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"</obs\s*>", "</div>", text, flags=re.IGNORECASE)
+    return text
+
+
 # also used by: tests/notebook/test_fast_build.py, which calls or
 # monkeypatches this notebook-builder entry point.
 def postprocess_html(html_path: Path, include_root: Path, resource_root: Path):
     """Replace placeholder nodes with referenced HTML bodies."""
-    root = lxml_html.fromstring(html_path.read_text())
+    root = lxml_html.fromstring(
+        _normalize_observation_html(html_path.read_text())
+    )
+    # Mark fragments before expansion to retain nested include source paths.
+    source = Path(os.path.relpath(html_path, DISPLAY_DIR)).with_suffix(".qmd")
+    for node in root.xpath("//body") or [root]:
+        if not node.get("data-pydifft-source"):
+            node.set("data-pydifft-source", source.as_posix())
     # keep processing until no include placeholders remain so nested includes
     # are fully expanded in the served HTML
     while True:
@@ -2229,7 +2253,9 @@ def postprocess_html(html_path: Path, include_root: Path, resource_root: Path):
             target = (include_root / target_rel).resolve()
             if target.exists():
                 frag_text = target.read_text()
-                frag = lxml_html.fromstring(frag_text)
+                frag = lxml_html.fromstring(
+                    _normalize_observation_html(frag_text)
+                )
                 body = frag.xpath("body")
                 if body:
                     elems = list(body[0])
@@ -2244,6 +2270,12 @@ def postprocess_html(html_path: Path, include_root: Path, resource_root: Path):
                 start_c = lxml_html.HtmlComment(f"BEGIN include {target_rel}")
                 parent.insert(idx, end_c)
                 for elem in reversed(elems):
+                    if isinstance(elem.tag, str):
+                        elem.set(
+                            "data-pydifft-source",
+                            elem.get("data-pydifft-source")
+                            or Path(target_rel).with_suffix(".qmd").as_posix(),
+                        )
                     parent.insert(idx, elem)
                 parent.insert(idx, start_c)
                 progress = True
@@ -2318,6 +2350,45 @@ def postprocess_html(html_path: Path, include_root: Path, resource_root: Path):
     # Includes contribute their bodies, so their head scripts are lost.
     # Install the handler once on the final page after expanding includes.
     _ensure_rerun_script(root)
+    # {{{ Style observations left raw when images split Pandoc inline lists
+    for obs in root.xpath('//div[@class="pydifft-observation"]'):
+        # Inline display preserves observations embedded in running prose.
+        obs.set("style", obs.get("style", "") + ";display:inline;color:blue;")
+        if not obs.xpath('./span[@class="pydifft-obs-prefix"]'):
+            metadata = " ".join(filter(None, (
+                obs.get("time") or obs.get("date"), obs.get("author")
+            )))
+            if metadata:
+                prefix = lxml_html.Element("span")
+                prefix.set("class", "pydifft-obs-prefix")
+                prefix.set("style", "font-size:85%;color:green;")
+                prefix.text = metadata + ":"
+                prefix.tail = " " + (obs.text or "")
+                obs.text = None
+                obs.insert(0, prefix)
+    # }}}
+    # {{{ Reuse CPB's context menu on every final QMDB page
+    head = root.find("head")
+    if head is None:
+        head = lxml_html.Element("head")
+        root.insert(0, head)
+    for old in root.xpath(
+        '//script[@id="pydifft-source-jump-config" or '
+        '@id="pydifft-source-jump"]'
+    ):
+        old.getparent().remove(old)
+    config = lxml_html.Element("script", id="pydifft-source-jump-config")
+    config.text = (
+        "window.pydifftSourceJumpEndpoint = "
+        + json.dumps(SOURCE_JUMP_ENDPOINT) + ";"
+    )
+    head.append(config)
+    script = lxml_html.Element("script", id="pydifft-source-jump")
+    script.text = (
+        Path(__file__).parents[1] / "flowchart" / "source_jump.js"
+    ).read_text(encoding="utf-8")
+    head.append(script)
+    # }}}
     html_path.write_text(lxml_html.tostring(root, encoding="unicode"))
 
 
@@ -2335,8 +2406,10 @@ def substitute_code_placeholders(
     if code_display not in CODE_DISPLAY_MODES:
         raise ValueError(f"unknown code display mode: {code_display}")
     parser = lxml_html.HTMLParser(encoding="utf-8")
-    tree = lxml_html.parse(str(html_path), parser)
-    root = tree.getroot()
+    root = lxml_html.document_fromstring(
+        _normalize_observation_html(html_path.read_text()), parser=parser
+    )
+    tree = root.getroottree()
     formatter = HtmlFormatter()
     head = root.xpath("//head")
     if head and not root.xpath('//style[@id="pygments-style"]'):
@@ -2379,7 +2452,9 @@ def substitute_code_placeholders(
                 frags = [details]
         # }}}
         if not missing_output and html:
-            frags += lxml_html.fragments_fromstring(html)
+            frags += lxml_html.fragments_fromstring(
+                _normalize_observation_html(html)
+            )
         elif missing_output:
             # Only show the placeholder when the notebook output entry is
             # absent so executed cells that intentionally produce no output
@@ -2499,6 +2574,41 @@ def watch_and_serve(
             super().__init__(*args, directory=str(DISPLAY_DIR), **kwargs)
 
         def do_POST(self):
+            if self.path == SOURCE_JUMP_ENDPOINT:
+                # {{{ Dispatch the shared menu to the fragment's QMD source
+                origin = self.headers.get("Origin")
+                if origin and origin.split("://", 1)[-1] != self.headers.get(
+                    "Host"
+                ):
+                    self.send_error(403)
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= MAX_SOURCE_JUMP_BYTES:
+                        raise ValueError(length)
+                    request = json.loads(self.rfile.read(length))
+                    source = (PROJECT_ROOT / request["source"]).resolve()
+                    source.relative_to(PROJECT_ROOT.resolve())
+                    if source.suffix != ".qmd":
+                        raise ValueError("Expected a QMD source")
+                    phrase = request["phrase"]
+                    if not isinstance(phrase, str):
+                        raise ValueError("Expected source text")
+                except (ValueError, KeyError, TypeError):
+                    self.send_error(400)
+                    return
+                try:
+                    jump_to_source(source, phrase)
+                except (
+                    OSError, subprocess.SubprocessError, ValueError
+                ) as exc:
+                    print(f"pydifft source jump failed: {exc}", flush=True)
+                    self.send_error(500)
+                    return
+                self.send_response(204)
+                self.end_headers()
+                return
+                # }}}
             # {{{ Re-run the notebook behind a right-clicked SOURCE label
             if self.path != RERUN_ENDPOINT:
                 self.send_error(404)
