@@ -463,6 +463,52 @@ def align_line_breaks(
             old_rows = {}
             for number, (row, _, _) in enumerate(old_tokens):
                 old_rows.setdefault(row, [number, number])[1] = number
+            for row, (first, last) in old_rows.items():
+                if (
+                    all(number in reverse for number in range(first, last + 1))
+                    and reverse[last] - reverse[first] == last - first
+                ):
+                    spans.append((
+                        reverse[first], reverse[last],
+                        reference_lines[i1 + row].rstrip(),
+                    ))
+            inherited = {(first, last) for first, last, _ in spans}
+            token_gaps = [
+                before[left[2]:right[1]]
+                for left, right in zip(tokens, tokens[1:])
+            ]
+
+            def creates_short_fragment(proposed, changed):
+                # Inspect only rows beside newly inserted breaks. Token
+                # ranges identify the actual inherited line, even when its
+                # text occurs elsewhere. Stop counting after four words.
+                for number in changed:
+                    if (
+                        "\n" not in proposed[number]
+                        or "\n" in whitespace[number]
+                    ):
+                        continue
+                    for direction, first in ((-1, number), (1, number + 1)):
+                        last = first
+                        words = 1
+                        while first > 0 if direction < 0 else (
+                            last < len(tokens) - 1
+                        ):
+                            gap = first - 1 if direction < 0 else last
+                            raw = proposed.get(gap, token_gaps[gap])
+                            if "\n" in raw:
+                                break
+                            words += bool(raw)
+                            if words > 3:
+                                break
+                            if direction < 0:
+                                first -= 1
+                            else:
+                                last += 1
+                        if words <= 3 and (first, last) not in inherited:
+                            return True
+                return False
+
             for number in gaps:
                 old_number = matches[hunk].get(number)
                 if old_number is None and number + 1 in matches[hunk]:
@@ -481,16 +527,9 @@ def align_line_breaks(
                     if "\n" in raw and "\n" not in gaps[number] and (
                         not inside_region
                     ):
-                        original_rows = set(render(whitespace).splitlines())
                         proposed = dict(whitespace)
                         proposed[number] = raw
-                        inherited = {line.rstrip() for line in reference_lines}
-                        if any(
-                            line not in original_rows
-                            and line.rstrip() not in inherited
-                            and 0 < len(line.split()) <= 3
-                            for line in render(proposed).splitlines()
-                        ):
+                        if creates_short_fragment(proposed, (number,)):
                             continue
                     if inside_region or (
                         current_layout[3][j1 + tokens[number][0]]
@@ -502,21 +541,8 @@ def align_line_breaks(
                             ending + continuation[tokens[number][0]]
                             if "\n" in raw else raw
                         )
-            for row, (first, last) in old_rows.items():
-                if (
-                    all(number in reverse for number in range(first, last + 1))
-                    and reverse[last] - reverse[first] == last - first
-                ):
-                    spans.append(
-                        (
-                            reverse[first],
-                            reverse[last],
-                            reference_lines[i1 + row].rstrip(),
-                        )
-                    )
             # }}}
             # {{{ additional breaks preserve a line without tiny new fragments
-            inherited = {line.rstrip() for line in reference_lines}
             for first, last, old_line in spans:
                 needed = range(
                     max(0, first - 1), min(len(tokens) - 1, last + 1)
@@ -550,12 +576,7 @@ def align_line_breaks(
                     continue
                 if old_line not in {line.rstrip() for line in proposed_rows}:
                     continue
-                if any(
-                    line not in original_rows
-                    and line.rstrip() not in inherited
-                    and 0 < len(line.split()) <= 3
-                    for line in proposed_rows
-                ):
+                if creates_short_fragment(proposed, needed):
                     continue
                 whitespace = proposed
             # }}}
