@@ -121,7 +121,7 @@ def test_mfs_uses_existing_acknowledged_listener_without_fork(
     monkeypatch.chdir(tmp_path)
     try:
         command_line.mfs("**Result** near @FIG:overview [@smith2024]")
-        assert search_queue.get(timeout=1) == "Result near"
+        assert search_queue.get(timeout=1) == "Result near @FIG:overview"
     finally:
         stop_listener(server, stop_event, thread)
 

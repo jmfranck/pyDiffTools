@@ -4,8 +4,7 @@ import shutil
 import subprocess
 import sys
 
-# callbacks that run before any dialog needs the user; cpb registers one
-# that closes its live preview, so issues are dealt with before it reopens
+# Optional callbacks for callers that need to prepare for a dialog.
 dialog_callbacks = []
 
 
@@ -97,7 +96,7 @@ def start_browser():
 
 
 def prepare_for_dialog():
-    """Let watch commands close their preview before a dialog appears."""
+    """Notify registered callers before a dialog appears."""
     for callback in list(dialog_callbacks):
         callback()
 
@@ -108,6 +107,10 @@ def browser_window_is_alive(browser):
     # the same shutdown behavior when a user closes the browser window.
     # Do not probe with execute_script here: page navigations can briefly
     # interrupt script execution even while the window is still open.
+    from selenium.common.exceptions import (
+        InvalidSessionIdException, NoSuchWindowException, WebDriverException,
+    )
+
     if browser is None:
         return False
     try:
@@ -115,10 +118,14 @@ def browser_window_is_alive(browser):
         if not handles:
             return False
         return True
-    except Exception:
+    except (InvalidSessionIdException, NoSuchWindowException):
         return False
+    except WebDriverException:
+        # A transient command failure is not evidence of a closed window.
+        return True
 
 
+# also used by: continuous.py, notebook/fast_build.py, flowchart/watch_graph.py
 def close_browser_window(browser):
     # Close a Selenium browser session and ignore errors from already-closed
     # windows so cleanup paths stay simple.
@@ -137,20 +144,93 @@ def forward_search_in_browser(browser, search_text):
     if browser is None or not search_text:
         return False
     found = browser.execute_script(
-        """
-        var searchText = arguments[0];
-        if (!window.find) {
-            return false;
+        r"""
+        const searchText = arguments[0];
+        let didFind = window.find && window.find(searchText);
+        // Match across inline elements, entities, and rendered references.
+        if (!didFind) {
+            const escape = text => text.replace(
+                /[.*+?^${}()|[\]\\]/g, '\\$&'
+            ).replace(/\s+/g, '\\s+');
+            const reference =
+                /\[?@([a-z]{2,4}):(\w(?:[\w:./-]*[\w/-])?)\]?/gi;
+            let pattern = '', cursor = 0, match;
+            let valid = true;
+            while ((match = reference.exec(searchText))) {
+                pattern += escape(searchText.slice(cursor, match.index));
+                const id = match[1].toLowerCase() + ':' + match[2];
+                const link = Array.from(
+                    document.querySelectorAll('a[href]')
+                ).find(a => a.getAttribute('href') === '#' + id);
+                const target = document.getElementById(id);
+                if (!link && !target) {
+                    valid = false;
+                    break;
+                }
+                // Unlinked crossrefs still render a numeric label. For a
+                // reference alone, select its target rather than guessing
+                // which occurrence of that number the user intended.
+                if (!link && searchText.trim() === match[0]) {
+                    const range = document.createRange();
+                    range.selectNodeContents(target);
+                    const selection = window.getSelection();
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+                    didFind = true;
+                    valid = false;
+                    break;
+                }
+                pattern += '(?:(?:eq(?:uation)?|fig(?:ure)?|tab(?:le)?|' +
+                    'sec(?:tion)?|ch(?:apter)?|lst|listing)s?\\.?\\s*)?' +
+                    (link ? escape(link.textContent.trim()) :
+                        '\\(?\\d+(?:[.–-]\\d+)*[a-z]?\\)?');
+                cursor = reference.lastIndex;
+            }
+            pattern += escape(searchText.slice(cursor));
+            if (valid) {
+                const walker = document.createTreeWalker(
+                    document.body, NodeFilter.SHOW_TEXT
+                );
+                const nodes = [], starts = [];
+                let text = '', node;
+                while ((node = walker.nextNode())) {
+                    if (node.parentElement.closest(
+                        'script, style, noscript, [hidden]'
+                    ) || !node.parentElement.getClientRects().length) {
+                        continue;
+                    }
+                    starts.push(text.length);
+                    nodes.push(node);
+                    text += node.textContent;
+                }
+                const result = new RegExp(pattern, 'i').exec(text);
+                if (result && result[0].length) {
+                    const start = result.index;
+                    const end = start + result[0].length;
+                    const first = starts.findIndex((offset, i) =>
+                        offset + nodes[i].length > start
+                    );
+                    const last = starts.findIndex((offset, i) =>
+                        offset + nodes[i].length >= end
+                    );
+                    const range = document.createRange();
+                    range.setStart(nodes[first], start - starts[first]);
+                    range.setEnd(nodes[last], end - starts[last]);
+                    const selection = window.getSelection();
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+                    didFind = true;
+                }
+            }
         }
-        var didFind = window.find(searchText);
         if (didFind && window.getSelection) {
-            var selection = window.getSelection();
+            const selection = window.getSelection();
             if (selection.rangeCount > 0) {
-                var rect = selection.getRangeAt(0).getBoundingClientRect();
+                const rect = selection.getRangeAt(0).getBoundingClientRect();
                 window.scrollBy(0, rect.top - window.innerHeight / 3);
             }
         }
-        return didFind;
+        return Boolean(didFind);
         """,
         search_text,
     )

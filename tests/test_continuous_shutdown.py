@@ -1,5 +1,6 @@
 import errno
 import os
+import signal
 import threading
 import time
 from pathlib import Path
@@ -40,8 +41,6 @@ class FakeBrowser:
         self.refresh_threads = []
         self.quit_calls = 0
         self.refresh_error = False
-        self.scroll_position = 0
-        self.scroll_restored = threading.Event()
 
     @property
     def window_handles(self):
@@ -50,20 +49,12 @@ class FakeBrowser:
     def get(self, _url):
         self.loaded.set()
 
-    def execute_script(self, script, *args):
-        assert not self.closed
-        assert self.loaded.is_set()
-        if script == "return window.scrollY;":
-            return self.scroll_position
-        assert script == "window.scrollTo(0, arguments[0]);"
-        self.scroll_position = args[0]
-        self.scroll_restored.set()
-
     def refresh(self):
         self.refresh_calls += 1
         self.refresh_threads.append(threading.current_thread())
+        refresh_error = self.refresh_error
         self.refreshed.set()
-        if self.refresh_error:
+        if refresh_error:
             raise WebDriverException("window closed")
 
     def quit(self):
@@ -289,7 +280,9 @@ def test_cpb_keeps_watching_after_rebuild_error(monkeypatch, tmp_path, capsys):
     assert_clean_polling_shutdown(runtime)
 
 
-def test_cpb_refresh_failure_stops_without_reopening(monkeypatch, tmp_path):
+def test_cpb_refresh_failure_keeps_preview_until_user_closes_it(
+    monkeypatch, tmp_path
+):
     source = tmp_path / "content.md"
     source.write_text("before\n")
     runtime = install_cpb_runtime(monkeypatch)
@@ -298,12 +291,16 @@ def test_cpb_refresh_failure_stops_without_reopening(monkeypatch, tmp_path):
     def editor():
         source.write_text("after\n")
         assert runtime["browser"].refreshed.wait(timeout=2)
+        runtime["browser"].refreshed.clear()
+        runtime["browser"].refresh_error = False
+        source.write_text("recovered\n")
+        assert runtime["browser"].refreshed.wait(timeout=2)
+        assert runtime["browser"].quit_calls == 0
 
     run_cpb_with_editor(source, runtime["browser"], editor)
 
-    assert runtime["builds"] == ["before\n", "after\n"]
-    assert runtime["browser"].refresh_calls == 1
-    assert len(runtime["chrome_calls"]) == 1
+    assert runtime["builds"] == ["before\n", "after\n", "recovered\n"]
+    assert runtime["browser"].refresh_calls == 2
     assert_clean_polling_shutdown(runtime)
 
 
@@ -355,70 +352,36 @@ def test_cpb_notice_comes_before_the_first_build_and_not_on_rebuild(
     assert_clean_polling_shutdown(runtime)
 
 
-@pytest.mark.parametrize("scroll_positions", [(840, 0), (0, 1280)])
-def test_cpb_closes_preview_for_a_rebuild_dialog_and_reopens_it(
-    monkeypatch, tmp_path, scroll_positions
+@pytest.mark.parametrize("build_fails", [False, True])
+def test_cpb_keeps_preview_open_during_rebuild_dialog(
+    monkeypatch, tmp_path, build_fails
 ):
     source = tmp_path / "content.md"
     source.write_text("before\n")
-    browsers = []
-    open_during_dialog = []
+    dialog_seen = threading.Event()
+    runtime = None
 
     def build_hook(number, _text):
         if number > 1:
-            # a dialog in the rebuild (e.g. source fixes or citations)
             continuous.prepare_for_dialog()
-            open_during_dialog.append(
-                [not browser.closed for browser in browsers]
-            )
+            assert not runtime["browser"].closed
+            assert runtime["browser"].quit_calls == 0
+            dialog_seen.set()
+            if build_fails:
+                raise RuntimeError("source formatting needs attention")
 
     runtime = install_cpb_runtime(monkeypatch, build_hook=build_hook)
 
-    def new_chrome(**_kwargs):
-        browsers.append(FakeBrowser())
-        return browsers[-1]
+    def editor():
+        source.write_text("after\n")
+        assert dialog_seen.wait(timeout=2)
+        if not build_fails:
+            assert runtime["browser"].refreshed.wait(timeout=2)
 
-    monkeypatch.setattr(webdriver, "Chrome", new_chrome)
-    errors = []
-
-    def edit_then_close():
-        try:
-            deadline = time.monotonic() + 2
-            while not browsers and time.monotonic() < deadline:
-                time.sleep(0.01)
-            assert browsers[0].loaded.wait(timeout=2)
-            for index, position in enumerate(scroll_positions):
-                browsers[index].scroll_position = position
-                source.write_text(f"after {index + 1}\n")
-                deadline = time.monotonic() + 2
-                while (
-                    len(browsers) < index + 2
-                    and time.monotonic() < deadline
-                ):
-                    time.sleep(0.01)
-                assert browsers[index + 1].scroll_restored.wait(timeout=2)
-                assert browsers[index + 1].scroll_position == position
-        except BaseException as exc:
-            errors.append(exc)
-        finally:
-            for browser in browsers:
-                browser.close()
-
-    editor = threading.Thread(target=edit_then_close, daemon=True)
-    editor.start()
-    continuous.cpb(str(source))
-    editor.join(timeout=2)
-    if errors:
-        raise errors[0]
-
-    assert runtime["builds"] == ["before\n", "after 1\n", "after 2\n"]
-    # Chrome was closed while the dialog needed the user, then reopened on
-    # the rebuilt page instead of being refreshed
-    assert open_during_dialog == [[False], [False, False]]
-    assert all(browser.quit_calls == 1 for browser in browsers)
-    assert all(browser.refresh_calls == 0 for browser in browsers)
-    assert len(browsers) == 3
-    assert continuous.dialog_callbacks == []
+    run_cpb_with_editor(source, runtime["browser"], editor)
+    assert runtime["builds"] == ["before\n", "after\n"]
+    assert runtime["browser"].refresh_calls == (0 if build_fails else 1)
+    assert_clean_polling_shutdown(runtime)
 
 
 def test_cpb_listener_acknowledges_before_initial_build_finishes(
@@ -489,7 +452,7 @@ def test_cpb_port_binding_failure_prevents_build_and_browser(
     assert chrome_calls == []
 
 
-def test_cpb_listener_failure_closes_visible_preview(monkeypatch, tmp_path):
+def test_cpb_listener_failure_keeps_visible_preview(monkeypatch, tmp_path):
     source = tmp_path / "content.md"
     source.write_text("before\n")
 
@@ -499,9 +462,63 @@ def test_cpb_listener_failure_closes_visible_preview(monkeypatch, tmp_path):
     monkeypatch.setattr(continuous, "serve_forward_search", stopped_listener)
     runtime = install_cpb_runtime(monkeypatch)
 
-    with pytest.raises(RuntimeError, match="listener stopped unexpectedly"):
-        continuous.cpb(str(source))
+    def editor():
+        assert not runtime["browser"].closed
+        assert runtime["browser"].quit_calls == 0
+
+    run_cpb_with_editor(source, runtime["browser"], editor)
 
     assert runtime["builds"] == ["before\n"]
     assert runtime["browser"].loaded.is_set()
+    assert_clean_polling_shutdown(runtime)
+
+
+@pytest.mark.parametrize("stop_signal", [signal.SIGTERM, signal.SIGINT])
+def test_cpb_process_signal_closes_browser_and_releases_resources(
+    monkeypatch, tmp_path, stop_signal
+):
+    source = tmp_path / "content.md"
+    source.write_text("before\n")
+    runtime = install_cpb_runtime(monkeypatch)
+    previous_handler = signal.getsignal(signal.SIGTERM)
+
+    def terminate():
+        assert runtime["browser"].loaded.wait(timeout=2)
+        os.kill(os.getpid(), stop_signal)
+
+    sender = threading.Thread(target=terminate, daemon=True)
+    sender.start()
+    continuous.cpb(str(source))
+    sender.join(timeout=2)
+    assert not sender.is_alive()
+    assert signal.getsignal(signal.SIGTERM) == previous_handler
+    assert_clean_polling_shutdown(runtime)
+
+
+def test_cpb_forward_search_error_keeps_preview_and_watcher_alive(
+    monkeypatch, tmp_path
+):
+    source = tmp_path / "content.md"
+    source.write_text("before\n")
+    runtime = install_cpb_runtime(monkeypatch)
+    searched = threading.Event()
+
+    def fail_search(_browser, _text):
+        searched.set()
+        raise WebDriverException("navigation interrupted search")
+
+    monkeypatch.setattr(continuous, "forward_search_in_browser", fail_search)
+
+    def editor():
+        send_forward_search(
+            (continuous.FORWARD_SEARCH_HOST, runtime["forward_search_port"]),
+            "needle",
+        )
+        assert searched.wait(timeout=2)
+        source.write_text("after\n")
+        assert runtime["browser"].refreshed.wait(timeout=2)
+        assert runtime["browser"].quit_calls == 0
+
+    run_cpb_with_editor(source, runtime["browser"], editor)
+    assert runtime["builds"] == ["before\n", "after\n"]
     assert_clean_polling_shutdown(runtime)

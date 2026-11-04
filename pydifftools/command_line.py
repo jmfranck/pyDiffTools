@@ -1,6 +1,7 @@
 # PYTHON_ARGCOMPLETE_OK
 
 import argparse
+import html
 import sys
 import os
 import gzip
@@ -554,26 +555,14 @@ def fs(arguments):
 )
 def mfs(text):
     # Normalize markdown-specific markup so search phrases match rendered text.
-    search_text = text
-    marker_match = re.search(r"(?i)@[a-z]{2,4}:", search_text)
-    if marker_match:
-        search_text = search_text[: marker_match.start()]
-    search_text = re.sub(r"\[@[^\]]+\]", " ", search_text)
-    # Strip paired markup delimiters (bold/italic, strikethrough,
-    # superscript/subscript). These delimiters hug the text they wrap with no
-    # space in the rendered output (e.g. "x^2^" renders as "x2"), so they are
-    # dropped rather than replaced with a space. Plain str.replace is used
-    # (not regex) so this is linear time regardless of how many delimiter
-    # characters appear.
-    search_text = (
-        search_text.replace("**", "")
-        .replace("__", "")
-        .replace("~~", "")
-        .replace("*", "")
-        .replace("_", "")
-        .replace("~", "")
-        .replace("^", "")
-    )
+    search_text = html.unescape(text)
+    search_text = re.sub(r"\[@(?![a-z]{2,4}:)[^\]]+\]", " ", search_text,
+                         flags=re.IGNORECASE)
+    # Keep reference IDs intact while removing surrounding Markdown markup.
+    parts = re.split(r"(?i)(@[a-z]{2,4}:\w(?:[\w:./-]*[\w/-])?)", search_text)
+    for index in range(0, len(parts), 2):
+        parts[index] = re.sub(r"[*_~^]", "", parts[index])
+    search_text = "".join(parts)
     search_text = re.sub(r"\s+", " ", search_text).strip()
     if not search_text:
         search_text = text.strip()
@@ -620,7 +609,8 @@ def mfs(text):
             if not filename.endswith(".md"):
                 continue
             with open(filename, encoding="utf-8") as fp:
-                if search_text in fp.read():
+                source_text = fp.read()
+                if text.strip() in source_text or search_text in source_text:
                     matching_files.append(filename)
         if len(matching_files) == 0:
             raise RuntimeError(

@@ -946,8 +946,13 @@ def test_cpb_hides_low_headers(tmp_path):
     assert "h4" not in html_content.split("display:")[-1]
 
 
-def test_mfs_starts_cpb_when_socket_missing(tmp_path):
-    (tmp_path / "notes.md").write_text("alpha\nneedle\nomega\n")
+@pytest.mark.parametrize("source, expected", [
+    ("needle", "needle"),
+    ("It melts near 238&nbsp;K", "It melts near 238 K"),
+    ("**See** @eq:my_equation.", "See @eq:my_equation."),
+])
+def test_mfs_starts_cpb_when_socket_missing(tmp_path, source, expected):
+    (tmp_path / "notes.md").write_text(f"alpha\n{source}\nomega\n")
     (tmp_path / "other.md").write_text("does not match\n")
 
     calls = []
@@ -966,9 +971,9 @@ def test_mfs_starts_cpb_when_socket_missing(tmp_path):
                     "pydifftools.command_line.os.fork", return_value=123
                 ):
                     with patch("pydifftools.command_line.time.sleep"):
-                        mfs("needle")
+                        mfs(source)
         assert len(calls) == 3
-        assert [search_text for _, search_text in calls] == ["needle"] * 3
+        assert [search_text for _, search_text in calls] == [expected] * 3
     finally:
         os.chdir(cwd)
 
@@ -1052,12 +1057,12 @@ def test_mfs_strips_markdown_markup_before_search(tmp_path):
     try:
         with patch("pydifftools.command_line.send_forward_search", fake_send):
             mfs("**Result** near @fig:overview [@smith2024]")
-        assert calls == ["Result near"]
+        assert calls == ["Result near @fig:overview"]
     finally:
         os.chdir(cwd)
 
 
-def test_mfs_marker_regex_is_case_insensitive(tmp_path):
+def test_mfs_preserves_crossref_and_following_text(tmp_path):
     calls = []
 
     def fake_send(_address, search_text):
@@ -1067,8 +1072,8 @@ def test_mfs_marker_regex_is_case_insensitive(tmp_path):
     os.chdir(tmp_path)
     try:
         with patch("pydifftools.command_line.send_forward_search", fake_send):
-            mfs("Result before @FIG:overview should truncate")
-        assert calls == ["Result before"]
+            mfs("Result before @FIG:overview and after")
+        assert calls == ["Result before @FIG:overview and after"]
     finally:
         os.chdir(cwd)
 

@@ -703,7 +703,14 @@ def wrap_prose(
     """Wrap prose with sentence and punctuation rules for both commands."""
     output = []
     # Keep paragraph separators and the boundary newlines next to exclusions.
-    for paragraph in PARAGRAPH_SPLIT.split(text):
+    paragraphs = PARAGRAPH_SPLIT.split(text)
+    if filetype == "markdown":
+        # Hard line breaks are source boundaries, not wrappable whitespace.
+        paragraphs = [
+            part for paragraph in paragraphs
+            for part in re.split(r"( {2,}\r?\n)", paragraph)
+        ]
+    for paragraph in paragraphs:
         if not paragraph.strip():
             output.append(paragraph)
             continue
@@ -1001,7 +1008,9 @@ def check_prose(
             if k < len(separators):
                 sep = separators[k]
                 offset += len(sep)
-                if sep == " " and (
+                if sep == " " and not re.match(
+                    r"[ \t]*\r?\n", stripped[offset:]
+                ) and (
                     k + 1 >= len(sentences) or sentences[k + 1].strip()
                 ):
                     issue_line = para_line + stripped.count(

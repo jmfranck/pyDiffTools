@@ -271,3 +271,85 @@ def test_start_browser_does_not_hide_programming_errors(monkeypatch):
     monkeypatch.setattr(webdriver, "Firefox", firefox)
     with pytest.raises(TypeError, match="unexpected argument"):
         browser_lifecycle.start_browser()
+
+
+def test_forward_search_matches_entities_and_rendered_crossrefs(
+    monkeypatch, tmp_path
+):
+    from selenium.webdriver.chrome.service import Service
+    from pydifftools import command_line
+
+    options = webdriver.ChromeOptions()
+    options.add_argument("--headless=new")
+    browser = webdriver.Chrome(
+        service=Service("/usr/bin/chromedriver"), options=options
+    )
+    monkeypatch.setattr(browser_lifecycle.shutil, "which", lambda _name: None)
+    searches = []
+    monkeypatch.setattr(
+        command_line, "send_forward_search",
+        lambda _address, text: searches.append(text),
+    )
+    try:
+        preview = tmp_path / "preview.html"
+        preview.write_text(
+            "<p>It melts near 238&nbsp;K &amp; stays solid.</p>"
+            '<p>See eq.&nbsp;<a href="#eq:my_equation">(1)</a> for '
+            "<strong>the result</strong>.</p>"
+            '<p><a href="#fig:overview">Figure 2</a> shows the sample.</p>'
+            '<p>See <a href="#sec:methods">section 3</a>.</p>'
+            '<h2 id="sec:unlinked">4 Unlinked section</h2>'
+            "<p>As described in sec.&nbsp;4, it works.</p>"
+        )
+        browser.get(preview.as_uri())
+        examples = [
+            ("It melts near 238&nbsp;K &amp; stays solid.",
+             "It melts near 238\xa0K & stays solid."),
+            ("238&#160;K", "238\xa0K"),
+            ("238 K", "238\xa0K"),
+            ("See @eq:my_equation for **the result**.",
+             "See eq.\xa0(1) for the result."),
+            ("@eq:my_equation for the result.",
+             "eq.\xa0(1) for the result."),
+            ("See [@eq:my_equation]", "See eq.\xa0(1)"),
+            ("@fig:overview shows the sample.",
+             "Figure 2 shows the sample."),
+            ("See @sec:methods.", "See section 3."),
+            ("As described in @sec:unlinked, it works.",
+             "As described in sec.\xa04, it works."),
+            ("@sec:unlinked", "4 Unlinked section"),
+        ]
+        for source, rendered in examples:
+            browser.execute_script("window.getSelection().removeAllRanges()")
+            command_line.mfs(source)
+            assert browser_lifecycle.forward_search_in_browser(
+                browser, searches[-1]
+            ), source
+            assert browser.execute_script(
+                "return window.getSelection().toString()"
+            ) == rendered
+        assert not browser_lifecycle.forward_search_in_browser(
+            browser, "See @eq:missing for the result."
+        )
+    finally:
+        browser.quit()
+
+
+@pytest.mark.parametrize("closed", [False, True])
+def test_browser_probe_distinguishes_transient_error_from_closed_session(
+    closed,
+):
+    class InterruptedBrowser:
+        @property
+        def window_handles(self):
+            if closed:
+                from selenium.common.exceptions import (
+                    InvalidSessionIdException,
+                )
+
+                raise InvalidSessionIdException("window closed")
+            raise WebDriverException("page navigation interrupted command")
+
+    assert browser_lifecycle.browser_window_is_alive(
+        InterruptedBrowser()
+    ) is not closed

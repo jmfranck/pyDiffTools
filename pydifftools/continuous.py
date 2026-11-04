@@ -11,6 +11,7 @@ import re
 import shutil
 import threading
 import queue
+import signal
 import traceback
 import tempfile
 from pathlib import Path
@@ -27,7 +28,6 @@ from .comment_migration import prepare_comment_source
 from .browser_lifecycle import (
     browser_window_is_alive,
     close_browser_window,
-    dialog_callbacks,
     forward_search_in_browser,
     prepare_for_dialog,
     start_browser,
@@ -1231,11 +1231,16 @@ def cpb(
         daemon=True,
     )
     chrome = None
-    scroll_position = 0
     observer = None
     observer_started = False
     socket_thread_started = False
     source_jump_server = None
+    previous_sigterm = None
+    if threading.current_thread() is threading.main_thread():
+        def stop_cpb(_signum, _frame):
+            raise KeyboardInterrupt
+
+        previous_sigterm = signal.signal(signal.SIGTERM, stop_cpb)
 
     try:
         # Bind and serve before any build or browser work. This makes the fixed
@@ -1321,29 +1326,18 @@ def cpb(
         # and never be reported as a change.
         chrome.get("file://" + os.path.abspath(html_file))
 
-        def close_for_dialog():
-            # a rebuild needs the user, so close the preview while the
-            # issues are dealt with; it reopens once the rebuild is done
-            nonlocal chrome, scroll_position
-            if chrome is not None:
-                # sessionStorage does not survive quitting the browser.
-                scroll_position = chrome.execute_script(
-                    "return window.scrollY;"
-                )
-                close_browser_window(chrome)
-                chrome = None
-
-        dialog_callbacks.append(close_for_dialog)
         rebuild_pending = False
         stable_signature = None
         stable_since = None
+        listener_warning_shown = False
         while True:
-            if not socket_thread.is_alive():
-                raise RuntimeError(
-                    "The cpb forward-search listener stopped unexpectedly; "
-                    "closing the preview instead of leaving an "
-                    "undiscoverable session."
+            if not socket_thread.is_alive() and not listener_warning_shown:
+                print(
+                    "pydifft cpb: forward-search listener stopped; "
+                    "forward search is unavailable. The preview remains open.",
+                    file=sys.stderr,
                 )
+                listener_warning_shown = True
             # Browser closure is terminal. Source-file and build failures do
             # not affect browser ownership or observer lifetime.
             if not browser_window_is_alive(chrome):
@@ -1352,7 +1346,11 @@ def cpb(
             for queued_search in drain_forward_search_queue(search_queue):
                 search_text = queued_search.strip()
                 if search_text:
-                    forward_search_in_browser(chrome, search_text)
+                    try:
+                        forward_search_in_browser(chrome, search_text)
+                    except WebDriverException as exc:
+                        print(f"pydifft cpb: forward search failed: {exc}",
+                              file=sys.stderr)
 
             saw_source_event = False
             while not change_queue.empty():
@@ -1450,30 +1448,16 @@ def cpb(
                                 traceback.print_exc()
                         else:
                             handled_signature = attempted_signature
-                            if chrome is not None:
-                                if not browser_window_is_alive(chrome):
-                                    break
-                                try:
-                                    chrome.refresh()
-                                except WebDriverException:
-                                    print(
-                                        "pydifft cpb: Browser is no longer "
-                                        "available; stopping without "
-                                        "reopening it.",
-                                        file=sys.stderr,
-                                    )
-                                    break
-                        if chrome is None:
-                            # {{{ reopen the preview a dialog closed
-                            chrome = start_browser()
-                            chrome.get(
-                                "file://" + os.path.abspath(html_file)
-                            )
-                            chrome.execute_script(
-                                "window.scrollTo(0, arguments[0]);",
-                                scroll_position,
-                            )
-                            # }}}
+                            if not browser_window_is_alive(chrome):
+                                break
+                            try:
+                                chrome.refresh()
+                            except WebDriverException as exc:
+                                print(
+                                    "pydifft cpb: preview refresh failed: "
+                                    f"{exc}",
+                                    file=sys.stderr,
+                                )
             # }}}
             time.sleep(MAIN_LOOP_INTERVAL_SECONDS)
     except KeyboardInterrupt:
@@ -1489,7 +1473,8 @@ def cpb(
         if socket_thread_started:
             socket_thread.join()
         close_browser_window(chrome)
-        dialog_callbacks.clear()
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 if __name__ == "__main__":

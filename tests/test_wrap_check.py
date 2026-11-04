@@ -175,6 +175,46 @@ def test_double_trailing_space_hard_break_is_allowed():
     assert markdown_lint_issues_from_text(source, wrapnumber=55) == []
 
 
+@pytest.mark.parametrize("spaces", ["  ", "   "])
+@pytest.mark.parametrize("ending", ["\n", "\r\n"])
+@pytest.mark.parametrize("diff", [False, True])
+def test_autofix_preserves_hard_break_after_edited_sentence(
+    tmp_path, spaces, ending, diff,
+):
+    path = committed_source(
+        tmp_path, "First sentence.\nSecond sentence.\n",
+    )
+    source = (
+        "Changed first sentence." + spaces + ending
+        + "Changed second sentence." + ending
+    )
+    path.write_bytes(source.encode())
+
+    assert check_prose(source, 55, 20) == []
+    report = autofix_markdown_file(path, git_index=diff)
+
+    assert path.read_bytes().decode() == source
+    assert report["fixes"] == []
+
+
+@pytest.mark.parametrize("prefix", ["", "- ", "> "])
+def test_wr_preserves_hard_break_while_wrapping_long_lines(tmp_path, prefix):
+    path = tmp_path / "source.md"
+    first = "Words before an intentional break"
+    second = "Words after that break also need wrapping."
+    source = prefix + first + "  \n" + prefix + second + "\n"
+    path.write_text(source)
+
+    wr(str(path), wrapnumber=24)
+
+    result = path.read_text()
+    assert "  \n" in result
+    before, after = result.split("  \n")
+    assert before.replace(prefix, "").split() == first.split()
+    assert after.replace(prefix, "").split() == second.split()
+    assert markdown_lint_issues_from_text(result, wrapnumber=24) == []
+
+
 @pytest.mark.parametrize(
     "detached",
     [
