@@ -218,7 +218,7 @@ def test_argcomplete_completes_subcommand_prefix(monkeypatch):
 ])
 def test_argcomplete_lists_git_installation_choices(monkeypatch, line):
     assert sorted(_collect_argcomplete_suggestions(monkeypatch, line)) == [
-        "gd", "mergein", "pd", "tree",
+        "gd", "mergein", "pd", "reattach", "tree",
     ]
 
 

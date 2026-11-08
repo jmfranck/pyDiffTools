@@ -36,6 +36,7 @@ from .comment_functions import matchingbrackets
 from .copy_files import copy_image_files
 from .searchacro import replace_acros
 from .rearrange_tex import run as rearrange_tex_run
+from .git_reattach import reattach  # registers branch reattachment
 from .git_gd import gd  # registers git difftool review command
 from .pdf_diff import pd, git_pd  # registers PDF diff command
 from .git_aliases import (
@@ -909,7 +910,7 @@ def build_parser():
     # argparse does not validate REMAINDER choices; main checks them first.
     subparsers.container.add_argument(
         "--add_to_git", nargs=argparse.REMAINDER, choices=list(GIT_ALIASES),
-        help=("Install one or more global Git aliases: gd, pd, tree, mergein "
+        help=("Install one or more global Git aliases: gd, pd, tree, mergein, reattach "
               "(without a subcommand)."),
     )
     for name, spec in _COMMAND_SPECS.items():

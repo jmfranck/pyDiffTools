@@ -219,10 +219,20 @@ included are (listed in order of fun/utility):
   retaining the exact command of an existing global ``gd`` alias. If none
   is configured, it installs ``!f() { pydifft gd "$@"; }; f``.
   Configure ``difftool.mygvim.cmd`` for the GUI diff tool.
-- ``pydifft --add_to_git gd pd tree mergein`` installs any selected subset
+- ``pydifft --add_to_git gd pd tree mergein reattach`` installs any selected subset
   of these global Git aliases in one invocation. Installation appears
   alongside the subcommands in root help; the former per-command
   ``--install`` and ``--add-to-git`` flags have been removed.
+- ``pydifft reattach [--path DIRECTORY]`` attaches detached checkouts to
+  branches pointing at exactly their current commits, including initialized
+  submodules recursively. Remote-only matches create local tracking branches.
+  It never resets existing branches or pulls newer commits. With several
+  matches it prefers the origin default branch when possible, otherwise it
+  reports ambiguity and leaves the checkout detached. A local branch with
+  the required name pointing elsewhere is preserved. ``--dry-run`` previews
+  changes, ``--no-recursive`` limits the operation to one repository, and
+  ``--fetch`` refreshes remote refs before matching. Install the global
+  ``git reattach`` alias with ``pydifft --add_to_git reattach``.
 - ``pydifft mergein BRANCH [--remote REMOTE]`` updates an incoming local
   branch without switching branches, then merges it into the current
   branch. Install ``git mergein`` with ``pydifft --add_to_git mergein``.

@@ -11,10 +11,12 @@ GIT_ALIASES = {
     "gd": '!f() { pydifft gd "$@"; }; f',
     "pd": '!f() { pydifft pd --git "$@"; }; f',
     "tree": '!f() { pydifft tree "$@"; }; f',
+    "reattach": '!f() { pydifft reattach "$@"; }; f',
     "mergein": '!f() { pydifft mergein "$@"; }; f',
 }
 
 
+# also used by: pydifftools/command_line.py for global CLI alias installation.
 def install_git_alias(name, command, preserve_existing=False):
     """Install an alias and its completion, optionally retaining its value."""
     if preserve_existing:
