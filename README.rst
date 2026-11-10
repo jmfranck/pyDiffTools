@@ -353,3 +353,14 @@ Future versions will include:
 - Scripts for converting word html comments to latex commands.
 
 - converting to/form one word per line files (for doing things like wdiff, but with more control)
+
+Concurrent cpb previews
+-----------------------
+
+``cpb`` starts at loopback port 51235 and reports occupied ports to stdout
+before trying the next port. The first process keeps a directory-to-port
+registry; subsequent previews register their source file's directory there.
+Run ``pydifft mfs`` from that directory to search the matching preview.
+Directory paths are resolved so symlink aliases identify the same project.
+Keep the first process open while using the other previews: its registry
+lives in memory and ends when that process exits.

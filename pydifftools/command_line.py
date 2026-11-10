@@ -25,6 +25,7 @@ from .forward_search import (
     ForwardSearchProtocolError,
     ForwardSearchUnavailable,
     send_forward_search,
+    directory_port,
 )
 from .wrap_sentences import wr as wrap_sentences_wr  # registers wrap command
 from .wrap_sentences import (  # registers wrchk command
@@ -580,7 +581,38 @@ def mfs(text):
     def try_existing_listener():
         protocol_errors = []
         delivered = False
-        for address in socket_addresses:
+        addresses = socket_addresses
+        try:
+            route = directory_port(socket_addresses[0], os.getcwd())
+        except ForwardSearchUnavailable:
+            route = None
+        except ForwardSearchProtocolError as exc:
+            raise RuntimeError(
+                "Refusing to open another browser window: " + str(exc)
+            ) from exc
+        if route and route["registry"]:
+            if route["port"] is not None:
+                try:
+                    send_forward_search(
+                        (FORWARD_SEARCH_HOST, route["port"]), search_text
+                    )
+                    return True
+                except ForwardSearchUnavailable:
+                    directory_port(socket_addresses[0], os.getcwd(), port=None)
+            addresses = socket_addresses[1:]
+        for address in addresses:
+            if route and route["registry"] and address != socket_addresses[0]:
+                try:
+                    candidate = directory_port(address, os.getcwd())
+                except ForwardSearchUnavailable:
+                    continue
+                except ForwardSearchProtocolError as exc:
+                    protocol_errors.append(str(exc))
+                    continue
+                if candidate["registry"]:
+                    if candidate["port"] is None:
+                        continue
+                    address = (FORWARD_SEARCH_HOST, candidate["port"])
             try:
                 send_forward_search(address, search_text)
             except ForwardSearchUnavailable:

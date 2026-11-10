@@ -1,5 +1,8 @@
 """Acknowledged loopback transport for browser forward-search requests."""
 
+import errno
+import json
+import os
 import queue
 import socket
 
@@ -41,8 +44,12 @@ def bind_forward_search_server(address, service_name):
     return server
 
 
-def serve_forward_search(server, stop_event, search_queue):
+def serve_forward_search(server, stop_event, search_queue, directory=None):
     """Accept clients, queue valid UTF-8 payloads, and acknowledge receipt."""
+
+    registrations = {}
+    if directory is not None:
+        registrations[os.path.realpath(directory)] = server.getsockname()[1]
 
     while not stop_event.is_set():
         try:
@@ -70,6 +77,24 @@ def serve_forward_search(server, stop_event, search_queue):
             try:
                 search_text = payload.decode("utf-8")
             except UnicodeDecodeError:
+                continue
+            if search_text.startswith("pydifft-directory\n"):
+                try:
+                    request = json.loads(search_text.split("\n", 1)[1])
+                    directory_key = os.path.realpath(request["directory"])
+                    if "port" in request:
+                        port = request["port"]
+                        if port is None:
+                            registrations.pop(directory_key, None)
+                        elif isinstance(port, int) and 0 < port < 65536:
+                            registrations[directory_key] = port
+                    response = json.dumps({
+                        "port": registrations.get(directory_key),
+                        "registry": directory is not None,
+                    }).encode()
+                    connection.sendall(response)
+                except (ValueError, KeyError, TypeError, OSError):
+                    pass
                 continue
             search_queue.put(search_text)
             try:
@@ -127,3 +152,53 @@ def drain_forward_search_queue(search_queue):
             searches.append(search_queue.get_nowait())
         except queue.Empty:
             return searches
+
+
+# also used by: continuous.py and command_line.py
+def directory_port(address, directory, **registration):
+    """Query or update the first cpb process's directory registry."""
+    request = {"directory": os.path.realpath(directory), **registration}
+    try:
+        with socket.create_connection(address, timeout=1) as client:
+            client.settimeout(1)
+            client.sendall(("pydifft-directory\n" + json.dumps(request)).encode())
+            client.shutdown(socket.SHUT_WR)
+            response = bytearray()
+            while True:
+                chunk = client.recv(4096)
+                if not chunk:
+                    break
+                response.extend(chunk)
+                if len(response) > 4096:
+                    raise ValueError("oversized registry response")
+    except OSError as exc:
+        raise ForwardSearchUnavailable(address) from exc
+    try:
+        result = json.loads(response)
+        if not isinstance(result, dict) or not isinstance(
+            result.get("registry"), bool
+        ):
+            raise ValueError("invalid registry response")
+        port = result.get("port")
+        if port is not None and (type(port) is not int or not 0 < port < 65536):
+            raise ValueError("invalid port")
+        return result
+    except (ValueError, TypeError) as exc:
+        raise ForwardSearchProtocolError(
+            f"Invalid directory registry response from {address}"
+        ) from exc
+
+
+# also used by: continuous.py and tests/test_forward_search.py
+def bind_cpb_server(address):
+    """Take the first available port, reporting every occupied port."""
+    for port in range(address[1], 65536):
+        try:
+            return bind_forward_search_server((address[0], port), "cpb")
+        except RuntimeError as exc:
+            if not isinstance(exc.__cause__, OSError) or (
+                exc.__cause__.errno != errno.EADDRINUSE
+            ):
+                raise
+            print(f"cpb: port {port} is taken; trying port {port + 1}.")
+    raise RuntimeError("No free cpb forward-search port remains")

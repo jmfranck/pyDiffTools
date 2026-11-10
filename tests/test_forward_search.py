@@ -488,3 +488,43 @@ def test_second_qmdb_takes_next_ports_and_accepts_rebuild(
     (rerun,) = [call for call in build_calls if "rerun_cells" in call]
     assert rerun["rerun_cells"] == {("doc.qmd", 2)}
     assert rerun["changed_paths"] == [tmp_path / "doc.qmd"]
+
+
+def test_directory_registry_routes_only_matching_project(tmp_path, monkeypatch):
+    sessions = []
+    for name in ("first", "second"):
+        directory = tmp_path / name
+        directory.mkdir()
+        server = forward_search.bind_cpb_server(
+            (forward_search.FORWARD_SEARCH_HOST,
+             sessions[0][0].getsockname()[1] if sessions else 0)
+        )
+        stopped = threading.Event()
+        searches = queue.Queue()
+        thread = threading.Thread(
+            target=forward_search.serve_forward_search,
+            args=(server, stopped, searches, str(directory)), daemon=True,
+        )
+        thread.start()
+        sessions.append((server, stopped, searches, thread))
+    first, second = sessions
+    address = first[0].getsockname()
+    try:
+        forward_search.directory_port(
+            address, tmp_path / "second", port=second[0].getsockname()[1]
+        )
+        assert forward_search.directory_port(
+            address, tmp_path / "missing"
+        )["port"] is None
+        monkeypatch.setattr(command_line, "FORWARD_SEARCH_PORT", address[1])
+        monkeypatch.chdir(tmp_path / "second")
+        command_line.mfs("needle")
+        assert second[2].get(timeout=1) == "needle"
+        assert first[2].empty()
+        forward_search.directory_port(address, tmp_path / "second", port=None)
+        assert forward_search.directory_port(
+            address, tmp_path / "second"
+        )["port"] is None
+    finally:
+        for server, stopped, _searches, thread in sessions:
+            stop_listener(server, stopped, thread)

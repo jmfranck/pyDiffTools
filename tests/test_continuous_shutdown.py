@@ -422,8 +422,8 @@ def test_cpb_listener_acknowledges_before_initial_build_finishes(
     assert_clean_polling_shutdown(runtime)
 
 
-def test_cpb_port_binding_failure_prevents_build_and_browser(
-    monkeypatch, tmp_path
+def test_cpb_busy_port_continues_to_initial_build(
+    monkeypatch, tmp_path, capsys
 ):
     source = tmp_path / "content.md"
     source.write_text("before\n")
@@ -436,19 +436,22 @@ def test_cpb_port_binding_failure_prevents_build_and_browser(
         continuous, "FORWARD_SEARCH_PORT", owner.getsockname()[1]
     )
     monkeypatch.setattr(
-        continuous, "run_pandoc", lambda *_a, **_k: build_calls.append(True)
-    )
-    monkeypatch.setattr(
         webdriver, "Chrome", lambda: chrome_calls.append(True)
     )
 
+    def fail_build(*_a, **_k):
+        build_calls.append(True)
+        raise RuntimeError("initial build failed")
+
+    monkeypatch.setattr(continuous, "run_pandoc", fail_build)
     try:
-        with pytest.raises(RuntimeError, match="Could not bind"):
+        with pytest.raises(RuntimeError, match="initial build failed"):
             continuous.cpb(str(source))
     finally:
         owner.close()
 
-    assert build_calls == []
+    assert build_calls == [True]
+    assert "is taken; trying port" in capsys.readouterr().out
     assert chrome_calls == []
 
 

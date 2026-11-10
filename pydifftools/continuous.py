@@ -35,7 +35,10 @@ from .browser_lifecycle import (
 from .forward_search import (
     CPB_FORWARD_SEARCH_PORT,
     FORWARD_SEARCH_HOST,
-    bind_forward_search_server,
+    bind_cpb_server,
+    directory_port,
+    ForwardSearchUnavailable,
+    ForwardSearchProtocolError,
     drain_forward_search_queue,
     serve_forward_search,
 )
@@ -1222,12 +1225,12 @@ def cpb(
     comment_filter_session = {}
     search_queue = queue.Queue()
     stop_event = threading.Event()
-    forward_search_server = bind_forward_search_server(
-        (FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT), "cpb"
+    forward_search_server = bind_cpb_server(
+        (FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT)
     )
     socket_thread = threading.Thread(
         target=serve_forward_search,
-        args=(forward_search_server, stop_event, search_queue),
+        args=(forward_search_server, stop_event, search_queue, source_dir),
         daemon=True,
     )
     chrome = None
@@ -1247,6 +1250,14 @@ def cpb(
         # port authoritative even while a slow initial build is in progress.
         socket_thread.start()
         socket_thread_started = True
+        registry_address = (FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT)
+        session_port = forward_search_server.getsockname()[1]
+        if session_port != FORWARD_SEARCH_PORT:
+            try:
+                directory_port(registry_address, source_dir, port=session_port)
+            except (ForwardSearchUnavailable, ForwardSearchProtocolError):
+                print("cpb: standard port has no directory registry; "
+                      "mfs discovery is unavailable.")
 
         # Build before opening the browser so a failed build cannot leave an
         # orphaned browser session. Remember the source version from before
@@ -1463,6 +1474,11 @@ def cpb(
     except KeyboardInterrupt:
         pass
     finally:
+        if socket_thread_started and session_port != FORWARD_SEARCH_PORT:
+            try:
+                directory_port(registry_address, source_dir, port=None)
+            except (ForwardSearchUnavailable, ForwardSearchProtocolError):
+                pass
         stop_event.set()
         forward_search_server.close()
         if source_jump_server is not None:
