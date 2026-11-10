@@ -25,6 +25,12 @@ from pydifftools.git_gd import (
 )
 
 
+@pytest.fixture(autouse=True)
+def isolated_forward_search_registry(monkeypatch):
+    """Keep mocked listener tests independent of running desktop sessions."""
+    monkeypatch.setattr(command_line, "directory_port", lambda *_a, **_k: None)
+
+
 def _make_cli_env(tmp_path):
     repo_root = Path(__file__).resolve().parents[2]
     env = os.environ.copy()

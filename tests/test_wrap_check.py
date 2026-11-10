@@ -787,7 +787,9 @@ def test_stray_line_break_in_an_unchanged_line_is_rejoined(tmp_path):
         )
     )
 
-    report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
+    report = autofix_markdown_file(
+        path, wrapnumber=79, desired_width=79, git_head=True,
+    )
 
     assert path.read_text() == HEAD_PARAGRAPH
     assert numstat(path) == (0, 0)
@@ -836,7 +838,7 @@ def test_one_moved_line_break_is_moved_back(tmp_path):
         )
     )
 
-    autofix_markdown_file(path, wrapnumber=79, git_head=True)
+    autofix_markdown_file(path, wrapnumber=79, desired_width=79, git_head=True)
 
     assert path.read_text() == HEAD_PARAGRAPH
 
@@ -994,7 +996,9 @@ def test_two_moved_line_breaks_in_one_hunk_are_fixed(tmp_path):
     )
     path.write_text(edited)
 
-    report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
+    report = autofix_markdown_file(
+        path, wrapnumber=79, desired_width=79, git_head=True,
+    )
 
     assert path.read_text() == HEAD_PARAGRAPH
     assert report["layout"] == []
@@ -1075,14 +1079,18 @@ def test_rewritten_sentence_reuses_whitespace_between_matched_words(tmp_path):
     path = committed_source(tmp_path, head)
     path.write_text(rewrite)
 
-    report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
+    report = autofix_markdown_file(
+        path, wrapnumber=79, desired_width=79, git_head=True,
+    )
 
     expected = rewrite.replace("dynamics\nof", "dynamics of")
     assert path.read_text() == expected
     assert expected.split() == rewrite.split()
     assert len(report["fixes"]) == 1 and report["layout"] == []
     assert not any(
-        autofix_markdown_file(path, wrapnumber=79, git_head=True).values()
+        autofix_markdown_file(
+            path, wrapnumber=79, desired_width=79, git_head=True,
+        ).values()
     )
 
 
@@ -1450,7 +1458,7 @@ def test_qt_diff_fix_notice_marks_applied_changes_on_original_source(
     )
     path.write_text(edited)
     report = autofix_markdown_file(
-        path, wrapnumber=79, git_head=True,
+        path, wrapnumber=79, desired_width=79, git_head=True,
         git_index=baseline == "index",
         git_ref="jf_last" if baseline == "jf_last" else None,
     )

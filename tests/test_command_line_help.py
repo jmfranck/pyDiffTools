@@ -236,7 +236,10 @@ def test_wmatch_cli_applies_shared_dependent_phrase_option(tmp_path, distance):
 
 
 @pytest.mark.parametrize("diff", [None, "@", "jf_last"])
-def test_cpb_build_passes_options_to_source_lint(monkeypatch, diff):
+@pytest.mark.parametrize("desired_width", [45, 60])
+def test_cpb_build_passes_options_to_source_lint(
+    monkeypatch, diff, desired_width,
+):
     from pydifftools import continuous, wrap_sentences
 
     calls = []
@@ -255,12 +258,13 @@ def test_cpb_build_passes_options_to_source_lint(monkeypatch, diff):
             wrapnumber=72,
             trailing_dependent_phrase=9,
             diff=diff,
+            desired_width=desired_width,
         )
     assert calls == [
         (
             "notes.md",
             {"wrapnumber": 72, "git_index": True, "git_ref": diff,
-             "punctuation_slop": 9},
+             "punctuation_slop": 9, "desired_width": desired_width},
         )
     ]
 

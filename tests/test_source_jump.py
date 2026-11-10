@@ -264,7 +264,7 @@ def test_editor_launch_is_detached_and_exposes_stdout_and_stderr(
 
 
 def test_browser_preserves_tag_boundaries_for_source_matching(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, chrome_driver_path
 ):
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
@@ -273,7 +273,7 @@ def test_browser_preserves_tag_boundaries_for_source_matching(
     options = Options()
     options.add_argument("--headless=new")
     browser = webdriver.Chrome(
-        service=Service("/usr/bin/chromedriver"), options=options
+        service=Service(chrome_driver_path), options=options
     )
     launch = MagicMock()
     launch.return_value.__enter__.return_value.returncode = 0

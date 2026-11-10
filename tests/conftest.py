@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -60,3 +61,12 @@ def notices(request, monkeypatch):
             lambda message, once=False: shown.append(message),
         )
     return shown
+
+
+@pytest.fixture
+def chrome_driver_path():
+    """Run browser integration checks only when their driver is available."""
+    driver = shutil.which("chromedriver")
+    if driver is None:
+        pytest.skip("chromedriver not available")
+    return driver

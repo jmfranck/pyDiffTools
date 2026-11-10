@@ -402,7 +402,7 @@ def test_outputs_to_html_prefers_markdown_over_plain(fb):
     assert "<IPython.core.display.Markdown object>" not in html
     assert "<h2" in html
     assert "Generated" in html
-    assert "math inline" in html
+    assert "math inline" in html or '<math display="inline"' in html
 
 
 def test_nb_capture_auto_import_after_reset_orders_outputs(fb):
@@ -461,7 +461,7 @@ def test_generated_markdown_output_renders_in_build(fb):
     assert "Running notebook" not in html
     assert "<IPython.core.display.Markdown object>" not in html
     assert '<h2 id="generated">Generated</h2>' in html
-    assert "math inline" in html
+    assert "math inline" in html or '<math display="inline"' in html
 
 
 def test_markdown_image_next_to_source_is_embedded(fb):
@@ -1372,7 +1372,9 @@ def test_render_notebook_status_tags_and_tree_output(fb, monkeypatch):
     assert "missing html" in tree_text
 
 
-def test_observation_images_keep_blue_text_and_source_menu(fb):
+def test_observation_images_keep_blue_text_and_source_menu(
+    fb, chrome_driver_path,
+):
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.chrome.service import Service
@@ -1410,7 +1412,7 @@ def test_observation_images_keep_blue_text_and_source_menu(fb):
     options = Options()
     options.add_argument("--headless=new")
     browser = webdriver.Chrome(
-        service=Service("/usr/bin/chromedriver"), options=options
+        service=Service(chrome_driver_path), options=options
     )
     try:
         browser.get(page.as_uri())

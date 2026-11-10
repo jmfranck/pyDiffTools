@@ -143,7 +143,7 @@ def match_text(
         filetype,
         width=reference_width,
         punctuation_slop=trailing_dependent_phrase,
-        preserve_reference_lines=False,
+        preserve_reference_lines=True,
         desired_width=desired_width,
     )
     pieces = []

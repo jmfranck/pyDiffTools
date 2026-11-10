@@ -274,7 +274,7 @@ def test_start_browser_does_not_hide_programming_errors(monkeypatch):
 
 
 def test_forward_search_matches_entities_and_rendered_crossrefs(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, chrome_driver_path
 ):
     from selenium.webdriver.chrome.service import Service
     from pydifftools import command_line
@@ -282,9 +282,12 @@ def test_forward_search_matches_entities_and_rendered_crossrefs(
     options = webdriver.ChromeOptions()
     options.add_argument("--headless=new")
     browser = webdriver.Chrome(
-        service=Service("/usr/bin/chromedriver"), options=options
+        service=Service(chrome_driver_path), options=options
     )
     monkeypatch.setattr(browser_lifecycle.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        command_line, "directory_port", lambda *_a, **_k: None,
+    )
     searches = []
     monkeypatch.setattr(
         command_line, "send_forward_search",
