@@ -4,7 +4,7 @@ import math
 import re
 from .line_alignment import align_line_breaks
 from .wrapping_options import (
-    DEFAULT_WIDTH,
+    DEFAULT_WIDTH, DEFAULT_DESIRED_WIDTH,
     DEFAULT_TRAILING_DEPENDENT_PHRASE,
 )
 from .wrap_sentences import (
@@ -18,6 +18,7 @@ def run(
     arguments,
     wrapnumber=DEFAULT_WIDTH,
     trailing_dependent_phrase=DEFAULT_TRAILING_DEPENDENT_PHRASE,
+    desired_width=DEFAULT_DESIRED_WIDTH,
 ):
     with open(arguments[0], encoding="utf-8") as fp:
         text1 = fp.read()
@@ -32,10 +33,12 @@ def run(
             markdown_blocks(text2),
             wrapnumber,
             trailing_dependent_phrase,
+            desired_width,
         )
     else:
         result = match_text(
-            text1, text2, filetype, wrapnumber, trailing_dependent_phrase
+            text1, text2, filetype, wrapnumber, trailing_dependent_phrase,
+            desired_width,
         )
     with open(arguments[1], "w", encoding="utf-8") as fp:
         fp.write(result)
@@ -46,6 +49,7 @@ def match_blocks(
     new,
     width=DEFAULT_WIDTH,
     trailing_dependent_phrase=DEFAULT_TRAILING_DEPENDENT_PHRASE,
+    desired_width=DEFAULT_DESIRED_WIDTH,
 ):
     """Match container bodies without treating markers as words."""
     output = []
@@ -65,6 +69,7 @@ def match_blocks(
                                 target.children,
                                 max(1, width - target.margin),
                                 trailing_dependent_phrase,
+                                max(1, desired_width - target.margin),
                             )
                         )
                     )
@@ -76,6 +81,7 @@ def match_blocks(
                             "markdown",
                             width,
                             trailing_dependent_phrase,
+                            desired_width,
                         )
                     )
         else:
@@ -91,6 +97,7 @@ def match_text(
     filetype,
     fallback_width=DEFAULT_WIDTH,
     trailing_dependent_phrase=DEFAULT_TRAILING_DEPENDENT_PHRASE,
+    desired_width=DEFAULT_DESIRED_WIDTH,
 ):
     """Align reference lines and wrap only overflowing edited prose."""
     # {{{ choose the nearby reference width before any line linting
@@ -136,7 +143,8 @@ def match_text(
         filetype,
         width=reference_width,
         punctuation_slop=trailing_dependent_phrase,
-        preserve_reference_lines=True,
+        preserve_reference_lines=False,
+        desired_width=desired_width,
     )
     pieces = []
     position = 0

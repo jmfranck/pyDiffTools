@@ -273,10 +273,14 @@ included are (listed in order of fun/utility):
       their words using Git's minimal diff, and restores reference whitespace.
       It then considers extra breaks that preserve an unchanged reference line
       without stranding an edited fragment of three words or fewer, and checks
-      wrapping rules. When matching a baseline, edited lines may exceed the
-      character width by at most four words before wrapping is required.
+      wrapping rules. ``--desired-width`` (default 45) limits the width of
+      lines created by removing existing breaks to match Git. Breaks are
+      retained when joining would exceed that desired width.
 
-    * ``--wrapnumber`` sets the maximum width (79 for ``cpb`` and ``wmatch``).
+    * ``--wrapnumber`` independently sets the maximum width (79 for ``cpb``
+      and ``wmatch``), including for stable prose from the Git baseline.
+      For example, ``cpb --desired-width 50 --wrapnumber 85 manuscript.md``
+      changes both limits.
       Wmatch also uses nearby reference widths for large edits, retaining
       unchanged reference lines and protected Markdown blocks.
 

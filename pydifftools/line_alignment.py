@@ -7,6 +7,8 @@ import re
 import subprocess
 import tempfile
 
+from .wrapping_options import DEFAULT_DESIRED_WIDTH
+
 
 def minimal_opcodes(before, after):
     """Use Git's minimal Myers diff on sequences of lines or words.
@@ -85,6 +87,7 @@ def align_line_breaks(
     width=None,
     punctuation_slop=20,
     preserve_reference_lines=False,
+    desired_width=DEFAULT_DESIRED_WIDTH,
 ):
     """Return changed hunks with original, linted and proposed layouts.
 
@@ -92,6 +95,7 @@ def align_line_breaks(
     then preserve complete reference lines and enforce line linting. CPB
     and wmatch apply the aligned layout automatically.
     Width can be a number or a function choosing a limit after restoration.
+    Removing a break must also satisfy desired_width, without word overflow.
     """
     from .wrap_sentences import (
         WORD,
@@ -256,7 +260,7 @@ def align_line_breaks(
                 if allowed:
                     for line, message in check_prose(
                         span, width, punctuation_slop, offset,
-                        overflow_words=4,
+                        overflow_words=0,
                     ):
                         issues.setdefault(line, message)
                 offset += span.count("\n")
@@ -537,6 +541,20 @@ def align_line_breaks(
                         proposed[number] = raw
                         if creates_short_fragment(proposed, (number,)):
                             continue
+                    # Keep a user break if restoring the reference would
+                    # create a line wider than the desired source width.
+                    if (
+                        not inside_region
+                        and "\n" in gaps[number] and "\n" not in raw
+                    ):
+                        proposed = dict(whitespace)
+                        proposed[number] = raw
+                        existing = set(render(whitespace).splitlines())
+                        if any(
+                            len(line) > desired_width and line not in existing
+                            for line in render(proposed).splitlines()
+                        ):
+                            continue
                     if inside_region or (
                         current_layout[3][j1 + tokens[number][0]]
                         and current_layout[3][j1 + tokens[number + 1][0]]
@@ -575,6 +593,15 @@ def align_line_breaks(
                     elif "\n" in proposed[number]:
                         proposed[number] = " "
                 proposed_rows = render(proposed).splitlines()
+                if any(
+                    "\n" in whitespace[number]
+                    and "\n" not in proposed[number]
+                    for number in needed
+                ) and any(
+                    len(line) > desired_width and line not in original_rows
+                    for line in proposed_rows
+                ):
+                    continue
                 if any(
                     not equivalent_gap(number, proposed[number])
                     for number in needed

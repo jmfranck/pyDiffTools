@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 
 from .command_registry import register_command
 from .wrapping_options import (
-    DEFAULT_TRAILING_DEPENDENT_PHRASE, WRAPPING_ARGUMENTS,
+    DEFAULT_DESIRED_WIDTH, DEFAULT_TRAILING_DEPENDENT_PHRASE,
+    WRAPPING_ARGUMENTS,
 )
 
 DISPLAY_MATH = re.compile(r"(?<!\\)(?:\\\\)*(\$\$)")
@@ -1461,9 +1462,10 @@ def apply_markdown_issue_fix(content, line_number, message):
     return "".join(lines), old_line, after, reason
 
 
+# also used by: tests/test_wrap_check.py and tests/test_line_alignment.py.
 def autofix_markdown_file(
     filename, wrapnumber=55, punctuation_slop=20, git_head=False,
-    git_ref=None, git_index=False,
+    git_ref=None, git_index=False, desired_width=DEFAULT_DESIRED_WIDTH,
 ):
     """Apply safe source line breaks and report unfinished source spans.
 
@@ -1512,7 +1514,7 @@ def autofix_markdown_file(
 
         # {{{ apply all shared alignments and report the changes made
         results = align_line_breaks(
-            baseline, content, width=wrapnumber,
+            baseline, content, width=wrapnumber, desired_width=desired_width,
             punctuation_slop=punctuation_slop,
         )
         shift = 0
@@ -1551,7 +1553,7 @@ def autofix_markdown_file(
     for _ in range(100):
         issues = markdown_lint_issues_from_text(
             content, wrapnumber=wrapnumber, punctuation_slop=punctuation_slop,
-            overflow_words=4 if baseline is not None else 0,
+            overflow_words=0,
         )
         fixable = {}
         for line_number, message in issues:

@@ -797,7 +797,7 @@ def test_stray_line_break_in_an_unchanged_line_is_rejoined(tmp_path):
 @pytest.mark.parametrize("count", [3, 4, 5])
 @pytest.mark.parametrize("word", ["a", "substantial"])
 @pytest.mark.parametrize("command", ["cpb", "wmatch"])
-def test_diff_wrap_allows_only_four_words_beyond_width(
+def test_diff_wrap_enforces_maximum_width_without_word_allowance(
     tmp_path, count, word, command,
 ):
     from pydifftools.match_spaces import run
@@ -823,11 +823,8 @@ def test_diff_wrap_allows_only_four_words_beyond_width(
             run([str(old), str(path)], width, 0)
         result = path.read_text()
         assert result.split() == current.split()
-        if count <= 4:
-            assert result == current
-        else:
-            assert result != current
-            assert result.splitlines()[0] == first.replace("Stable", "Edited")
+        assert result != current
+        assert result.splitlines()[0] == first.replace("Stable", "Edited")
 
 
 def test_one_moved_line_break_is_moved_back(tmp_path):

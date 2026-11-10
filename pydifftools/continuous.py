@@ -21,7 +21,8 @@ from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 from .command_registry import register_command
 from .wrapping_options import (
-    DEFAULT_WIDTH, DEFAULT_TRAILING_DEPENDENT_PHRASE, WRAPPING_ARGUMENTS,
+    DEFAULT_WIDTH, DEFAULT_DESIRED_WIDTH,
+    DEFAULT_TRAILING_DEPENDENT_PHRASE, WRAPPING_ARGUMENTS,
 )
 from .zotero import recover_bibliography, zotero_notice
 from .comment_migration import prepare_comment_source
@@ -516,6 +517,7 @@ def run_pandoc(
     wrapnumber=DEFAULT_WIDTH,
     trailing_dependent_phrase=DEFAULT_TRAILING_DEPENDENT_PHRASE,
     diff=None,
+    desired_width=DEFAULT_DESIRED_WIDTH,
 ):
     # {{{ automatically fix Markdown source and request edits for
     # unfinished spans
@@ -526,6 +528,7 @@ def run_pandoc(
         report = autofix_markdown_file(
             filename, wrapnumber=wrapnumber, git_index=True, git_ref=diff,
             punctuation_slop=trailing_dependent_phrase,
+            desired_width=desired_width,
         )
         automatic_fixes_were_made |= bool(report["fixes"])
         if report["fixes"] or report["warnings"]:
@@ -1218,6 +1221,7 @@ def cpb(
     wrapnumber=DEFAULT_WIDTH,
     trailing_dependent_phrase=DEFAULT_TRAILING_DEPENDENT_PHRASE,
     diff=None,
+    desired_width=DEFAULT_DESIRED_WIDTH,
 ):
     source_path = os.path.normpath(os.path.abspath(filename))
     source_dir = os.path.dirname(source_path)
@@ -1282,6 +1286,7 @@ def cpb(
             wrapnumber=wrapnumber,
             trailing_dependent_phrase=trailing_dependent_phrase,
             diff=diff,
+            desired_width=desired_width,
         )
         source_jump_server = SourceJumpServer(source_path)
         source_jump_server.start()
@@ -1429,6 +1434,7 @@ def cpb(
                                     trailing_dependent_phrase
                                 ),
                                 diff=diff,
+                                desired_width=desired_width,
                             )
                             append_autorefresh(
                                 html_file, source_jump_server.url

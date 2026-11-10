@@ -56,7 +56,8 @@ from .notebook.fast_build import (
 
 from .command_registry import _COMMAND_SPECS, register_command
 from .wrapping_options import (
-    DEFAULT_WIDTH, DEFAULT_TRAILING_DEPENDENT_PHRASE, WRAPPING_ARGUMENTS,
+    DEFAULT_WIDTH, DEFAULT_DESIRED_WIDTH,
+    DEFAULT_TRAILING_DEPENDENT_PHRASE, WRAPPING_ARGUMENTS,
 )
 
 _ARGCOMPLETE_SPEC = importlib.util.find_spec("argcomplete")
@@ -389,8 +390,11 @@ def gvr(arguments):
 def wmatch(
     arguments, wrapnumber=DEFAULT_WIDTH,
     trailing_dependent_phrase=DEFAULT_TRAILING_DEPENDENT_PHRASE,
+    desired_width=DEFAULT_DESIRED_WIDTH,
 ):
-    match_spaces.run(arguments, wrapnumber, trailing_dependent_phrase)
+    match_spaces.run(
+        arguments, wrapnumber, trailing_dependent_phrase, desired_width,
+    )
 
 
 @register_command("split conflict")
@@ -1052,6 +1056,8 @@ def main(argv=None):
         parser._pydifft_subparsers[namespace.command].error(
             "--wrapnumber must be at least 1"
         )
+    if getattr(namespace, "desired_width", 45) < 1:
+        parser.error("--desired-width must be at least 1")
     if getattr(namespace, "trailing_dependent_phrase",
                getattr(namespace, "punctuation_slop", 0)) < 0:
         parser._pydifft_subparsers[namespace.command].error(

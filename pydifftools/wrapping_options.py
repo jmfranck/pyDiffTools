@@ -1,9 +1,16 @@
 """Common defaults and CLI definitions for source wrapping commands."""
 
 DEFAULT_WIDTH = 79
+DEFAULT_DESIRED_WIDTH = 45
 DEFAULT_TRAILING_DEPENDENT_PHRASE = 20
 
 WRAPPING_ARGUMENTS = {
+    "desired_width": {
+        "help": (
+            "Desired width when removing line breaks to match Git "
+            "(default: 45)."
+        ),
+    },
     "wrapnumber": {
         "help": "Maximum source line width in characters.",
     },
