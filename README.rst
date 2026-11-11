@@ -219,6 +219,12 @@ included are (listed in order of fun/utility):
   retaining the exact command of an existing global ``gd`` alias. If none
   is configured, it installs ``!f() { pydifft gd "$@"; }; f``.
   Configure ``difftool.mygvim.cmd`` for the GUI diff tool.
+  Use ``pydifft gd --terminal [git diff args...]`` for a colored terminal
+  picker that opens diffs in foreground Vim without GUI configuration.
+  Navigate with arrows or ``j``/``k``, press Enter to open a diff, Space to
+  toggle its reviewed marker, and ``q`` to quit. Closing Vim returns to the
+  picker. Images and other binary files are skipped. Set ``NO_COLOR`` to
+  disable colors.
 - ``pydifft --add_to_git gd pd tree mergein reattach`` installs any selected subset
   of these global Git aliases in one invocation. Installation appears
   alongside the subcommands in root help; the former per-command

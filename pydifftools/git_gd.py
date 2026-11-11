@@ -273,6 +273,7 @@ def build_image_difftool_command(
     )
 
 
+# also used by: tests/cli/test_commands.py.
 def build_image_score_command(
     diff_args: Sequence[str], entry: DiffEntry
 ) -> list[str]:
@@ -363,6 +364,7 @@ def repo_name() -> str:
     return Path(top).name
 
 
+# also used by: git_gd_history.py and tests/cli/test_commands.py.
 def build_entries(argv: Sequence[str]):
     # {{{ separate Git options/revisions from file filters
     if "--" in argv:
@@ -407,9 +409,18 @@ def diff_entry_sort_key(entry: DiffEntry):
     return (group, 2, entry.path)
 
 
+# also used by: tests/test_git_gd_terminal.py.
 def main(argv: Sequence[str]) -> int:
+    # Only consume our flag before Git's pathspec separator.
+    args = list(argv)
+    option_end = args.index("--") if "--" in args else len(args)
+    terminal = "--terminal" in args[:option_end]
+    if terminal:
+        args = [arg for arg in args[:option_end] if arg != "--terminal"] + (
+            args[option_end:]
+        )
     try:
-        diff_args, entries = build_entries(argv)
+        diff_args, entries = build_entries(args)
         name = repo_name()
     except subprocess.CalledProcessError as exc:
         if isinstance(exc.stderr, bytes):
@@ -417,6 +428,10 @@ def main(argv: Sequence[str]) -> int:
         elif exc.stderr:
             sys.stderr.write(exc.stderr)
         return exc.returncode
+    if terminal:
+        from .git_gd_terminal import launch_review
+
+        return launch_review(name, diff_args, entries)
     try:
         from .git_gd_qt import launch_review
     except ModuleNotFoundError as exc:
@@ -429,10 +444,13 @@ def main(argv: Sequence[str]) -> int:
     return launch_review(name, diff_args, entries, command_args=argv)
 
 
+# also used by: command_line.py's registered command dispatcher.
 @register_command(
     "review changed files in a Qt table before launching git difftool",
     "review changed files in a Qt table before launching git difftool\n\n"
     "With no arguments, review unstaged changes, like git diff.\n"
+    "Add --terminal for a colored terminal picker and Vim diffs;\n"
+    "images and binary files are skipped in terminal mode.\n"
     "Use pydifft tree to browse Git history.\n\n"
     "Install the matching git alias automatically with:\n"
     "  pydifft --add_to_git gd\n\n"
@@ -440,11 +458,12 @@ def main(argv: Sequence[str]) -> int:
     "  git config --global alias.gd '!f() { pydifft gd \"$@\"; }; f'\n\n"
     "This command shells out to git difftool --tool=mygvim, so keep\n"
     "difftool.mygvim.cmd configured in your git config.",
+    help={"terminal": "Use a terminal picker and Vim; skip images/binaries."},
 )
-def gd(arguments):
+def gd(arguments, terminal=False):
     """Mirror ``git_gd_qt.py``."""
 
-    return_code = main(arguments)
+    return_code = main(["--terminal", *arguments] if terminal else arguments)
     if return_code != 0:
         raise SystemExit(return_code)
 

@@ -1031,6 +1031,14 @@ def main(argv=None):
         if subcommand in parser._pydifft_subparsers:
             parser._pydifft_subparsers[subcommand].print_help()
             return
+    # gd forwards Git's options verbatim, including leading --cached/-M.
+    # argparse's REMAINDER only accepts those after a positional argument.
+    if argv[0] == "gd":
+        option_end = argv.index("--") if "--" in argv else len(argv)
+        if any(arg in ("-h", "--help") for arg in argv[1:option_end]):
+            parser._pydifft_subparsers["gd"].print_help()
+            return
+        return gd(argv[1:])
     namespace = parser.parse_args(argv)
     if namespace.add_to_git is not None:
         if not namespace.add_to_git:
