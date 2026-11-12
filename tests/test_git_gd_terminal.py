@@ -1,13 +1,100 @@
 """Terminal review never needs Qt, image helpers, or a GUI editor."""
 
 import curses
+import json
+import shlex
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 from pydifftools import git_gd, git_gd_terminal
 from pydifftools.git_gd import DiffEntry
+
+
+@pytest.mark.parametrize("args", [[], ["HEAD"], ["--", "--terminal"]])
+def test_default_cli_uses_graphical_review(monkeypatch, args):
+    from pydifftools import command_line, git_gd_qt
+
+    calls = []
+    entry = DiffEntry("notes.txt", 1, 1)
+    monkeypatch.setattr(git_gd, "build_entries", lambda argv: ([], [entry]))
+    monkeypatch.setattr(git_gd, "repo_name", lambda: "repo")
+    monkeypatch.setattr(git_gd_qt, "launch_review", lambda *a, **kw: (
+        calls.append((a, kw)) or 0
+    ))
+    monkeypatch.setattr(git_gd_terminal, "launch_review", lambda *a: (
+        pytest.fail("Terminal review requires --terminal")
+    ))
+    command_line.main(["gd", *args])
+    assert calls == [(("repo", [], [entry]), {"command_args": args})]
+
+
+def test_graphical_picker_opens_gui_difftool(monkeypatch):
+    from pydifftools import git_gd_qt
+
+    commands = []
+    monkeypatch.setattr(git_gd_qt.subprocess, "Popen", commands.append)
+    window = git_gd_qt.DiffWindow(
+        "repo", ["HEAD"], [DiffEntry("notes.txt", 1, 1)],
+        start_image_scores=False,
+    )
+    window.open_row(0)
+    assert commands == [[
+        "git", "difftool", "--tool=mygvim", "--no-prompt",
+        "--find-renames", "HEAD", "--", "notes.txt",
+    ]]
+    window.close()
+
+
+@pytest.mark.parametrize("rename", [False, True])
+def test_gui_difftool_runs_through_git(tmp_path, monkeypatch, rename):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    original = tmp_path / "old.txt"
+    original.write_text("common line\n" * 10 + "before\n")
+    subprocess.run(["git", "add", "old.txt"], check=True)
+    subprocess.run([
+        "git", "-c", "user.name=Test", "-c", "user.email=test@example.com",
+        "commit", "-qm", "initial",
+    ], check=True)
+    path = "new.txt" if rename else "old.txt"
+    if rename:
+        original.rename(tmp_path / path)
+    (tmp_path / path).write_text("common line\n" * 10 + "after\n")
+    subprocess.run(["git", "add", "-A"], check=True)
+
+    # Exercise Git's option parser and custom-tool dispatch with a recorder
+    # in place of the user's GUI editor.
+    recorder = tmp_path / "editor.py"
+    recorder.write_text(
+        "import json, pathlib, sys\n"
+        "pathlib.Path('opened.json').write_text(json.dumps([\n"
+        "    pathlib.Path(arg).read_text() for arg in sys.argv[1:]\n"
+        "]))\n"
+    )
+    tool_cmd = (
+        f"{shlex.quote(sys.executable)} {shlex.quote(str(recorder))} "
+        '"$LOCAL" "$MERGED"'
+    )
+    subprocess.run([
+        "git", "config", "difftool.mygvim.cmd", tool_cmd,
+    ], check=True)
+    entry = DiffEntry(
+        path, 1, 1, status="R090" if rename else "M",
+        old_path="old.txt" if rename else None,
+        new_path=path if rename else None,
+    )
+    result = subprocess.run(
+        git_gd.build_difftool_command(["--cached"], entry),
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads((tmp_path / "opened.json").read_text()) == [
+        "common line\n" * 10 + "before\n",
+        "common line\n" * 10 + "after\n",
+    ]
 
 
 @pytest.mark.parametrize("args", [
