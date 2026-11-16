@@ -511,7 +511,8 @@ def test_batched_word_diff_keeps_hunks_isolated(monkeypatch):
     monkeypatch.setattr(line_alignment.subprocess, "run", record_diff)
     results = align_line_breaks(reference, current)
     assert [result["aligned"] for result in results] == expected
-    assert len(calls) == 2  # one line diff, one isolated batch of word diffs
+    # Initial line diff, batched word diff, then batched restored-line diff.
+    assert len(calls) == 3
 
 
 def test_optional_preservation_break_does_not_strand_a_tiny_fragment():
@@ -640,3 +641,112 @@ def test_repeated_word_pair_width_fix_uses_the_reported_column(tmp_path):
     autofix_markdown_file(path, wrapnumber=79)
     assert path.read_text() == wrap_prose(text, 79)
     assert len(path.read_text().splitlines()[0]) > 60
+
+
+@pytest.mark.parametrize("reference,current,expected", [
+    (
+        "rotational correlation time calculated from\n"
+        "the feedback-guided temperature-dependent\n"
+        "spectra of TEMPO-SO~4~ in isooctane\n"
+        "for large RMs ($w_0=20$).\n",
+        "rotational correlation time calculated from the\n"
+        "spectral-feedback-guided VT spectra of\n"
+        "TEMPO-SO~4~ in isooctane for large RMs\n"
+        "($w_0=20$).\n",
+        "rotational correlation time calculated from\n"
+        "the spectral-feedback-guided VT\n"
+        "spectra of TEMPO-SO~4~ in isooctane\n"
+        "for large RMs ($w_0=20$).\n",
+    ),
+    (
+        "These observations suggest that future\n"
+        "feedback-guided experiments could use the\n"
+        "rmsd cumulant to automate temperature control\n"
+        "and detect continued spectral evolution that\n"
+        "is not apparent from $\\tau_c$\nalone.\n",
+        "These observations suggest that future\n"
+        "spectral-feedback-guided VT experiments could\n"
+        "use the rmsd cumulant to automate temperature\n"
+        "control and detect continued spectral\n"
+        "evolution that is not apparent from $\\tau_c$\nalone.\n",
+        "These observations suggest that future\n"
+        "spectral-feedback-guided VT experiments could use the\n"
+        "rmsd cumulant to automate temperature control\n"
+        "and detect continued spectral evolution that\n"
+        "is not apparent from $\\tau_c$\nalone.\n",
+    ),
+])
+def test_wmatch_finishes_restoration_before_guarding_screenshot_hunks(
+    tmp_path, reference, current, expected,
+):
+    old, new = tmp_path / "old.md", tmp_path / "new.md"
+    old.write_text(reference)
+    new.write_text(current)
+    for _ in range(2):
+        run([str(old), str(new)])
+        assert new.read_text() == expected
+
+
+@pytest.mark.parametrize("reference,current", [
+    (
+        "These stable words explain the water near an interface.\n",
+        "These stable words explain the water\nnear an interface.\n",
+    ),
+    (
+        "First sentence. Second sentence stays on its reference line.\n",
+        "First sentence. Second sentence stays\non its reference line.\n",
+    ),
+    (
+        "Former opening\nstable reference words\nformer closing.\n",
+        "X stable reference words rewritten closing.\n",
+    ),
+])
+def test_wmatch_guards_only_lines_in_the_restored_diff(
+    tmp_path, reference, current,
+):
+    old, new = tmp_path / "old.md", tmp_path / "new.md"
+    old.write_text(reference)
+    new.write_text(current)
+    run([str(old), str(new)], wrapnumber=20, desired_width=20)
+    if current.startswith("X "):
+        # The restored middle line separates two edited hunks. Short-line
+        # guards must not consume it to join either edited fragment.
+        assert new.read_text() == (
+            "X\nstable reference words\nrewritten closing.\n"
+        )
+    else:
+        # Both width and sentence guards must leave restored lines alone.
+        assert new.read_text() == reference
+
+
+def test_wmatch_lints_a_changed_duplicate_of_a_reference_line(tmp_path):
+    reference = (
+        "First sentence. Second sentence.\n\nUnchanged anchor.\n\n"
+        "Original words remain here.\n"
+    )
+    old, new = tmp_path / "old.md", tmp_path / "new.md"
+    old.write_text(reference)
+    new.write_text(reference.replace(
+        "Original words remain here.", "First sentence. Second sentence.",
+    ))
+    run([str(old), str(new)], trailing_dependent_phrase=0)
+    assert new.read_text() == reference.replace(
+        "Original words remain here.", "First sentence.\nSecond sentence.",
+    )
+
+
+@pytest.mark.parametrize("separator,expected_separator", [
+    ("\n", " "), ("  \n", "  \n"), ("\\\n", "\\\n"),
+])
+def test_wmatch_combines_changed_short_lines_after_matching(
+    tmp_path, separator, expected_separator,
+):
+    old, new = tmp_path / "old.md", tmp_path / "new.md"
+    old.write_text(
+        "Former opening words here.\nOriginal ending words continue here.\n"
+    )
+    new.write_text("X" + separator + "Changed ending words continue here.\n")
+    run([str(old), str(new)], trailing_dependent_phrase=0)
+    assert new.read_text() == (
+        "X" + expected_separator + "Changed ending words continue here.\n"
+    )

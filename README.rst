@@ -277,18 +277,20 @@ included are (listed in order of fun/utility):
 
     * ``cpb`` and ``wmatch`` share a matcher that finds changed hunks, aligns
       their words using Git's minimal diff, and restores reference whitespace.
-      It then considers extra breaks that preserve an unchanged reference line
-      without stranding an edited fragment of three words or fewer, and checks
-      wrapping rules. ``--desired-width`` (default 45) limits the width of
+      It finishes restoring whitespace and complete reference lines, then
+      computes a new line diff before checking short fragments and wrapping
+      rules. ``wmatch`` applies those checks only to lines in the new diff;
+      restored reference lines remain untouched.
+      ``--desired-width`` (default 45) limits the width of
       lines created by removing existing breaks to match Git. Breaks are
       retained when joining would exceed that desired width.
 
     * ``--wrapnumber`` independently sets the maximum width (79 for ``cpb``
-      and ``wmatch``), including for stable prose from the Git baseline.
+      and ``wmatch``). ``cpb`` also checks stable prose from the Git baseline.
       For example, ``cpb --desired-width 50 --wrapnumber 85 manuscript.md``
       changes both limits.
-      Wmatch also uses nearby reference widths for large edits, retaining
-      unchanged reference lines and protected Markdown blocks.
+      ``wmatch`` uses this maximum for edited prose, retaining unchanged
+      reference lines and protected Markdown blocks.
 
     * ``--trailing-dependent-phrase`` defaults to 20: a clause boundary within
       20 characters of the maximum width must end the line, even when its

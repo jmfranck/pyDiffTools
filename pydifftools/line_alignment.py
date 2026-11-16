@@ -95,7 +95,7 @@ def align_line_breaks(
     then preserve complete reference lines and enforce line linting. CPB
     and wmatch apply the aligned layout automatically.
     Width can be a number or a function choosing a limit after restoration.
-    Removing a break must also satisfy desired_width, without word overflow.
+    Restore whitespace before re-diffing and checking changed source lines.
     """
     from .wrap_sentences import (
         WORD,
@@ -228,7 +228,7 @@ def align_line_breaks(
         return text, tokens, gaps, continuation
         # }}}
 
-    def lint(text):
+    def lint(text, eligible):
         if width is None:
             return text
         # Reclassify the enclosing blocks after layout changes.
@@ -242,10 +242,10 @@ def align_line_breaks(
             rows = text.splitlines(keepends=True)
             flags = [
                 allowed and not (
-                    preserve_reference_lines and line in reference_lines
+                    preserve_reference_lines and row not in eligible
                 )
-                for (allowed, _), line in zip(
-                    classified[context_row:context_row + len(rows)], rows,
+                for row, (allowed, _) in enumerate(
+                    classified[context_row:context_row + len(rows)]
                 )
             ]
             issues = {}
@@ -267,9 +267,14 @@ def align_line_breaks(
             if not issues:
                 break
             for line in sorted(issues, reverse=True):
-                full_source = apply_markdown_issue_fix(
+                updated = apply_markdown_issue_fix(
                     full_source, context_row + line, issues[line],
                 )[0]
+                added = updated.count("\n") - full_source.count("\n")
+                eligible = {
+                    row if row < line else row + added for row in eligible
+                } | set(range(line - 1, line + added))
+                full_source = updated
             text = full_source[
                 local_start:len(full_source) - len(current[stop:context_stop])
             ]
@@ -301,6 +306,7 @@ def align_line_breaks(
         boundaries.append(len(lines))
     # }}}
     results = []
+    restored_hunks = []
     requested_width = width
     hunks = [
         item
@@ -349,10 +355,7 @@ def align_line_breaks(
         context_last = boundaries[bisect_left(boundaries, j2)]
         context_start = starts[context_first]
         context_stop = starts[context_last]
-        local_start = start - context_start
-        context_row = j1 - context_first
         before = current[start:stop]
-        width = None if callable(requested_width) else requested_width
         head = "".join(reference_lines[i1:i2])
         (_, old_tokens, old_gaps, _), (_, tokens, gaps, continuation) = pairs[
             hunk
@@ -467,58 +470,14 @@ def align_line_breaks(
             old_rows = {}
             for number, (row, _, _) in enumerate(old_tokens):
                 old_rows.setdefault(row, [number, number])[1] = number
-            for row, (first, last) in old_rows.items():
+            for first, last in old_rows.values():
                 if (
                     all(number in reverse for number in range(first, last + 1))
                     and reverse[last] - reverse[first] == last - first
                 ):
                     spans.append((
                         reverse[first], reverse[last],
-                        reference_lines[i1 + row].rstrip(),
                     ))
-            inherited = {(first, last) for first, last, _ in spans}
-            token_gaps = [
-                before[left[2]:right[1]]
-                for left, right in zip(tokens, tokens[1:])
-            ]
-
-            def creates_short_fragment(proposed, changed):
-                # Inspect only rows beside newly inserted breaks. Token
-                # ranges identify the actual inherited line, even when its
-                # text occurs elsewhere. Stop counting after four words.
-                for number in changed:
-                    if (
-                        "\n" not in proposed[number]
-                        or "\n" in whitespace[number]
-                    ):
-                        continue
-                    for direction, first in ((-1, number), (1, number + 1)):
-                        last = first
-                        words = len(before[
-                            tokens[first][1]:tokens[first][2]
-                        ].split())
-                        while words <= 3 and (
-                            (direction < 0 and first > 0)
-                            or (direction > 0 and last < len(tokens) - 1)
-                        ):
-                            gap = first - 1 if direction < 0 else last
-                            raw = proposed.get(gap, token_gaps[gap])
-                            if "\n" in raw:
-                                break
-                            adjacent = first - 1 if direction < 0 else last + 1
-                            words += len(before[
-                                tokens[adjacent][1]:tokens[adjacent][2]
-                            ].split()) - (not raw)
-                            if words > 3:
-                                break
-                            if direction < 0:
-                                first -= 1
-                            else:
-                                last += 1
-                        if words <= 3 and (first, last) not in inherited:
-                            return True
-                return False
-
             for number in gaps:
                 old_number = matches[hunk].get(number)
                 if old_number is None and number + 1 in matches[hunk]:
@@ -534,27 +493,6 @@ def align_line_breaks(
                         region is not None
                         and start + tokens[number + 1][1] < region[1]
                     )
-                    if "\n" in raw and "\n" not in gaps[number] and (
-                        not inside_region
-                    ):
-                        proposed = dict(whitespace)
-                        proposed[number] = raw
-                        if creates_short_fragment(proposed, (number,)):
-                            continue
-                    # Keep a user break if restoring the reference would
-                    # create a line wider than the desired source width.
-                    if (
-                        not inside_region
-                        and "\n" in gaps[number] and "\n" not in raw
-                    ):
-                        proposed = dict(whitespace)
-                        proposed[number] = raw
-                        existing = set(render(whitespace).splitlines())
-                        if any(
-                            len(line) > desired_width and line not in existing
-                            for line in render(proposed).splitlines()
-                        ):
-                            continue
                     if inside_region or (
                         current_layout[3][j1 + tokens[number][0]]
                         and current_layout[3][j1 + tokens[number + 1][0]]
@@ -566,62 +504,172 @@ def align_line_breaks(
                             if "\n" in raw else raw
                         )
             # }}}
-            # {{{ additional breaks preserve a line without tiny new fragments
-            for first, last, old_line in spans:
+            # {{{ restore complete reference lines before applying guards
+            for first, last in spans:
                 needed = range(
                     max(0, first - 1), min(len(tokens) - 1, last + 1)
                 )
                 if any(number not in gaps for number in needed):
                     continue
-                if width is not None and len(old_line) > width:
-                    continue
-                original_rows = set(render(whitespace).splitlines())
-                region = region_at(current_comments, start + tokens[first][1])
-                inside_comment = (
-                    region is not None and start + tokens[last][1] < region[1]
-                )
-                if inside_comment and old_line in {
-                    line.rstrip() for line in original_rows
-                }:
-                    continue
-                proposed = dict(whitespace)
+                proposed = {}
                 for number in needed:
                     if number in (first - 1, last):
                         proposed[number] = (
-                            ending + continuation[tokens[number][0]]
+                            whitespace[number] if "\n" in whitespace[number]
+                            else ending + continuation[tokens[number][0]]
                         )
-                    elif "\n" in proposed[number]:
-                        proposed[number] = " "
-                proposed_rows = render(proposed).splitlines()
-                if any(
-                    "\n" in whitespace[number]
-                    and "\n" not in proposed[number]
-                    for number in needed
-                ) and any(
-                    len(line) > desired_width and line not in original_rows
-                    for line in proposed_rows
-                ):
-                    continue
+                    else:
+                        proposed[number] = (
+                            " " if "\n" in whitespace[number]
+                            else whitespace[number]
+                        )
                 if any(
                     not equivalent_gap(number, proposed[number])
                     for number in needed
                 ):
                     continue
-                if old_line not in {line.rstrip() for line in proposed_rows}:
+                # Check only this line's body, rather than copying and
+                # rendering the entire hunk for every inherited line.
+                if "".join(
+                    before[tokens[number][1]:tokens[number][2]]
+                    + (proposed[number] if number < last else "")
+                    for number in range(first, last + 1)
+                ) != head[
+                    old_tokens[matches[hunk][first]][1]:
+                    old_tokens[matches[hunk][last]][2]
+                ]:
                     continue
-                if creates_short_fragment(proposed, needed):
-                    continue
-                whitespace = proposed
+                whitespace.update(proposed)
             # }}}
-        restored = render(whitespace)
+        restored_hunks.append((
+            render(whitespace), i1, i2, j1, j2,
+            context_first, context_start, context_stop, gaps,
+        ))
+    # {{{ re-diff the complete restored source in one Git diff
+    new_rows, restored_starts = [], []
+    position = 0
+    for restored, _, _, j1, j2, *_ in restored_hunks:
+        new_rows.extend(lines[position:j1])
+        restored_starts.append(len(new_rows))
+        new_rows.extend(restored.splitlines(keepends=True))
+        position = j2
+    new_rows.extend(lines[position:])
+    changed_rows = set()
+    for operation, _, _, a, b in minimal_opcodes(reference_lines, new_rows):
+        if operation != "equal":
+            changed_rows.update(range(a, b))
+    # }}}
+    for hunk, (
+        restored, i1, i2, j1, j2,
+        context_first, context_start, context_stop, original_gaps,
+    ) in enumerate(restored_hunks):
+        start, stop = starts[j1], starts[j2]
+        local_start = start - context_start
+        context_row = j1 - context_first
+        before = current[start:stop]
+        head = "".join(reference_lines[i1:i2])
+        width = None if callable(requested_width) else requested_width
+        eligible = {
+            row for row in range(len(restored.splitlines()))
+            if restored_starts[hunk] + row in changed_rows
+        }
+        # {{{ apply guards only after restoration and the fresh line diff
+        full_source = (
+            current[context_start:start] + restored
+            + current[stop:context_stop]
+        )
+        layout = source_layout(full_source)
+        _, restored_tokens, restored_gaps, _ = tokenize(
+            restored, (*layout[:2], *(
+                flags[context_row:context_row + len(restored.splitlines())]
+                for flags in layout[2:]
+            )), local_start,
+        )
         if callable(requested_width):
-            joined = any(
-                "\n" in raw and "\n" not in whitespace[number]
-                for number, raw in gaps.items()
+            width = requested_width(i1, restored, any(
+                "\n" in raw and "\n" not in restored_gaps.get(number, raw)
+                for number, raw in original_gaps.items()
+            ))
+        rows = restored.splitlines(keepends=True)
+        edits = {}
+        row_starts = [0]
+        for line in rows:
+            row_starts.append(row_starts[-1] + len(line))
+        original_rows = {line.strip() for line in before.splitlines()}
+        word_ends = [match.end() for match in re.finditer(r"\S+", restored)]
+        for number, raw in restored_gaps.items():
+            if number not in original_gaps:
+                continue
+            row, _, end = restored_tokens[number]
+            next_row, begin, _ = restored_tokens[number + 1]
+            if preserve_reference_lines and (
+                row not in eligible or next_row not in eligible
+            ):
+                continue
+            # Hidden source and display math retain their reference layout.
+            if any(
+                region_at(regions, local_start + end - 1) is not None
+                and region_at(regions, local_start + begin) is not None
+                for regions in layout[:2]
+            ):
+                continue
+            if "\n" in original_gaps[number] and "\n" not in raw:
+                if len(rows[row].rstrip("\r\n")) > desired_width and all(
+                    bisect_right(word_ends, right)
+                    - bisect_right(word_ends, left) > 3
+                    or restored[left:right].strip() in original_rows
+                    for left, right in (
+                        (row_starts[row], end),
+                        (begin, row_starts[row + 1]),
+                    )
+                ):
+                    edits[number] = original_gaps[number]
+            elif "\n" in raw and (
+                preserve_reference_lines or "\n" not in original_gaps[number]
+            ) and not (
+                re.search(r" {2,}\r?\n", raw)
+                or restored[end - 1:end] == "\\"
+            ):
+                if any(
+                    r in eligible and len(rows[r].split()) <= 3
+                    for r in (row, next_row)
+                ) and (
+                    "\n" not in original_gaps[number]
+                    or len(rows[row].rstrip("\r\n"))
+                    + len(rows[next_row].strip()) + 1 <= desired_width
+                ):
+                    edits[number] = (
+                        " " if "\n" in original_gaps[number]
+                        else original_gaps[number]
+                    )
+        output = []
+        position = 0
+        guarded_eligible = set()
+        guarded_row = 0
+        # Carry fresh-diff eligibility through the whitespace edits; no new
+        # Git subprocess is needed when the subsequent lint inserts lines.
+        row_deltas = [0] * len(rows)
+        for number, replacement in edits.items():
+            row_deltas[restored_tokens[number][0]] += (
+                replacement.count("\n") - restored_gaps[number].count("\n")
             )
-            width = requested_width(i1, restored, joined)
-        aligned = lint(restored)
-        linted = aligned if restored == before else lint(before)
+        for row, line in enumerate(rows):
+            if row in eligible:
+                guarded_eligible.update(range(
+                    guarded_row, guarded_row + max(1, 1 + row_deltas[row]),
+                ))
+            guarded_row += line.count("\n") + row_deltas[row]
+        for number, replacement in sorted(edits.items()):
+            left = restored_tokens[number][2]
+            right = restored_tokens[number + 1][1]
+            output.extend((restored[position:left], replacement))
+            position = right
+        output.append(restored[position:])
+        aligned = lint("".join(output), guarded_eligible)
+        linted = aligned if restored == before else lint(
+            before, set(range(len(before.splitlines()))),
+        )
+        # }}}
         # {{{ count adjustments between retained boundaries for CPB review
         layouts = []
         for text in (linted, aligned):

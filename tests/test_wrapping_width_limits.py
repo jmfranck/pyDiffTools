@@ -42,10 +42,14 @@ def test_general_width_applies_to_stable_git_prose(tmp_path):
 
 def test_wmatch_passes_desired_width(tmp_path):
     reference = "These stable words explain the water near an interface.\n"
-    current = reference.replace("water near", "water\nnear")
+    current = reference.replace("stable", "edited").replace(
+        "water near", "water\nnear",
+    )
     old, new = tmp_path / "old.md", tmp_path / "new.md"
     old.write_text(reference)
-    for desired, expected in [(45, current), (79, reference)]:
+    for desired, expected in [
+        (45, current), (79, reference.replace("stable", "edited")),
+    ]:
         new.write_text(current)
         run([str(old), str(new)], 79, 0, desired)
         assert new.read_text() == expected
@@ -73,14 +77,18 @@ def test_cli_width_arguments_are_independent(tmp_path):
     import time
 
     reference = "These stable words explain the water near an interface.\n"
-    current = reference.replace("water near", "water\nnear")
+    current = reference.replace("stable", "edited").replace(
+        "water near", "water\nnear",
+    )
     old, new = tmp_path / "old.md", tmp_path / "new.md"
     old.write_text(reference)
     env = dict(os.environ)
     env["PYDIFFTOOLS_UPDATE_CHECK_LAST_RAN_UTC_DATE"] = time.strftime(
         "%Y-%m-%d", time.gmtime(),
     )
-    for desired, expected in [(45, current), (79, reference)]:
+    for desired, expected in [
+        (45, current), (79, reference.replace("stable", "edited")),
+    ]:
         new.write_text(current)
         subprocess.run(
             [sys.executable, "-m", "pydifftools.command_line", "wmatch",

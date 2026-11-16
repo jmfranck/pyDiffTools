@@ -1,14 +1,10 @@
 from difflib import SequenceMatcher
-from bisect import bisect_left
-import math
-import re
 from .line_alignment import align_line_breaks
 from .wrapping_options import (
     DEFAULT_WIDTH, DEFAULT_DESIRED_WIDTH,
     DEFAULT_TRAILING_DEPENDENT_PHRASE,
 )
 from .wrap_sentences import (
-    classify_lines,
     markdown_blocks,
     wrap_blocks,
 )
@@ -100,48 +96,11 @@ def match_text(
     desired_width=DEFAULT_DESIRED_WIDTH,
 ):
     """Align reference lines and wrap only overflowing edited prose."""
-    # {{{ choose the nearby reference width before any line linting
-    reference_lines = classify_lines(text1, filetype)
-    prose_rows = [
-        row
-        for row, (allowed, line) in enumerate(reference_lines)
-        if allowed and line.strip()
-    ]
-
-    def reference_width(row, restored, joined):
-        closest = bisect_left(prose_rows, row)
-        nearby = sorted(
-            prose_rows[max(0, closest - 10) : closest + 10],
-            key=lambda number: (abs(number - row), number),
-        )[:10]
-        widths = sorted(
-            len(reference_lines[number][1].rstrip("\n")) for number in nearby
-        )
-        local = (
-            min(fallback_width, widths[math.ceil(0.75 * len(widths)) - 1])
-            if len(widths) >= 2
-            else fallback_width
-        )
-        return (
-            local
-            if any(
-                len(line) > local and (
-                    joined or sum(
-                        match.end() > local
-                        for match in re.finditer(r"\S+", line)
-                    ) > 4
-                )
-                for line in restored.splitlines()
-            )
-            else fallback_width
-        )
-
-    # }}}
     results = align_line_breaks(
         text1,
         text2,
         filetype,
-        width=reference_width,
+        width=fallback_width,
         punctuation_slop=trailing_dependent_phrase,
         preserve_reference_lines=True,
         desired_width=desired_width,

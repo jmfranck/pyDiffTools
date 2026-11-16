@@ -247,7 +247,7 @@ def test_wmatch_reuses_wr_rules_and_preserves_other_lines(tmp_path, operation):
     )
     new.write_text(changed + "\n" + rest)
     run([str(old), str(new)])
-    expected = wrap_prose(changed + "\n", 40) + rest
+    expected = wrap_prose(changed + "\n", 79) + rest
     assert new.read_text() == expected
     run([str(old), str(new)])
     assert new.read_text() == expected
@@ -264,12 +264,12 @@ def test_wmatch_small_edit_and_missing_final_newline(tmp_path):
 
 
 @pytest.mark.parametrize("indent", ["", "    "])
-def test_wmatch_local_width_excludes_headers_and_keeps_indentation(
+def test_wmatch_overflow_preserves_headers_and_indentation(
     tmp_path, indent
 ):
     old = tmp_path / "old.md"
     new = tmp_path / "new.md"
-    # Distant wide prose and a long heading must not determine the local width.
+    # Distant prose and a long heading must survive wrapping the local edit.
     distant = ("A distant paragraph with much longer lines " * 4 + "\n") * 12
     local = "".join(
         indent + f"Local line {j:02} has several ordinary words\n"
@@ -340,7 +340,7 @@ def test_wmatch_deletion_that_joins_long_lines(tmp_path):
     run([str(old), str(new)])
     # Restore the complete unchanged reference line before wrapping the edit.
     assert new.read_text() == (
-        context + wrap_prose(before + "\n", 40) + after + "\n"
+        context + before + "\n" + after + "\n"
     )
 
 
@@ -470,7 +470,7 @@ def test_wmatch_container_overflow_and_unchanged_neighbors(tmp_path, marker):
     body = result[len(heading) :].split("\n\n")[0].splitlines()
     assert body[0].startswith(marker)
     assert all(line.startswith(indent) for line in body[1:])
-    assert max(map(len, body)) < 70
+    assert max(map(len, body)) <= 79
     assert result.count(marker.strip()) == (len(body) if marker == "> " else 1)
     run([str(old), str(new)])
     assert new.read_text() == result

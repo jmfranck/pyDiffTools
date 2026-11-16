@@ -929,8 +929,15 @@ def test_rm_esr_restores_full_head_lines_in_rewritten_sentence(
     matched = tmp_path / "matched.md"
     matched.write_text(edited)
     run([str(reference), str(matched)])
-    assert matched.read_text() == expected
-    # Avoid a new two-word row just to preserve the ESR reference line.
+    # wmatch must retain the restored ESR line, which splits the new diff
+    # into separate hunks; only CPB can join across that unchanged line.
+    assert matched.read_text() == expected.replace(
+        "vibrations, the ESR measurements",
+        "vibrations, the\nESR measurements",
+    ).replace(
+        "main text\nemploy a setup", "main text employ a setup",
+    )
+    # CPB avoids a new two-word row to preserve the ESR reference line.
     assert numstat(path) == (8, 9)
 
 
