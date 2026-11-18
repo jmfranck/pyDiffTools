@@ -402,22 +402,45 @@ def sc(arguments):
     split_conflict.run(arguments)
 
 
+@register_command("export a clean Word document")
+def docx(filename):
+    from .word_export import word_export
+
+    word_export(filename)
+
+
 @register_command("word diff")
 def wd(arguments):
+    from pathlib import Path
+    from .word_export import word_export
+
+    if len(arguments) >= 2 and Path(arguments[1]).suffix.lower() == ".md":
+        target = Path(arguments[1])
+        source = target
+        if os.environ.get("GIT_DIFF_TOOL") == "docx" and target.is_absolute():
+            prefix = Path(os.environ.get("GIT_PREFIX", ""))
+            possible = list(prefix.rglob(target.name))
+            if len(possible) == 1:
+                source = possible[0]
+        if word_export(
+            source, baseline=arguments[0], target=target,
+            legacy=len(arguments) != 2,
+        ):
+            return
     if arguments[0].find("Temp") > 0:
         # {{{ if it's a temporary file, I need to make a real copy to run
         #     pandoc on
         fp = open(arguments[0], encoding="utf-8")
         contents = fp.read()
         fp.close()
-        fp = open(
-            arguments[1].replace(".md", "_old.md"), "w", encoding="utf-8"
-        )
+        target = Path(arguments[1])
+        old_source = target.with_stem(target.stem + "_old")
+        fp = open(old_source, "w", encoding="utf-8")
         fp.write(contents)
         fp.close()
-        arguments[0] = arguments[1].replace(".md", "_old.md")
+        arguments[0] = str(old_source)
         # }}}
-    word_files = [x.replace(".md", ".docx") for x in arguments[:2]]
+    word_files = [str(Path(x).with_suffix(".docx")) for x in arguments[:2]]
     local_dir = os.path.dirname(arguments[1])
     print("local directory:", local_dir)
     for j in range(2):

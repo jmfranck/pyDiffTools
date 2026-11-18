@@ -111,13 +111,14 @@ included are (listed in order of fun/utility):
   To run Lua filters before pandoc-crossref, declare an ordered list in
   the Markdown YAML header::
 
-      filters-before-crossref:
+      global-filters:
         - filters/panel-references.lua
 
   Paths are resolved relative to the Markdown file. Each declared filter
   runs once, in listed order, and is excluded from the adjacent Lua filters
   that normally run afterward. Missing files produce a build error.
-  Documents without this setting retain the existing filter order.
+  Word exports use the same list. The previous key,
+  ``filters-before-crossref``, remains supported.
 
   Declare a single local ``.bib`` file with ``bibliography: references.bib``
   in the Markdown YAML header; relative paths are resolved beside the
@@ -343,7 +344,16 @@ included are (listed in order of fun/utility):
   snapshots use the current project's bibliography, images, and TeX
   includes. The shared installer edits only the requested global Git alias.
 
-- `pydifft wd` ("word diff"): generate "track changes" word files starting from pandoc markdown in a git history.  Assuming that you have copied diff-doc.js (copied + licensed from elsewhere) into your home directory, this will use pandoc to convert the markdown files to MS Word, then use the MS Word comparison tool to generate a document where all relevant changes are shown with "track changes."
+- ``pydifft docx FILE`` exports a clean Word document beside the manuscript.
+  Declare ``docx-defaults: path/to/word.yaml`` in the manuscript to select
+  a Pandoc defaults file. Keep Word-only Lua filters in a subdirectory so
+  the preview's adjacent-filter discovery skips them.
+- With that declaration, ``git wdiff BASE -- FILE`` generates both
+  ``FILE-<short-commit>.docx`` and ``FILE-tracked.docx`` when the Git difftool
+  invokes ``pydifft wd "$LOCAL" "$REMOTE"``. Both outputs include the
+  target's dated manuscript comments. Commit Markdown changes before running
+  ``wd``. Legacy inputs can use the bundled
+  Windows Word comparison script.
 
     * by default, this uses the file `template.docx` in the current directory as a pandoc word template
 

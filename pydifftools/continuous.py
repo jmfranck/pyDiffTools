@@ -16,10 +16,12 @@ import traceback
 import tempfile
 from pathlib import Path
 import yaml
+from lxml import html
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 from .command_registry import register_command
+from .pandoc_filters import global_filters
 from .wrapping_options import (
     DEFAULT_WIDTH, DEFAULT_DESIRED_WIDTH,
     DEFAULT_TRAILING_DEPENDENT_PHRASE, WRAPPING_ARGUMENTS,
@@ -858,27 +860,7 @@ def run_pandoc(
                     for value in declared
                 ]
     # }}}
-    # {{{ resolve explicitly ordered filters before cross-reference processing
-    filters_before_crossref = []
-    if isinstance(metadata, dict) and "filters-before-crossref" in metadata:
-        declared_filters = metadata["filters-before-crossref"]
-        if not isinstance(declared_filters, list) or not all(
-            isinstance(value, str) and value for value in declared_filters
-        ):
-            raise ValueError(
-                "cpb: filters-before-crossref must be a list of file paths "
-                f"in {filename}"
-            )
-        for value in declared_filters:
-            filter_path = Path(source_dir, value).resolve()
-            if not filter_path.is_file():
-                raise FileNotFoundError(
-                    "cpb: filters-before-crossref file not found: "
-                    f"{value!r} (resolved to {filter_path})"
-                )
-            if str(filter_path) not in filters_before_crossref:
-                filters_before_crossref.append(str(filter_path))
-    # }}}
+    filters_before_crossref = global_filters(metadata, filename)
     localfiles = {}
     for k in ["csl", "bib"]:
         if k == "bib" and bibliography_declared:
@@ -1038,6 +1020,14 @@ def run_pandoc(
     with open(html_file, encoding="utf-8") as fp:
         text = fp.read()
     html_was_updated = False
+    if 'id="pydifft-front-matter"' in text:
+        tree = html.document_fromstring(text)
+        blocks = tree.xpath('//*[@id="pydifft-front-matter"]')
+        headers = tree.xpath('//*[@id="title-block-header"]')
+        if blocks and headers:
+            headers[0].append(blocks[0])
+            text = html.tostring(tree.getroottree(), encoding="unicode")
+            html_was_updated = True
     if localfiles["js"]:
         script_block = ""
         for js_file in localfiles["js"]:
@@ -1052,6 +1042,17 @@ def run_pandoc(
             else:
                 text = script_block + text
             html_was_updated = True
+    if 'id="pydifftools-subtitle-style"' not in text and "<head>" in text:
+        text = text.replace(
+            "<head>",
+            '<head>\n<style id="pydifftools-subtitle-style">\n'
+            ":where(#title-block-header .subtitle) { font-size: 1.5em; }\n"
+            "@media (max-width: 600px) {\n"
+            "  :where(#title-block-header .subtitle) { font-size: 1.4em; }\n"
+            "}\n</style>",
+            1,
+        )
+        html_was_updated = True
     style_block = (
         '\n<style id="pydifftools-hide-low-headers">\n'
         "h5, h6 { display: none; }\n"
