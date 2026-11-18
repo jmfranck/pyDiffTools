@@ -1827,7 +1827,7 @@ $body$
     if overwrite or not pandoc_target.exists():
         pandoc_target.write_text(body_target.read_text())
     obs_target = target / "obs.lua"
-    if overwrite or not obs_target.exists():
+    if not obs_target.exists():
         obs_target.write_text("-- placeholder filter\n")
 
 

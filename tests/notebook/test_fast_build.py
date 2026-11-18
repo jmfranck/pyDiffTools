@@ -3,6 +3,7 @@ import io
 import os
 import re
 import shutil
+import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -55,6 +56,39 @@ def test_load_bibliography_csl_reads_project_block(tmp_path, monkeypatch):
         "references.bib",
         "emails/superscript_ref_short.csl",
     )
+
+
+def test_err_closer_followed_by_prose_without_blank_line(fb):
+    fb.ensure_pandoc_available()
+    html = subprocess.run(
+        [
+            "pandoc", "-f", "markdown+raw_html", "-t", "html",
+            "--lua-filter", "_template/obs.lua",
+        ],
+        input=(
+            "Prior prose <obs>Prior observation</obs>\n"
+            "<err>\n"
+            "  <obs>Debug observation</obs>\n"
+            "  Create directories\n\n"
+            "  Then rerun\n\n"
+            "</err>\n"
+            "Following prose\n"
+            '<div data-script="example.qmd"></div>\n\n'
+            "## Later section\n"
+        ),
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+    root = fb.lxml_html.fragment_fromstring(html, create_parent=True)
+    debug, = root.xpath("./div[p/span='DEBUG:']")
+    assert "Debug observation" in debug.text_content()
+    assert "Then rerun" in debug.text_content()
+    assert "Following prose" not in debug.text_content()
+    debug.drop_tree()
+    assert "Following prose" in root.text_content()
+    assert root.xpath("./div[@data-script='example.qmd']")
+    assert root.xpath("./h2[text()='Later section']")
 
 
 def test_analyze_includes_map(fb):
