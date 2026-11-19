@@ -187,3 +187,32 @@ def test_paragraph_break_keeps_shared_prose(tmp_path, split):
             ".//" + W + "pPr/" + W + "rPr/" + W + "del"
         ))) == 1
     assert len(list(root.iter(W + "commentRangeStart"))) == 1
+
+
+def test_run_formatting_revision_requires_a_style_change(tmp_path):
+    part = "word/document.xml"
+    baseline, clean, tracked = (
+        tmp_path / name for name in ("old.docx", "new.docx", "tracked.docx")
+    )
+    for path in (baseline, clean):
+        root = etree.Element(W + "document")
+        para = etree.SubElement(etree.SubElement(root, W + "body"), W + "p")
+        for content in ("same", " anchor ", "bold"):
+            run = etree.SubElement(para, W + "r")
+            if path == baseline and content == "same":
+                etree.SubElement(run, W + "rPr")
+            if path == clean and content == "bold":
+                etree.SubElement(etree.SubElement(run, W + "rPr"), W + "b")
+            etree.SubElement(run, W + "t").text = content
+        with ZipFile(path, "w") as archive:
+            archive.writestr(part, etree.tostring(root))
+
+    compare(baseline, clean, tracked, "2026-11-18T00:00:00Z")
+    with ZipFile(tracked) as archive:
+        root = etree.fromstring(archive.read(part))
+    assert [
+        node.getparent().getparent().findtext(W + "t")
+        for node in root.iter(W + "rPrChange")
+    ] == ["bold"]
+    assert not list(root.iter(W + "ins"))
+    assert not list(root.iter(W + "del"))

@@ -540,10 +540,21 @@ def compare(baseline, clean, output, date, source_alignment=None):
                     ):
                         for left, right in pairs:
                             props = right.find(W + "rPr")
+                            old_props = left.find(W + "rPr")
+                            # An alignment change can pair identical text
+                            # with identical formatting. Empty rPr and
+                            # omitted rPr both leave the style inherited.
+                            old_style, new_style = (
+                                [(node.tag, dict(node.attrib), node.text)
+                                 for node in style.iterdescendants()]
+                                if style is not None else []
+                                for style in (old_props, props)
+                            )
+                            if old_style == new_style:
+                                continue
                             if props is None:
                                 props = etree.Element(W + "rPr")
                                 right.insert(0, props)
-                            old_props = left.find(W + "rPr")
                             mark(props, "rPrChange").append(
                                 deepcopy(old_props) if old_props is not None
                                 else etree.Element(W + "rPr")
