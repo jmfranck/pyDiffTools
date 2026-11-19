@@ -344,7 +344,9 @@ included are (listed in order of fun/utility):
   snapshots use the current project's bibliography, images, and TeX
   includes. The shared installer edits only the requested global Git alias.
 
-- ``pydifft docx FILE`` exports a clean Word document beside the manuscript.
+- ``pydifft docx FILE`` exports ``FILE-<short-commit>.docx`` beside the
+  source. If the manuscript has uncommitted changes, it uses
+  ``FILE-<short-commit>-dirty.docx`` with the current HEAD hash.
   Declare ``docx-defaults: path/to/word.yaml`` in the manuscript to select
   a Pandoc defaults file. Keep Word-only Lua filters in a subdirectory so
   the preview's adjacent-filter discovery skips them.

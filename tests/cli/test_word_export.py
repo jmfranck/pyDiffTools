@@ -108,10 +108,82 @@ def test_word_export_requires_commit_and_names_clean_copy(tmp_path):
         assert not list(tmp_path.glob("*.docx"))
 
     git("commit", "-m", "Save manuscript")
-    assert word_export(source, baseline=baseline)
+    assert word_export(source)
     commit = git("rev-parse", "--short=8", "HEAD")
+    assert (tmp_path / f"paper draft-{commit}.docx").is_file()
+    assert not (tmp_path / "paper draft-tracked.docx").exists()
+    assert word_export(source, baseline=baseline)
     assert (tmp_path / f"paper draft-{commit}.docx").is_file()
     assert (tmp_path / "paper draft-tracked.docx").is_file()
     source.write_text(source.read_text() + "\nUncommitted edit.\n")
     with pytest.raises(SystemExit, match="has uncommitted changes"):
         word_export(source, baseline=baseline)
+    assert word_export(source)
+    assert (tmp_path / f"paper draft-{commit}-dirty.docx").is_file()
+
+    baseline.write_text(
+        "Current\n<JFcom>Resolved comment</JFcom>\ntext.\n"
+    )
+    source.write_text(
+        "---\ndocx-defaults: word.yaml\n---\n\nCurrent text.\n\n"
+        "<JFcom>New comment</JFcom>\n"
+    )
+    git("add", source.name)
+    git("commit", "-m", "Update manuscript comments")
+    baseline.write_text(
+        "---\ndocx-defaults: word.yaml\n---\n\n" + baseline.read_text()
+    )
+    assert word_export(source, baseline=baseline)
+    with ZipFile(tmp_path / "paper draft-tracked.docx") as archive:
+        root = etree.fromstring(archive.read("word/document.xml"))
+        assert b"New comment" not in archive.read("word/document.xml")
+        assert b"Resolved" not in archive.read("word/comments.xml")
+    assert not list(root.iter(W + "ins"))
+    assert not list(root.iter(W + "del"))
+    assert len(list(root.iter(W + "commentReference"))) == 1
+
+
+@pytest.mark.parametrize("split", [True, False])
+def test_paragraph_break_keeps_shared_prose(tmp_path, split):
+    part = "word/document.xml"
+    baseline, clean, tracked = (
+        tmp_path / name for name in ("old.docx", "new.docx", "tracked.docx")
+    )
+    joined = ["First paragraph still here.", "Before break. After break."]
+    divided = [
+        "First paragraph still here!", "Before break.", "After break.",
+    ]
+    for path, paragraphs in zip(
+        (baseline, clean), (joined, divided) if split else (divided, joined),
+    ):
+        root = etree.Element(W + "document")
+        body = etree.SubElement(root, W + "body")
+        for content in paragraphs:
+            p = etree.SubElement(body, W + "p")
+            etree.SubElement(etree.SubElement(p, W + "r"), W + "t").text = (
+                content
+            )
+        if path == clean:
+            p = etree.SubElement(body, W + "p")
+            etree.SubElement(p, W + "commentRangeStart", {W + "id": "0"})
+            etree.SubElement(p, W + "commentRangeEnd", {W + "id": "0"})
+        with ZipFile(path, "w") as archive:
+            archive.writestr(part, etree.tostring(root))
+
+    compare(baseline, clean, tracked, "2026-11-18T00:00:00Z")
+    with ZipFile(tracked) as archive:
+        root = etree.fromstring(archive.read(part))
+    removed = {node.text for node in root.iter(W + "delText")}
+    inserted = [
+        node.findtext(".//" + W + "t") for node in root.iter(W + "ins")
+    ]
+    if split:
+        assert removed == {".", " "}
+        assert inserted == ["!", None]
+    else:
+        assert removed == {"!"}
+        assert inserted == [".", " "]
+        assert len(list(root.iterfind(
+            ".//" + W + "pPr/" + W + "rPr/" + W + "del"
+        ))) == 1
+    assert len(list(root.iter(W + "commentRangeStart"))) == 1
