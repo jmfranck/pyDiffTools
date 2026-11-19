@@ -13,12 +13,13 @@ QMDB_FORWARD_SEARCH_PORT = 51236
 # Concurrent qmdb sessions take the next free port above each base port.
 QMDB_PORT_ATTEMPTS = 20
 FORWARD_SEARCH_ACK = b"pydifft-forward-search-ok\n"
+FORWARD_SEARCH_OTHER_SOURCE = b"pydifft-forward-search-no\n"
 FORWARD_SEARCH_CONNECTION_TIMEOUT = 1.0
 FORWARD_SEARCH_ACCEPT_TIMEOUT = 0.25
 
 
 class ForwardSearchUnavailable(ConnectionError):
-    """Raised when no process is listening at a forward-search address."""
+    """Raised when a forward-search address is unavailable for the request."""
 
 
 class ForwardSearchProtocolError(RuntimeError):
@@ -44,7 +45,9 @@ def bind_forward_search_server(address, service_name):
     return server
 
 
-def serve_forward_search(server, stop_event, search_queue, directory=None):
+def serve_forward_search(
+    server, stop_event, search_queue, directory=None, *, project=None
+):
     """Accept clients, queue valid UTF-8 payloads, and acknowledge receipt."""
 
     registrations = {}
@@ -96,6 +99,21 @@ def serve_forward_search(server, stop_event, search_queue, directory=None):
                 except (ValueError, KeyError, TypeError, OSError):
                     pass
                 continue
+            if project is not None:
+                try:
+                    request = json.loads(search_text)
+                    path = os.path.realpath(request["source"])
+                    matches = path.endswith(".qmd") and os.path.commonpath(
+                        [project, path]
+                    ) == project
+                except (KeyError, TypeError, ValueError):
+                    matches = False
+                if not matches:
+                    try:
+                        connection.sendall(FORWARD_SEARCH_OTHER_SOURCE)
+                    except OSError:
+                        pass
+                    continue
             search_queue.put(search_text)
             try:
                 connection.sendall(FORWARD_SEARCH_ACK)
@@ -133,6 +151,8 @@ def send_forward_search(address, search_text, timeout=1.0):
                 f"The service at {address[0]}:{address[1]} accepted a "
                 "connection but did not acknowledge forward search."
             ) from exc
+        if bytes(acknowledgment) == FORWARD_SEARCH_OTHER_SOURCE:
+            raise ForwardSearchUnavailable(address)
         if bytes(acknowledgment) != FORWARD_SEARCH_ACK:
             raise ForwardSearchProtocolError(
                 f"The service at {address[0]}:{address[1]} did not return "
@@ -161,7 +181,9 @@ def directory_port(address, directory, **registration):
     try:
         with socket.create_connection(address, timeout=1) as client:
             client.settimeout(1)
-            client.sendall(("pydifft-directory\n" + json.dumps(request)).encode())
+            client.sendall(
+                ("pydifft-directory\n" + json.dumps(request)).encode()
+            )
             client.shutdown(socket.SHUT_WR)
             response = bytearray()
             while True:
@@ -180,7 +202,9 @@ def directory_port(address, directory, **registration):
         ):
             raise ValueError("invalid registry response")
         port = result.get("port")
-        if port is not None and (type(port) is not int or not 0 < port < 65536):
+        if port is not None and (
+            type(port) is not int or not 0 < port < 65536
+        ):
             raise ValueError("invalid port")
         return result
     except (ValueError, TypeError) as exc:

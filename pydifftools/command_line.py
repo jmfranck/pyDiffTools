@@ -1,7 +1,7 @@
 # PYTHON_ARGCOMPLETE_OK
 
 import argparse
-import html
+import json
 import sys
 import os
 import gzip
@@ -580,27 +580,18 @@ def fs(arguments):
         os.system(" ".join(cmd))
 
 
-@register_command(
-    "markdown forward search, use with cpb to jump to text in the browser"
+MFS_VIMRC = (
+    "nnoremap <silent> <C-f>s :execute '!pydifft mfs ' . line('.')"
+    " . ' ' . shellescape(expand('%:p'), 1)<CR>"
 )
-def mfs(text):
-    # Normalize markdown-specific markup so search phrases match rendered text.
-    search_text = html.unescape(text)
-    search_text = re.sub(r"\[@(?![a-z]{2,4}:)[^\]]+\]", " ", search_text,
-                         flags=re.IGNORECASE)
-    # Keep reference IDs intact while removing surrounding Markdown markup.
-    parts = re.split(r"(?i)(@[a-z]{2,4}:\w(?:[\w:./-]*[\w/-])?)", search_text)
-    for index in range(0, len(parts), 2):
-        parts[index] = re.sub(r"[*_~^]", "", parts[index])
-    search_text = "".join(parts)
-    search_text = re.sub(r"\s+", " ", search_text).strip()
-    if not search_text:
-        search_text = text.strip()
 
-    # Try existing cpb and qmdb listeners before launching a new cpb process.
-    # Several qmdb sessions can run at once on consecutive ports; each one
-    # receives the search and only a browser that finds the text comes
-    # forward.
+
+@register_command("jump to a Markdown preview by source line and file")
+def mfs(line, file):
+    if not re.fullmatch(r"[0-9]+", str(line)) or int(line) < 1:
+        raise ValueError("Expected a positive line number. Vimrc: " + MFS_VIMRC)
+    source = os.path.realpath(file)
+    search_text = json.dumps({"source": source, "line": int(line)})
     socket_addresses = [(FORWARD_SEARCH_HOST, FORWARD_SEARCH_PORT)] + [
         (QMDB_FORWARD_SEARCH_HOST, QMDB_FORWARD_SEARCH_PORT + offset)
         for offset in range(QMDB_PORT_ATTEMPTS)
@@ -611,7 +602,7 @@ def mfs(text):
         delivered = False
         addresses = socket_addresses
         try:
-            route = directory_port(socket_addresses[0], os.getcwd())
+            route = directory_port(socket_addresses[0], source)
         except ForwardSearchUnavailable:
             route = None
         except ForwardSearchProtocolError as exc:
@@ -626,12 +617,12 @@ def mfs(text):
                     )
                     return True
                 except ForwardSearchUnavailable:
-                    directory_port(socket_addresses[0], os.getcwd(), port=None)
+                    directory_port(socket_addresses[0], source, port=None)
             addresses = socket_addresses[1:]
         for address in addresses:
             if route and route["registry"] and address != socket_addresses[0]:
                 try:
-                    candidate = directory_port(address, os.getcwd())
+                    candidate = directory_port(address, source)
                 except ForwardSearchUnavailable:
                     continue
                 except ForwardSearchProtocolError as exc:
@@ -662,33 +653,12 @@ def mfs(text):
         return False
 
     if not try_existing_listener():
-        # If no listener is running yet, choose a markdown file in this
-        # directory that contains the requested search text and start cpb for
-        # it.
-        matching_files = []
-        for filename in sorted(os.listdir(".")):
-            if not filename.endswith(".md"):
-                continue
-            with open(filename, encoding="utf-8") as fp:
-                source_text = fp.read()
-                if text.strip() in source_text or search_text in source_text:
-                    matching_files.append(filename)
-        if len(matching_files) == 0:
-            raise RuntimeError(
-                "Could not connect to cpb or qmdb forward search sockets and "
-                "could not find the requested text in any .md file in the "
-                "current directory."
-            )
-        if len(matching_files) > 1:
-            print(
-                "Found search text in multiple markdown files. "
-                "Starting cpb for",
-                matching_files[0],
-            )
+        if not source.endswith(".md") or not os.path.isfile(source):
+            raise RuntimeError(f"No preview is listening for {source}.")
         pid = os.fork()
         if pid == 0:
             try:
-                cpb(matching_files[0])
+                cpb(source)
             finally:
                 os._exit(0)
         # Wait up to 20 seconds so the child can bring up the listener,
@@ -1063,6 +1033,21 @@ def main(argv=None):
             parser._pydifft_subparsers["gd"].print_help()
             return
         return gd(argv[1:])
+    if argv[:1] == ["mfs"] and not any(
+        flag in argv[1:] for flag in ("-h", "--help")
+    ):
+        args = argv[2:] if argv[1:2] == ["--"] else argv[1:]
+        if (
+            len(args) != 2
+            or not re.fullmatch(r"[0-9]+", args[0])
+            or not args[0].strip("0")
+            or not args[1]
+            or (argv[1:2] != ["--"] and args[1].startswith("-"))
+        ):
+            parser._pydifft_subparsers["mfs"].error(
+                "expected a positive decimal LINE and a FILE\n"
+                "Suggested vimrc mapping:\n" + MFS_VIMRC
+            )
     namespace = parser.parse_args(argv)
     if namespace.add_to_git is not None:
         if not namespace.add_to_git:

@@ -98,8 +98,10 @@ def run_pandoc_with_stubbed_tools(
         "pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool"
     )
 
-    def fake_run(_command):
-        html_file.write_text("<html><head></head><body>ok</body></html>")
+    def fake_run(command):
+        Path(command[command.index("-o") + 1]).write_text(
+            "<html><head></head><body>ok</body></html>"
+        )
 
     monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
     run_pandoc(str(markdown_file), str(html_file), **kwargs)
@@ -952,13 +954,8 @@ def test_cpb_hides_low_headers(tmp_path):
     assert "h4" not in html_content.split("display:")[-1]
 
 
-@pytest.mark.parametrize("source, expected", [
-    ("needle", "needle"),
-    ("It melts near 238&nbsp;K", "It melts near 238 K"),
-    ("**See** @eq:my_equation.", "See @eq:my_equation."),
-])
-def test_mfs_starts_cpb_when_socket_missing(tmp_path, source, expected):
-    (tmp_path / "notes.md").write_text(f"alpha\n{source}\nomega\n")
+def test_mfs_starts_cpb_when_socket_missing(tmp_path):
+    (tmp_path / "notes.md").write_text("alpha\nneedle\nomega\n")
     (tmp_path / "other.md").write_text("does not match\n")
 
     calls = []
@@ -977,9 +974,11 @@ def test_mfs_starts_cpb_when_socket_missing(tmp_path, source, expected):
                     "pydifftools.command_line.os.fork", return_value=123
                 ):
                     with patch("pydifftools.command_line.time.sleep"):
-                        mfs(source)
+                        mfs(2, "notes.md")
         assert len(calls) == 3
-        assert [search_text for _, search_text in calls] == [expected] * 3
+        assert [json.loads(payload) for _, payload in calls] == [
+            {"line": 2, "source": str(tmp_path / "notes.md")}
+        ] * 3
     finally:
         os.chdir(cwd)
 
@@ -1007,7 +1006,7 @@ def test_mfs_waits_up_to_20_seconds_for_socket(tmp_path):
             "pydifftools.command_line.time.sleep", fake_sleep
         ):
             try:
-                mfs("needle")
+                mfs(2, "notes.md")
                 assert False, "Expected mfs to raise RuntimeError"
             except RuntimeError as exc:
                 assert "within 20 seconds" in str(exc)
@@ -1036,7 +1035,7 @@ def test_mfs_uses_qmdb_socket_when_cpb_socket_missing(tmp_path):
     try:
         with patch("pydifftools.command_line.send_forward_search", fake_send):
             with patch("pydifftools.command_line.os.fork", fake_fork):
-                mfs("needle")
+                mfs(2, "notes.md")
         assert calls["fork"] == 0
         # Every qmdb session on the consecutive ports hears the search.
         attempts = command_line.QMDB_PORT_ATTEMPTS
@@ -1045,81 +1044,11 @@ def test_mfs_uses_qmdb_socket_when_cpb_socket_missing(tmp_path):
             command_line.QMDB_FORWARD_SEARCH_PORT + offset
             for offset in range(attempts)
         ]
-        assert {search_text for _, search_text in calls["send"]} == {
-            "needle"
-        }
-    finally:
-        os.chdir(cwd)
-
-
-def test_mfs_strips_markdown_markup_before_search(tmp_path):
-    calls = []
-
-    def fake_send(_address, search_text):
-        calls.append(search_text)
-
-    cwd = os.getcwd()
-    os.chdir(tmp_path)
-    try:
-        with patch("pydifftools.command_line.send_forward_search", fake_send):
-            mfs("**Result** near @fig:overview [@smith2024]")
-        assert calls == ["Result near @fig:overview"]
-    finally:
-        os.chdir(cwd)
-
-
-def test_mfs_preserves_crossref_and_following_text(tmp_path):
-    calls = []
-
-    def fake_send(_address, search_text):
-        calls.append(search_text)
-
-    cwd = os.getcwd()
-    os.chdir(tmp_path)
-    try:
-        with patch("pydifftools.command_line.send_forward_search", fake_send):
-            mfs("Result before @FIG:overview and after")
-        assert calls == ["Result before @FIG:overview and after"]
-    finally:
-        os.chdir(cwd)
-
-
-def test_mfs_strips_underscore_strikethrough_and_super_subscript_markup(
-    tmp_path,
-):
-    calls = []
-
-    def fake_send(_address, search_text):
-        calls.append(search_text)
-
-    cwd = os.getcwd()
-    os.chdir(tmp_path)
-    try:
-        with patch("pydifftools.command_line.send_forward_search", fake_send):
-            mfs(
-                "_Result_ near __overview__ with ~~strike~~ and x^2^ and H~2~O"
-            )
-        assert calls == ["Result near overview with strike and x2 and H2O"]
-    finally:
-        os.chdir(cwd)
-
-
-def test_mfs_handles_long_run_of_underscores_without_hanging(tmp_path):
-    calls = []
-
-    def fake_send(_address, search_text):
-        calls.append(search_text)
-
-    cwd = os.getcwd()
-    os.chdir(tmp_path)
-    try:
-        adversarial_text = "a" + "_" * 20000 + "b"
-        start = time.monotonic()
-        with patch("pydifftools.command_line.send_forward_search", fake_send):
-            mfs(adversarial_text)
-        elapsed = time.monotonic() - start
-        assert elapsed < 5
-        assert calls == ["ab"]
+        assert all(
+            json.loads(payload) == {
+                "line": 2, "source": str(tmp_path / "notes.md")
+            } for _, payload in calls["send"]
+        )
     finally:
         os.chdir(cwd)
 
@@ -1156,7 +1085,8 @@ def test_run_pandoc_adds_css_lua_and_js_files_from_markdown_directory(
 
     def fake_run(command):
         captured_command["value"] = command
-        with open(html_file, "w", encoding="utf-8") as fp:
+        with open(command[command.index("-o") + 1], "w",
+                  encoding="utf-8") as fp:
             fp.write(
                 '<html><head><script id="MathJax-script" '
                 'src="MathJax-3.1.2/es5/tex-mml-chtml.js"></script></head>'
@@ -1209,7 +1139,8 @@ def test_run_pandoc_allows_missing_bibliography_and_csl(
 
     def fake_run(command):
         captured_command["value"] = command
-        with open(html_file, "w", encoding="utf-8") as fp:
+        with open(command[command.index("-o") + 1], "w",
+                  encoding="utf-8") as fp:
             fp.write("<html><head></head><body>ok</body></html>")
 
     monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
@@ -1234,7 +1165,9 @@ def test_run_pandoc_recovers_only_citeproc_keys_and_rebuilds_once(
 
     def fake_run(command):
         commands.append(command[:])
-        html.write_text("<html><head></head><body>ok</body></html>")
+        Path(command[command.index("-o") + 1]).write_text(
+            "<html><head></head><body>ok</body></html>"
+        )
         diagnostic = Path(command[command.index("--log") + 1])
         diagnostic.write_text(
             json.dumps(
@@ -1327,7 +1260,8 @@ def test_run_pandoc_orders_scholarly_metadata_before_author_blocks(
 
     def fake_run(command):
         captured_command["value"] = command
-        with open(html_file, "w", encoding="utf-8") as fp:
+        with open(command[command.index("-o") + 1], "w",
+                  encoding="utf-8") as fp:
             fp.write("<html><head></head><body>ok</body></html>")
 
     monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
@@ -1419,8 +1353,9 @@ def test_run_pandoc_copies_comment_assets_when_comment_tags_present(
         "pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool"
     )
 
-    def fake_run(_command):
-        with open(html_file, "w", encoding="utf-8") as fp:
+    def fake_run(command):
+        with open(command[command.index("-o") + 1], "w",
+                  encoding="utf-8") as fp:
             fp.write("<html><head></head><body>ok</body></html>")
 
     monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
@@ -1446,8 +1381,9 @@ def test_run_pandoc_copies_comment_assets_for_comment_div_blocks(
         "pydifftools.continuous.shutil.which", lambda _name: "/usr/bin/tool"
     )
 
-    def fake_run(_command):
-        with open(html_file, "w", encoding="utf-8") as fp:
+    def fake_run(command):
+        with open(command[command.index("-o") + 1], "w",
+                  encoding="utf-8") as fp:
             fp.write("<html><head></head><body>ok</body></html>")
 
     monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
@@ -1543,8 +1479,9 @@ def test_run_pandoc_does_not_overwrite_existing_comment_assets(
         continuous, "confirm_restore_comment_filter", keep_custom_filter
     )
 
-    def fake_run(_command):
-        with open(html_file, "w", encoding="utf-8") as fp:
+    def fake_run(command):
+        with open(command[command.index("-o") + 1], "w",
+                  encoding="utf-8") as fp:
             fp.write("<html><head></head><body>ok</body></html>")
 
     monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
@@ -2003,8 +1940,9 @@ def test_run_pandoc_keeps_no_comments_filter_without_comment_assets(
         continuous, "confirm_restore_comment_filter", lambda _mode: False
     )
 
-    def fake_run(_command):
-        with open(html_file, "w", encoding="utf-8") as fp:
+    def fake_run(command):
+        with open(command[command.index("-o") + 1], "w",
+                  encoding="utf-8") as fp:
             fp.write("<html><head></head><body>ok</body></html>")
 
     monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
@@ -2104,10 +2042,10 @@ def test_mfs_errors_when_no_matching_markdown(tmp_path):
     try:
         with patch("pydifftools.command_line.send_forward_search", fake_send):
             try:
-                mfs("needle")
+                mfs(2, "missing.md")
                 assert False, "Expected mfs to raise RuntimeError"
             except RuntimeError as exc:
-                assert "could not find the requested text" in str(exc)
+                assert "No preview is listening" in str(exc)
     finally:
         os.chdir(cwd)
 
@@ -2163,9 +2101,6 @@ def test_run_pandoc_renders_every_header_author_and_misspelled_tags(
     )
     monkeypatch.setattr(
         continuous, "show_markdown_fix_dialog", lambda _report: False
-    )
-    monkeypatch.setattr(
-        continuous, "show_markdown_reload_dialog", lambda: None
     )
 
     cwd = os.getcwd()

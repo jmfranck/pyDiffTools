@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import shutil
@@ -140,102 +141,21 @@ def close_browser_window(browser):
 # also used by: notebook/fast_build.py (qmdb's forward search), besides
 # cpb in continuous.py; tests/test_continuous_shutdown.py monkeypatches it
 def forward_search_in_browser(browser, search_text):
-    # Reuse the same browser-side find logic across cpb and qmdb.
     if browser is None or not search_text:
         return False
+    try:
+        request = json.loads(search_text)
+        source, line = request["source"], request["line"]
+    except (ValueError, TypeError, KeyError):
+        return False
+    if not isinstance(source, str) or type(line) is not int or line < 1:
+        return False
     found = browser.execute_script(
-        r"""
-        const searchText = arguments[0];
-        let didFind = window.find && window.find(searchText);
-        // Match across inline elements, entities, and rendered references.
-        if (!didFind) {
-            const escape = text => text.replace(
-                /[.*+?^${}()|[\]\\]/g, '\\$&'
-            ).replace(/\s+/g, '\\s+');
-            const reference =
-                /\[?@([a-z]{2,4}):(\w(?:[\w:./-]*[\w/-])?)\]?/gi;
-            let pattern = '', cursor = 0, match;
-            let valid = true;
-            while ((match = reference.exec(searchText))) {
-                pattern += escape(searchText.slice(cursor, match.index));
-                const id = match[1].toLowerCase() + ':' + match[2];
-                const link = Array.from(
-                    document.querySelectorAll('a[href]')
-                ).find(a => a.getAttribute('href') === '#' + id);
-                const target = document.getElementById(id);
-                if (!link && !target) {
-                    valid = false;
-                    break;
-                }
-                // Unlinked crossrefs still render a numeric label. For a
-                // reference alone, select its target rather than guessing
-                // which occurrence of that number the user intended.
-                if (!link && searchText.trim() === match[0]) {
-                    const range = document.createRange();
-                    range.selectNodeContents(target);
-                    const selection = window.getSelection();
-                    selection.removeAllRanges();
-                    selection.addRange(range);
-                    didFind = true;
-                    valid = false;
-                    break;
-                }
-                pattern += '(?:(?:eq(?:uation)?|fig(?:ure)?|tab(?:le)?|' +
-                    'sec(?:tion)?|ch(?:apter)?|lst|listing)s?\\.?\\s*)?' +
-                    (link ? escape(link.textContent.trim()) :
-                        '\\(?\\d+(?:[.–-]\\d+)*[a-z]?\\)?');
-                cursor = reference.lastIndex;
-            }
-            pattern += escape(searchText.slice(cursor));
-            if (valid) {
-                const walker = document.createTreeWalker(
-                    document.body, NodeFilter.SHOW_TEXT
-                );
-                const nodes = [], starts = [];
-                let text = '', node;
-                while ((node = walker.nextNode())) {
-                    if (node.parentElement.closest(
-                        'script, style, noscript, [hidden]'
-                    ) || !node.parentElement.getClientRects().length) {
-                        continue;
-                    }
-                    starts.push(text.length);
-                    nodes.push(node);
-                    text += node.textContent;
-                }
-                const result = new RegExp(pattern, 'i').exec(text);
-                if (result && result[0].length) {
-                    const start = result.index;
-                    const end = start + result[0].length;
-                    const first = starts.findIndex((offset, i) =>
-                        offset + nodes[i].length > start
-                    );
-                    const last = starts.findIndex((offset, i) =>
-                        offset + nodes[i].length >= end
-                    );
-                    const range = document.createRange();
-                    range.setStart(nodes[first], start - starts[first]);
-                    range.setEnd(nodes[last], end - starts[last]);
-                    const selection = window.getSelection();
-                    selection.removeAllRanges();
-                    selection.addRange(range);
-                    didFind = true;
-                }
-            }
-        }
-        if (didFind && window.getSelection) {
-            const selection = window.getSelection();
-            if (selection.rangeCount > 0) {
-                const rect = selection.getRangeAt(0).getBoundingClientRect();
-                window.scrollBy(0, rect.top - window.innerHeight / 3);
-            }
-        }
-        return Boolean(didFind);
-        """,
-        search_text,
+        "return Boolean(window.pydifftForwardLine?.(...arguments));",
+        source, line,
     )
     if not found:
-        print("forward search did not find text:", search_text)
+        print(f"No mapped preview location for {source}:{line}")
     # Bring the browser window to the foreground in Linux window managers,
     # but only when it found the text, since every qmdb session hears it.
     if found and os.name == "posix" and shutil.which("wmctrl"):

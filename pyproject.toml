@@ -43,6 +43,7 @@ packages = [
 pydifftools = [
     "completions/git-mergein",
     "diff-doc.js",
+    "line_search.js",
     "xml2xlsx.vbs",
     "comments.css",
     "comments_author_colors.css",

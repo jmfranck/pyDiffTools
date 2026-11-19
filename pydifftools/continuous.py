@@ -46,6 +46,7 @@ from .forward_search import (
     serve_forward_search,
 )
 from .source_jump import SourceJumpServer
+from .line_search import extract_source_lines, mark_source_lines
 
 FORWARD_SEARCH_PORT = CPB_FORWARD_SEARCH_PORT
 POLL_INTERVAL_SECONDS = 0.1
@@ -478,38 +479,6 @@ def show_markdown_fix_dialog(report):
     return user_says_fixed
 
 
-# also used by: tests/test_wrap_check.py, which drives this window directly
-# (cpb calls it from run_pandoc)
-def show_markdown_reload_dialog():
-    """Ask the user to reload a source file changed by automatic fixes."""
-    from PySide6.QtWidgets import (
-        QApplication,
-        QDialog,
-        QLabel,
-        QPushButton,
-        QVBoxLayout,
-    )
-
-    prepare_for_dialog()
-    # a QApplication must exist before any widget is constructed
-    application = QApplication.instance() or QApplication([])
-    dialog = QDialog()
-    dialog._pydifftools_application = application
-    dialog.setWindowTitle("Reload the Markdown source")
-    dialog.resize(440, 150)
-    layout = QVBoxLayout(dialog)
-    message = QLabel(
-        "I fixed the Markdown source. Reload it in your editor to see the "
-        "changes."
-    )
-    message.setWordWrap(True)
-    layout.addWidget(message)
-    button = QPushButton("I've reloaded")
-    button.clicked.connect(dialog.accept)
-    layout.addWidget(button)
-    dialog.exec()
-
-
 def run_pandoc(
     filename,
     html_file,
@@ -549,7 +518,6 @@ def run_pandoc(
         # author with no XYcolor yet, so migrate comments again now rather
         # than on the next save
         prepare_comment_source(filename)
-        show_markdown_reload_dialog()
     # }}}
 
     if comments_to_margin:
@@ -917,6 +885,7 @@ def run_pandoc(
         "--citeproc",
         "--mathjax",
         "--number-sections",
+        "--wrap=none",
         "--toc",
         "-s",
         "-o",
@@ -951,6 +920,12 @@ def run_pandoc(
         command.extend(["--lua-filter", lua_path])
     # {{{ render, recover missing citations, and rebuild at most once
     with tempfile.TemporaryDirectory(prefix="pydifft-citations-") as temp_dir:
+        marked_source = Path(temp_dir) / Path(filename).name
+        marked, nonce = mark_source_lines(markdown_text, filename)
+        marked_source.write_text(marked, "utf-8")
+        command[command.index(filename)] = str(marked_source)
+        marked_output = Path(temp_dir) / Path(html_file).name
+        command[command.index("-o") + 1] = str(marked_output)
         diagnostic_path = Path(temp_dir) / "pandoc.json"
         command.extend(["--log", str(diagnostic_path)])
         for attempt in range(2):
@@ -998,28 +973,22 @@ def run_pandoc(
                 file=sys.stderr,
             )
             break
+        if not marked_output.exists():
+            raise RuntimeError(
+                "Pandoc completed but did not create the expected HTML file: "
+                f"{html_file}"
+            )
+        text = marked_output.read_text(encoding="utf-8")
     # }}}
-    if not os.path.exists(html_file):
-        raise RuntimeError(
-            "Pandoc completed but did not create the expected HTML file: "
-            f"{html_file}"
-        )
     if has_local_jax:
         # {{{ for slow internet connection, remove remote files
-        with open(html_file, encoding="utf-8") as fp:
-            text = fp.read()
         patterns = [
             r"<script.{0,20}?cdn\.jsdeli.{0,20}?mathjax.{0,60}?script>",
             r"<script.{0,20}?https...polyfill.{0,60}?script>",
         ]
         for j in patterns:
             text = re.sub(j, "", text, flags=re.DOTALL)
-        with open(html_file, "w", encoding="utf-8") as fp:
-            fp.write(text)
         # }}}
-    with open(html_file, encoding="utf-8") as fp:
-        text = fp.read()
-    html_was_updated = False
     if 'id="pydifft-front-matter"' in text:
         tree = html.document_fromstring(text)
         blocks = tree.xpath('//*[@id="pydifft-front-matter"]')
@@ -1027,7 +996,6 @@ def run_pandoc(
         if blocks and headers:
             headers[0].append(blocks[0])
             text = html.tostring(tree.getroottree(), encoding="unicode")
-            html_was_updated = True
     if localfiles["js"]:
         script_block = ""
         for js_file in localfiles["js"]:
@@ -1041,7 +1009,6 @@ def run_pandoc(
                 text = text.replace("</head>", script_block + "</head>", 1)
             else:
                 text = script_block + text
-            html_was_updated = True
     if 'id="pydifftools-subtitle-style"' not in text and "<head>" in text:
         text = text.replace(
             "<head>",
@@ -1052,7 +1019,6 @@ def run_pandoc(
             "}\n</style>",
             1,
         )
-        html_was_updated = True
     style_block = (
         '\n<style id="pydifftools-hide-low-headers">\n'
         "h5, h6 { display: none; }\n"
@@ -1064,10 +1030,7 @@ def run_pandoc(
             text = text.replace("</head>", style_block + "</head>", 1)
         else:
             text = style_block + text
-        html_was_updated = True
-    if html_was_updated:
-        with open(html_file, "w", encoding="utf-8") as fp:
-            fp.write(text)
+    extract_source_lines(html_file, nonce, filename, marked_html=text)
     return
 
 
@@ -1145,7 +1108,7 @@ position
             flags=re.DOTALL,
         )
         source_jump_js = (
-            Path(__file__).parent / "flowchart" / "source_jump.js"
+            Path(__file__).parent / "line_search.js"
         ).read_text(encoding="utf-8")
         source_jump_scripts = (
             '<script id="pydifft-source-jump-config">'
@@ -1235,7 +1198,7 @@ def cpb(
     )
     socket_thread = threading.Thread(
         target=serve_forward_search,
-        args=(forward_search_server, stop_event, search_queue, source_dir),
+        args=(forward_search_server, stop_event, search_queue, source_path),
         daemon=True,
     )
     chrome = None
@@ -1259,7 +1222,9 @@ def cpb(
         session_port = forward_search_server.getsockname()[1]
         if session_port != FORWARD_SEARCH_PORT:
             try:
-                directory_port(registry_address, source_dir, port=session_port)
+                directory_port(
+                    registry_address, source_path, port=session_port
+                )
             except (ForwardSearchUnavailable, ForwardSearchProtocolError):
                 print("cpb: standard port has no directory registry; "
                       "mfs discovery is unavailable.")
@@ -1289,7 +1254,7 @@ def cpb(
             diff=diff,
             desired_width=desired_width,
         )
-        source_jump_server = SourceJumpServer(source_path)
+        source_jump_server = SourceJumpServer(source_path, line_only=True)
         source_jump_server.start()
         append_autorefresh(html_file, source_jump_server.url)
 
@@ -1483,7 +1448,7 @@ def cpb(
     finally:
         if socket_thread_started and session_port != FORWARD_SEARCH_PORT:
             try:
-                directory_port(registry_address, source_dir, port=None)
+                directory_port(registry_address, source_path, port=None)
             except (ForwardSearchUnavailable, ForwardSearchProtocolError):
                 pass
         stop_event.set()

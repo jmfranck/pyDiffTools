@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import time
+import tempfile
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -21,7 +22,10 @@ import shutil
 import queue
 import yaml
 from pydifftools.command_registry import register_command
-from pydifftools.source_jump import jump_to_source, MAX_SOURCE_JUMP_BYTES
+from pydifftools.source_jump import open_source_line, MAX_SOURCE_JUMP_BYTES
+from pydifftools.line_search import (
+    extract_source_lines, finish_source_map, mark_source_lines,
+)
 from pydifftools.browser_lifecycle import (
     browser_window_is_alive,
     close_browser_window,
@@ -2081,6 +2085,7 @@ def render_file(
         "--from",
         "markdown+raw_html",
         "--standalone",
+        "--wrap=none",
         "--embed-resources",
         "--resource-path",
         pandoc_resource_path_arg(staged_src),
@@ -2111,10 +2116,36 @@ def render_file(
         if not csl_path.exists():
             raise FileNotFoundError(f"CSL file {csl} not found")
         args += ["--csl", os.path.relpath(csl_path, build_dir)]
+    original = PROJECT_ROOT / staged_src.relative_to(build_dir)
     try:
-        subprocess.run(args, check=True, cwd=build_dir, capture_output=True)
+        with tempfile.TemporaryDirectory(prefix="pydifft-qmdb-") as temp_dir:
+            if original.is_file() and staged_src.is_file():
+                marked, nonce = mark_source_lines(
+                    staged_src.read_text("utf-8"), original
+                )
+                marked_source = Path(temp_dir) / staged_src.name
+                marked_source.write_text(marked, "utf-8")
+                args[1] = str(marked_source)
+            else:
+                nonce = None
+            subprocess.run(
+                args, check=True, cwd=build_dir, capture_output=True
+            )
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"{e.stderr}\nwhen trying to run:{' '.join(args)}")
+
+    if nonce is not None and output_path.is_file():
+        original_text = original.read_text("utf-8")
+        code_positions = [
+            original_text.count("\n", 0, match.start())
+            + match[0][:match[0].index("```")].count("\n") + 1
+            for match in code_pattern.finditer(original_text)
+        ]
+        extract_source_lines(
+            output_path, nonce, original,
+            project=PROJECT_ROOT.resolve(), code_positions=code_positions,
+            normalize_html=_normalize_observation_html,
+        )
 
 
 try:
@@ -2385,10 +2416,11 @@ def postprocess_html(html_path: Path, include_root: Path, resource_root: Path):
     head.append(config)
     script = lxml_html.Element("script", id="pydifft-source-jump")
     script.text = (
-        Path(__file__).parents[1] / "flowchart" / "source_jump.js"
+        Path(__file__).parents[1] / "line_search.js"
     ).read_text(encoding="utf-8")
     head.append(script)
     # }}}
+    finish_source_map(root, PROJECT_ROOT)
     html_path.write_text(lxml_html.tostring(root, encoding="unicode"))
 
 
@@ -2591,14 +2623,12 @@ def watch_and_serve(
                     source.relative_to(PROJECT_ROOT.resolve())
                     if source.suffix != ".qmd":
                         raise ValueError("Expected a QMD source")
-                    phrase = request["phrase"]
-                    if not isinstance(phrase, str):
-                        raise ValueError("Expected source text")
+                    line = request["line"]
                 except (ValueError, KeyError, TypeError):
                     self.send_error(400)
                     return
                 try:
-                    jump_to_source(source, phrase)
+                    open_source_line(source, line)
                 except (
                     OSError, subprocess.SubprocessError, ValueError
                 ) as exc:
@@ -2696,6 +2726,7 @@ def watch_and_serve(
             forward_search_stop,
             forward_search_queue,
         ),
+        kwargs={"project": str(PROJECT_ROOT.resolve())},
         daemon=True,
     )
     initial_executor = None

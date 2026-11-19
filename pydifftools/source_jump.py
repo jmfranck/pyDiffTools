@@ -88,12 +88,20 @@ def jump_to_source(source_path, phrase):
         )
     # }}}
 
+    print(f"pydifft source regex: {pattern}", flush=True)
+    open_source_line(source_path, line)
+
+
+def open_source_line(source_path, line):
+    """Open a validated source position in the editor."""
+    if type(line) is not int or line < 1:
+        raise ValueError("Expected a positive line number")
+
     # {{{ launch the user's gvim alias without taking cpb's terminal
     command = [
         "bash", "-ic", 'gvim "$@"', "pydifft",
         "--servername", "GVIM", "--remote", f"+{line}", str(source_path),
     ]
-    print(f"pydifft source regex: {pattern}", flush=True)
     print(f"pydifft source command: {shlex.join(command)}", flush=True)
     # Interactive Bash can otherwise change foreground terminal ownership.
     # Give it a separate session and no terminal input; expose its output in
@@ -121,7 +129,8 @@ def jump_to_source(source_path, phrase):
 class SourceJumpServer:
     """An ephemeral loopback HTTP endpoint scoped to one preview session."""
 
-    def __init__(self, source_path):
+    def __init__(self, source_path, *, line_only=False):
+        self.line_only = line_only
         self.source_path = str(source_path)
         self.token = secrets.token_urlsafe(24)
         self.httpd = None
@@ -131,6 +140,7 @@ class SourceJumpServer:
     def start(self):
         source_path = self.source_path
         token = self.token
+        line_only = self.line_only
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
@@ -161,7 +171,10 @@ class SourceJumpServer:
                     self.send_error(400)
                     return
                 try:
-                    jump_to_source(source_path, phrase)
+                    if line_only:
+                        open_source_line(source_path, json.loads(phrase))
+                    else:
+                        jump_to_source(source_path, phrase)
                 except (
                     OSError,
                     subprocess.SubprocessError,

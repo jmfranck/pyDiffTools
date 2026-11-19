@@ -22,7 +22,9 @@ def comment_project(tmp_path, monkeypatch):
     def render(command, **_kwargs):
         assert command[0] == "pandoc", "Unexpected unstubbed dialog"
         commands.append(command)
-        html.write_text("<html><head></head><body>notes</body></html>")
+        Path(command[command.index("-o") + 1]).write_text(
+            "<html><head></head><body>notes</body></html>"
+        )
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(continuous.subprocess, "run", render)

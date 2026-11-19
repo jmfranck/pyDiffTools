@@ -390,9 +390,14 @@ Concurrent cpb previews
 -----------------------
 
 ``cpb`` starts at loopback port 51235 and reports occupied ports to stdout
-before trying the next port. The first process keeps a directory-to-port
-registry; subsequent previews register their source file's directory there.
-Run ``pydifft mfs`` from that directory to search the matching preview.
-Directory paths are resolved so symlink aliases identify the same project.
+before trying the next port. The first process keeps a source-file-to-port
+registry; subsequent previews register their source files there.
+Run ``pydifft mfs LINE FILE`` to jump to a 1-based line in a CPB or QMDB
+preview. Source paths are resolved so symlink aliases identify the same file.
+To jump from Vim, add this to your vimrc::
+
+    nnoremap <silent> <C-f>s :execute '!pydifft mfs ' . line('.') . ' ' . shellescape(expand('%:p'), 1)<CR>
+
+In the preview, right-click mapped text and choose **Jump to source**.
 Keep the first process open while using the other previews: its registry
 lives in memory and ends when that process exits.

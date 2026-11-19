@@ -1,5 +1,6 @@
 import base64
 import io
+import json
 import os
 import re
 import shutil
@@ -177,6 +178,14 @@ def test_state_machine_builds_includes(fb, monkeypatch):
     fb.RenderNotebook.from_project().build()
     assert Path("_build/project1/subproject1/tasks.html").exists()
     assert Path("_build/project1/subproject1/tryforerror.html").exists()
+    display = Path("_display/projects.html")
+    root = fb.lxml_html.document_fromstring(display.read_text())
+    entries = json.loads(root.get_element_by_id("pydifft-line-map").text)
+    assert any(
+        source.endswith("/project1/subproject1/tasks.qmd")
+        for _, source, _ in entries
+    )
+    assert not root.xpath("//*[@data-pydifft-line-map]")
 
 
 def test_render_file_webtex(fb, tmp_path, monkeypatch):
@@ -208,12 +217,15 @@ def test_render_file_paths_are_rooted_at_build_dir(fb, monkeypatch):
     nested = fb.BUILD_DIR / "project1" / "subproject1"
     nested.mkdir(parents=True, exist_ok=True)
     (fb.BUILD_DIR / "obs.lua").write_text("")
-    (nested / "tasks.qmd").write_text("# Nested\n")
+    source = fb.PROJECT_ROOT / "project1/subproject1/tasks.qmd"
+    source.write_text("# Nested\n\nMapped prose.\n")
+    (nested / "tasks.qmd").write_text(source.read_text())
     called = {}
 
     def fake_run(cmd, check, cwd=None, capture_output=False):
         called["args"] = cmd
         called["cwd"] = cwd
+        called["marked"] = Path(cmd[1]).read_text()
 
     monkeypatch.setattr(fb.subprocess, "run", fake_run)
     fb.render_file(
@@ -227,7 +239,8 @@ def test_render_file_paths_are_rooted_at_build_dir(fb, monkeypatch):
 
     args = called["args"]
     assert called["cwd"] == fb.BUILD_DIR.resolve()
-    assert args[1] == "project1/subproject1/tasks.qmd"
+    assert Path(args[1]).name == "tasks.qmd"
+    assert "LINENO" in called["marked"]
     assert args[args.index("--lua-filter") + 1] == "obs.lua"
     resource_paths = args[args.index("--resource-path") + 1].split(os.pathsep)
     assert "project1/subproject1" in resource_paths
@@ -1279,6 +1292,11 @@ def test_notebook_cells_replace_placeholders_incrementally(fb, monkeypatch):
     assert "FIRST_OUTPUT" in final
     assert "SECOND_OUTPUT" in final
     assert "Running notebook" not in final
+    root = fb.lxml_html.document_fromstring(final)
+    entries = json.loads(root.get_element_by_id("pydifft-line-map").text)
+    for (_, source, positions), line in zip(entries, (3, 7), strict=True):
+        assert source == str(Path("incremental.qmd").resolve())
+        assert positions == [[0, line]]
 
 
 def test_pending_placeholder_forces_stage_rebuild_when_stage_is_empty(
@@ -1406,7 +1424,7 @@ def test_render_notebook_status_tags_and_tree_output(fb, monkeypatch):
     assert "missing html" in tree_text
 
 
-def test_observation_images_keep_blue_text_and_source_menu(
+def test_observation_images_keep_blue_text(
     fb, chrome_driver_path,
 ):
     from selenium import webdriver
@@ -1457,28 +1475,15 @@ def test_observation_images_keep_blue_text_and_source_menu(
             "  document.body, NodeFilter.SHOW_TEXT);"
             "while (walker.nextNode()) {"
             "  const node = walker.currentNode;"
-            "  if (/Before image|After image|Another paragraph/.test("
+            "  if (/Before\\s+image|After\\s+image|Another\\s+paragraph/.test("
             "      node.textContent)) {"
             "    texts.push(getComputedStyle(node.parentElement).color);"
             "  }"
             "}"
-            "window.fetch = (url, options) => {"
-            "  window.sentJump = [url, JSON.parse(options.body)];"
-            "  return Promise.resolve();"
-            "};"
-            "obs.dispatchEvent(new MouseEvent('contextmenu', {"
-            "  bubbles:true, cancelable:true, clientX:20, clientY:20"
-            "}));"
-            "const menu = document.getElementById('pydifft-source-jump-menu');"
-            "const visible = menu.style.display;"
-            "menu.querySelector('button').click();"
-            "return {colors:texts, visible:visible, jump:window.sentJump,"
+            "return {colors:texts,"
             "  prefix:obs.querySelector('.pydifft-obs-prefix').textContent};"
         )
         assert result["colors"] == ["rgb(0, 0, 255)"] * 3
         assert result["prefix"] == "today JM:"
-        assert result["visible"] == "block"
-        assert result["jump"][0] == fb.SOURCE_JUMP_ENDPOINT
-        assert result["jump"][1]["source"] == "obs.qmd"
     finally:
         browser.quit()

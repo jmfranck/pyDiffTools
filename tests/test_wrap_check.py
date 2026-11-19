@@ -429,7 +429,7 @@ def test_comment_filter_confirmation_is_unit_testable(
     assert confirm_restore_comment_filter("custom") is expected
 
 
-def test_qt_fix_and_reload_windows_show_source_changes(tmp_path):
+def test_qt_fix_window_shows_source_changes(tmp_path):
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import (
         QApplication,
@@ -439,10 +439,7 @@ def test_qt_fix_and_reload_windows_show_source_changes(tmp_path):
         QTextEdit,
     )
 
-    from pydifftools.continuous import (
-        show_markdown_fix_dialog,
-        show_markdown_reload_dialog,
-    )
+    from pydifftools.continuous import show_markdown_fix_dialog
     from pydifftools.wrap_sentences import autofix_markdown_file
 
     app = QApplication.instance() or QApplication([])
@@ -478,21 +475,6 @@ def test_qt_fix_and_reload_windows_show_source_changes(tmp_path):
     assert re.search(r"^ +1 This deliberately", seen["preview"], re.M)
     assert seen["preview"].count("\n") == 0
     assert "line 1" not in seen["heading"].lower()
-
-    def inspect_reload_window():
-        dialog = next(
-            widget
-            for widget in app.topLevelWidgets()
-            if isinstance(widget, QDialog)
-            and widget.isVisible()
-            and widget.windowTitle() == "Reload the Markdown source"
-        )
-        seen["reload_button"] = dialog.findChild(QPushButton).text()
-        dialog.findChild(QPushButton).click()
-
-    QTimer.singleShot(0, inspect_reload_window)
-    show_markdown_reload_dialog()
-    assert seen["reload_button"] == "I've reloaded"
 
 
 def test_qt_fix_window_groups_fixes_of_one_kind_onto_full_pages(tmp_path):
@@ -1615,11 +1597,9 @@ def test_qt_fix_windows_create_their_own_application():
     script = (
         "from PySide6.QtWidgets import QDialog\n"
         "QDialog.exec = lambda self: 0\n"
-        "from pydifftools.continuous import (\n"
-        "    show_markdown_fix_dialog, show_markdown_reload_dialog)\n"
+        "from pydifftools.continuous import show_markdown_fix_dialog\n"
         "show_markdown_fix_dialog({'fixes': [{'line': 1, 'reason': 'r',\n"
         "    'before': 'a ', 'after': 'a'}], 'warnings': []})\n"
-        "show_markdown_reload_dialog()\n"
         "print('shown')\n"
     )
 

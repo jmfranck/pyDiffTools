@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from pydifftools.continuous import run_pandoc
@@ -32,7 +34,9 @@ def test_declared_filters_run_once_in_order_before_crossref(
 
     def fake_run(command):
         commands.append(command)
-        html.write_text("<html><head></head><body>ok</body></html>")
+        Path(command[command.index("-o") + 1]).write_text(
+            "<html><head></head><body>ok</body></html>"
+        )
 
     monkeypatch.setattr("pydifftools.continuous.subprocess.run", fake_run)
     run_pandoc(str(markdown), str(html))

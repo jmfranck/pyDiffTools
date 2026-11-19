@@ -19,7 +19,7 @@ def available_address():
     return address
 
 
-def start_listener(address=None):
+def start_listener(address=None, *, project=None):
     if address is None:
         address = (forward_search.FORWARD_SEARCH_HOST, 0)
     server = forward_search.bind_forward_search_server(address, "test")
@@ -28,6 +28,7 @@ def start_listener(address=None):
     thread = threading.Thread(
         target=forward_search.serve_forward_search,
         args=(server, stop_event, search_queue),
+        kwargs={"project": project},
         daemon=True,
     )
     thread.start()
@@ -48,6 +49,27 @@ def test_forward_search_round_trip_queues_exact_payload():
         forward_search.send_forward_search(address, "Result near")
         assert search_queue.get(timeout=1) == "Result near"
         assert thread.is_alive()
+    finally:
+        stop_listener(server, stop_event, thread)
+
+
+def test_qmdb_listener_only_accepts_its_project_sources(tmp_path):
+    server, stop_event, search_queue, thread = start_listener(
+        project=str(tmp_path)
+    )
+    try:
+        address = server.getsockname()
+        for source in (tmp_path / "notes.md", tmp_path.parent / "notes.qmd"):
+            with pytest.raises(forward_search.ForwardSearchUnavailable):
+                forward_search.send_forward_search(
+                    address, json.dumps({"source": str(source), "line": 2})
+                )
+        assert search_queue.empty()
+        request = json.dumps({
+            "source": str(tmp_path / "notes.qmd"), "line": 2
+        })
+        forward_search.send_forward_search(address, request)
+        assert search_queue.get(timeout=1) == request
     finally:
         stop_listener(server, stop_event, thread)
 
@@ -120,8 +142,8 @@ def test_mfs_uses_existing_acknowledged_listener_without_fork(
     )
     monkeypatch.chdir(tmp_path)
     try:
-        command_line.mfs("**Result** near @FIG:overview [@smith2024]")
-        assert search_queue.get(timeout=1) == "Result near @FIG:overview"
+        command_line.mfs(2, "notes.md")
+        assert json.loads(search_queue.get(timeout=1))["line"] == 2
     finally:
         stop_listener(server, stop_event, thread)
 
@@ -155,7 +177,7 @@ def test_mfs_refuses_to_fork_for_unhealthy_existing_service(
     monkeypatch.chdir(tmp_path)
     try:
         with pytest.raises(RuntimeError, match="Refusing to open another"):
-            command_line.mfs("needle")
+            command_line.mfs(2, "notes.md")
         assert fork_calls == []
     finally:
         server.close()
@@ -190,9 +212,9 @@ def test_mfs_autostarts_once_only_when_both_ports_refuse(
     monkeypatch.setattr(command_line.os, "fork", fake_fork)
     monkeypatch.chdir(tmp_path)
     try:
-        command_line.mfs("needle")
+        command_line.mfs(2, "notes.md")
         assert fork_calls == [True]
-        assert listener["search_queue"].get(timeout=1) == "needle"
+        assert json.loads(listener["search_queue"].get(timeout=1))["line"] == 2
     finally:
         if listener:
             stop_listener(
@@ -362,9 +384,9 @@ def test_mfs_delivers_to_every_qmdb_session(monkeypatch, tmp_path):
     )
     monkeypatch.chdir(tmp_path)
     try:
-        command_line.mfs("needle")
-        assert first[2].get(timeout=1) == "needle"
-        assert second[2].get(timeout=1) == "needle"
+        command_line.mfs(2, "notes.md")
+        assert json.loads(first[2].get(timeout=1))["line"] == 2
+        assert json.loads(second[2].get(timeout=1))["line"] == 2
     finally:
         for server, stop_event, _queue, thread in (first, second):
             stop_listener(server, stop_event, thread)
@@ -432,14 +454,14 @@ def test_second_qmdb_takes_next_ports_and_accepts_rebuild(
                 ("doc.html", 400),
             ]:
                 body = json.dumps({
-                    "source": source, "phrase": "Source text."
+                    "source": source, "line": 2
                 }).encode()
                 handler.headers["Content-Length"] = str(len(body))
                 handler.rfile = io.BytesIO(body)
                 handler.send_error = responses.append
                 handler.do_POST()
                 assert responses[-1] == status
-            assert jumps == [(tmp_path / "doc.qmd", "Source text.")]
+            assert jumps == [(tmp_path / "doc.qmd", 2)]
             return False
 
     class Observer:
@@ -462,8 +484,8 @@ def test_second_qmdb_takes_next_ports_and_accepts_rebuild(
     )
     monkeypatch.setattr(fast_build, "load_rendered_files", lambda: [])
     monkeypatch.setattr(
-        fast_build, "jump_to_source",
-        lambda source, phrase: jumps.append((source, phrase)),
+        fast_build, "open_source_line",
+        lambda source, line: jumps.append((source, line)),
     )
     monkeypatch.setattr(fast_build, "ThreadingHTTPServer", fake_http_server)
     monkeypatch.setattr(fast_build, "_serve_forever", lambda _httpd: None)
@@ -490,7 +512,7 @@ def test_second_qmdb_takes_next_ports_and_accepts_rebuild(
     assert rerun["changed_paths"] == [tmp_path / "doc.qmd"]
 
 
-def test_directory_registry_routes_only_matching_project(tmp_path, monkeypatch):
+def test_registry_routes_only_matching_source(tmp_path, monkeypatch):
     sessions = []
     for name in ("first", "second"):
         directory = tmp_path / name
@@ -503,7 +525,8 @@ def test_directory_registry_routes_only_matching_project(tmp_path, monkeypatch):
         searches = queue.Queue()
         thread = threading.Thread(
             target=forward_search.serve_forward_search,
-            args=(server, stopped, searches, str(directory)), daemon=True,
+            args=(server, stopped, searches, str(directory / "notes.md")),
+            daemon=True,
         )
         thread.start()
         sessions.append((server, stopped, searches, thread))
@@ -511,19 +534,22 @@ def test_directory_registry_routes_only_matching_project(tmp_path, monkeypatch):
     address = first[0].getsockname()
     try:
         forward_search.directory_port(
-            address, tmp_path / "second", port=second[0].getsockname()[1]
+            address, tmp_path / "second" / "notes.md",
+            port=second[0].getsockname()[1],
         )
         assert forward_search.directory_port(
             address, tmp_path / "missing"
         )["port"] is None
         monkeypatch.setattr(command_line, "FORWARD_SEARCH_PORT", address[1])
         monkeypatch.chdir(tmp_path / "second")
-        command_line.mfs("needle")
-        assert second[2].get(timeout=1) == "needle"
+        command_line.mfs(2, "notes.md")
+        assert json.loads(second[2].get(timeout=1))["line"] == 2
         assert first[2].empty()
-        forward_search.directory_port(address, tmp_path / "second", port=None)
+        forward_search.directory_port(
+            address, tmp_path / "second" / "notes.md", port=None
+        )
         assert forward_search.directory_port(
-            address, tmp_path / "second"
+            address, tmp_path / "second" / "notes.md"
         )["port"] is None
     finally:
         for server, stopped, _searches, thread in sessions:
