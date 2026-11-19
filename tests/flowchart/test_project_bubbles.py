@@ -1,3 +1,4 @@
+import re
 import xml.etree.ElementTree as ET
 
 from pydifftools.flowchart.watch_graph import build_graph
@@ -29,52 +30,6 @@ def _node_border_shapes(group, namespace):
         in (f"{namespace}polygon", f"{namespace}rect", f"{namespace}ellipse")
         and "stroke" in child.attrib
     ]
-
-
-def _bounds_from_points(points_text):
-    coords = []
-    for pair in points_text.strip().split():
-        if "," not in pair:
-            continue
-        x_str, y_str = pair.split(",", 1)
-        coords.append((float(x_str), float(y_str)))
-    if not coords:
-        return None
-    return (
-        min(x for x, _ in coords),
-        max(x for x, _ in coords),
-        min(y for _, y in coords),
-        max(y for _, y in coords),
-    )
-
-
-def _union_bounds(existing, new_bounds):
-    if new_bounds is None:
-        return existing
-    if existing is None:
-        return new_bounds
-    return (
-        min(existing[0], new_bounds[0]),
-        max(existing[1], new_bounds[1]),
-        min(existing[2], new_bounds[2]),
-        max(existing[3], new_bounds[3]),
-    )
-
-
-def _rect_bounds(element):
-    x = float(element.attrib["x"])
-    y = float(element.attrib["y"])
-    width = float(element.attrib["width"])
-    height = float(element.attrib["height"])
-    return (x, x + width, y, y + height)
-
-
-def _ellipse_bounds(element):
-    cx = float(element.attrib["cx"])
-    cy = float(element.attrib["cy"])
-    rx = float(element.attrib["rx"])
-    ry = float(element.attrib["ry"])
-    return (cx - rx, cx + rx, cy - ry, cy + ry)
 
 
 def test_build_graph_colors_node_borders_and_removes_bubbles(tmp_path):
@@ -166,44 +121,47 @@ nodes:
     graph_group = root.find(f"{namespace}g[@class='graph']")
     assert graph_group is not None
 
-    background = None
-    for child in graph_group:
-        if (
-            child.tag == f"{namespace}polygon"
-            and child.attrib.get("stroke") == "transparent"
-            and "points" in child.attrib
-        ):
-            background = _bounds_from_points(child.attrib["points"])
-            break
-    assert background is not None
-
-    scale_x = view_w / (background[1] - background[0])
-    scale_y = view_h / (background[3] - background[2])
+    # {{{ Map Graphviz's unrotated layout into SVG viewport coordinates
+    # SVG applies the translation before the scale in this transform list.
+    transform = graph_group.attrib["transform"]
+    scale_x, scale_y = map(
+        float, re.search(r"scale\(([^)]+)\)", transform)[1].split()
+    )
+    shift_x, shift_y = map(
+        float, re.search(r"translate\(([^)]+)\)", transform)[1].split()
+    )
+    assert "rotate(" not in transform or "rotate(0)" in transform
+    # }}}
     tol = 1e-3
-    content_bounds = None
+    # {{{ Check each shape's bounds after applying the graph transform
+    checked_geometry = False
     for element in graph_group.iter():
         if element.tag == f"{namespace}polygon" and "points" in element.attrib:
-            content_bounds = _union_bounds(
-                content_bounds, _bounds_from_points(element.attrib["points"])
-            )
+            xs, ys = zip(*(
+                tuple(map(float, pair.split(",")))
+                for pair in element.attrib["points"].split()
+            ))
+            x_min, x_max, y_min, y_max = min(xs), max(xs), min(ys), max(ys)
         elif element.tag == f"{namespace}rect":
-            content_bounds = _union_bounds(
-                content_bounds, _rect_bounds(element)
+            x_min, y_min, width, height = (
+                float(element.attrib[key])
+                for key in ("x", "y", "width", "height")
             )
+            x_max, y_max = x_min + width, y_min + height
         elif element.tag == f"{namespace}ellipse":
-            content_bounds = _union_bounds(
-                content_bounds, _ellipse_bounds(element)
+            cx, cy, rx, ry = (
+                float(element.attrib[key]) for key in ("cx", "cy", "rx", "ry")
             )
-    assert content_bounds is not None
-
-    mapped_min_x = view_x + (content_bounds[0] - background[0]) * scale_x
-    mapped_max_x = view_x + (content_bounds[1] - background[0]) * scale_x
-    mapped_min_y = view_y + (content_bounds[2] - background[2]) * scale_y
-    mapped_max_y = view_y + (content_bounds[3] - background[2]) * scale_y
-    assert mapped_min_x >= view_x - tol
-    assert mapped_max_x <= (view_x + view_w) + tol
-    assert mapped_min_y >= view_y - tol
-    assert mapped_max_y <= (view_y + view_h) + tol
+            x_min, x_max, y_min, y_max = cx - rx, cx + rx, cy - ry, cy + ry
+        else:
+            continue
+        checked_geometry = True
+        assert (x_min + shift_x) * scale_x >= view_x - tol
+        assert (x_max + shift_x) * scale_x <= view_x + view_w + tol
+        assert (y_min + shift_y) * scale_y >= view_y - tol
+        assert (y_max + shift_y) * scale_y <= view_y + view_h + tol
+    assert checked_geometry
+    # }}}
 
 
 def test_project_for_single_endpoint_colors_ancestors(tmp_path):
