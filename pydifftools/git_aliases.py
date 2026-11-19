@@ -13,6 +13,7 @@ GIT_ALIASES = {
     "tree": '!f() { pydifft tree "$@"; }; f',
     "reattach": '!f() { pydifft reattach "$@"; }; f',
     "mergein": '!f() { pydifft mergein "$@"; }; f',
+    "wmerge": '!f() { pydifft wmerge "$@"; }; f',
 }
 
 
@@ -78,6 +79,32 @@ def install_git_alias(name, command, preserve_existing=False):
                 f"Cannot install Bash completion at {target}: {exc}"
             ) from None
         print(f"Installed Bash completion: {target}")
+        # }}}
+    elif name == "wmerge":
+        # {{{ also install git mergetool -t pydifft, which needs the base
+        #     text that only diff3-style markers carry
+        settings = [
+            ("mergetool.pydifft.cmd", 'pydifft wmerge "$MERGED"'),
+            ("mergetool.pydifft.trustExitCode", "true"),
+        ]
+        style = subprocess.run(
+            ["git", "config", "--global", "--get", "merge.conflictstyle"],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if style not in ("diff3", "zdiff3"):
+            settings.append(("merge.conflictstyle", "diff3"))
+        for key, value in settings:
+            try:
+                subprocess.run(
+                    ["git", "config", "--global", key, value], check=True,
+                )
+            except (OSError, subprocess.CalledProcessError) as exc:
+                raise SystemExit(
+                    f"Cannot install global {key}: {exc}"
+                ) from None
+            print(f"Installed global git config: {key} = {value}")
+        print("Resolve conflicts with: git mergetool -t pydifft")
         # }}}
 
 

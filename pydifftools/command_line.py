@@ -39,6 +39,7 @@ from .searchacro import replace_acros
 from .rearrange_tex import run as rearrange_tex_run
 from .git_reattach import reattach  # registers branch reattachment
 from .git_gd import gd  # registers git difftool review command
+from .word_merge import wmerge  # registers word-wise merge tool
 from .pdf_diff import pd, git_pd  # registers PDF diff command
 from .git_aliases import (
     GIT_ALIASES, install_git_alias, mergein_completer,
