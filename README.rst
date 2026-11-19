@@ -284,10 +284,11 @@ included are (listed in order of fun/utility):
       restored reference lines remain untouched.
       ``--desired-width`` (default 45) limits the width of
       lines created by removing existing breaks to match Git where the
-      words still differ; such breaks are retained when joining would exceed
-      that desired width. A line that becomes identical to Git's once its
-      whitespace matches always keeps Git's layout (so it adds no diff),
-      unless it exceeds the maximum width.
+      words still differ; such a break is retained when joining would exceed
+      that desired width, unless it falls between two words that share a
+      line in Git (it would add those unchanged words to the diff). A line
+      that becomes identical to Git's once its whitespace matches therefore
+      keeps Git's layout, unless it exceeds the maximum width.
 
     * ``--wrapnumber`` independently sets the maximum width (79 for ``cpb``
       and ``wmatch``). ``cpb`` also checks stable prose from the Git baseline.

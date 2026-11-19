@@ -233,7 +233,9 @@ def align_line_breaks(
 
         A row that the fresh line diff found identical to the reference
         (not in changed) keeps the reference layout, so it adds no diff;
-        desired_width and the prose rules apply only where words differ.
+        The prose rules apply only where words differ, and there a user
+        break comes back above desired_width only if it costs no anchor
+        words.
         The only exception, except when preserving reference lines
         outright (wmatch), is a row wider than the hard width.  (Breaks
         at the edge of a change are judged by the fragment rules.)
@@ -627,14 +629,22 @@ def align_line_breaks(
             ):
                 continue
             if "\n" in original_gaps[number] and "\n" not in raw:
-                # Restoration joined a break the user had.  Put it back if
-                # the joined row may change and is too wide: wider than
-                # desired_width where the row still differs, while a row
-                # matching the reference only qualifies past the hard
-                # width (see may_change).
-                if may_change(row, rows[row], eligible) and len(
-                    rows[row].rstrip("\r\n")
-                ) > (desired_width if row in eligible else width) and all(
+                # Restoration joined a break the user had.  Past the hard
+                # width the row must be split anyway, so the user's break
+                # is put back.  Above desired_width it is put back only if
+                # it costs no anchor words: a break between two words that
+                # are neighbours on one reference line would leave both
+                # of them in the diff.
+                old = matches[hunk].get(number)
+                length = len(rows[row].rstrip("\r\n"))
+                if may_change(row, rows[row], eligible) and (
+                    width is not None and length > width
+                    or length > desired_width and not (
+                        old is not None
+                        and matches[hunk].get(number + 1) == old + 1
+                        and "\n" not in pairs[hunk][0][2].get(old, "\n")
+                    )
+                ) and all(
                     bisect_right(word_ends, right)
                     - bisect_right(word_ends, left) > 3
                     or restored[left:right].strip() in original_rows

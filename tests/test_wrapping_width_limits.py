@@ -7,19 +7,31 @@ from pydifftools.match_spaces import run
 from pydifftools.wrap_sentences import autofix_markdown_file
 
 
-def test_desired_width_controls_git_joins_where_words_differ():
+def test_desired_width_keeps_breaks_that_cost_no_anchor_words():
+    """Between desired_width and the hard width, a user break joined by
+    restoration comes back only if it doesn't split two words that are
+    neighbours on one reference line (anchor words of the diff)."""
     reference = "These stable words explain the water near an interface.\n"
-    current = reference.replace("stable", "edited").replace(
-        "water near", "water\nnear",
-    )
+    # next to the inserted word: no anchor is lost, so desired_width decides
+    current = reference.replace("the water", "the\ncold water")
     for desired, expected in [
-        (45, current), (79, reference.replace("stable", "edited")),
+        (45, current), (79, current.replace("the\ncold", "the cold")),
     ]:
         (result,) = align_line_breaks(
             reference, current, width=79, desired_width=desired,
             punctuation_slop=0,
         )
         assert result["aligned"] == expected
+    # between two unchanged neighbours: the break would cost anchors
+    current = reference.replace("stable", "edited").replace(
+        "water near", "water\nnear",
+    )
+    for desired in (20, 45, 79):
+        (result,) = align_line_breaks(
+            reference, current, width=79, desired_width=desired,
+            punctuation_slop=0,
+        )
+        assert result["aligned"] == reference.replace("stable", "edited")
 
 
 def test_whitespace_only_change_always_restores_reference():
@@ -93,13 +105,11 @@ def test_general_width_applies_to_stable_git_prose(tmp_path):
 
 def test_wmatch_passes_desired_width(tmp_path):
     reference = "These stable words explain the water near an interface.\n"
-    current = reference.replace("stable", "edited").replace(
-        "water near", "water\nnear",
-    )
+    current = reference.replace("the water", "the\ncold water")
     old, new = tmp_path / "old.md", tmp_path / "new.md"
     old.write_text(reference)
     for desired, expected in [
-        (45, current), (79, reference.replace("stable", "edited")),
+        (45, current), (79, current.replace("the\ncold", "the cold")),
     ]:
         new.write_text(current)
         run([str(old), str(new)], 79, 0, desired)
@@ -128,9 +138,7 @@ def test_cli_width_arguments_are_independent(tmp_path):
     import time
 
     reference = "These stable words explain the water near an interface.\n"
-    current = reference.replace("stable", "edited").replace(
-        "water near", "water\nnear",
-    )
+    current = reference.replace("the water", "the\ncold water")
     old, new = tmp_path / "old.md", tmp_path / "new.md"
     old.write_text(reference)
     env = dict(os.environ)
@@ -138,7 +146,7 @@ def test_cli_width_arguments_are_independent(tmp_path):
         "%Y-%m-%d", time.gmtime(),
     )
     for desired, expected in [
-        (45, current), (79, reference.replace("stable", "edited")),
+        (45, current), (79, current.replace("the\ncold", "the cold")),
     ]:
         new.write_text(current)
         subprocess.run(
