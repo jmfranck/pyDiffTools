@@ -515,14 +515,17 @@ def test_batched_word_diff_keeps_hunks_isolated(monkeypatch):
     assert len(calls) == 3
 
 
-def test_optional_preservation_break_does_not_strand_a_tiny_fragment():
+def test_short_line_rejoins_the_reference_line_it_had_in_the_edit():
     reference = (
         "Former introduction\nstable reference words\nformer closing.\n"
     )
     current = "X stable reference words rewritten closing.\n"
     (result,) = align_line_breaks(reference, current)
-    # Restoring either boundary would strand a short changed fragment.
-    assert result["aligned"] == current
+    # "X" was joined to the reference words in the edit, and the joined
+    # line fits; "rewritten closing." may not join that line a second time
+    assert result["aligned"] == (
+        "X stable reference words\nrewritten closing.\n"
+    )
 
 
 @pytest.mark.parametrize("comma", ["", ","])
@@ -577,12 +580,16 @@ def test_fragment_word_count_handles_math_and_attribute_tokens(
         + " stable reference words rewritten closing has four words.\n"
     )
     (result,) = align_line_breaks(reference, current)
+    # the math is one word, so it is a short line that rejoins the
+    # reference words it had in the edit; the attribute text is not short
     assert ("\nstable reference words\n" in result["aligned"]) == restore
 
 
 @pytest.mark.parametrize("count", [1, 2, 3, 4])
 @pytest.mark.parametrize("side", ["before", "after"])
-def test_optional_break_uses_word_count_for_long_fragments(count, side):
+def test_short_fragment_rejoins_reference_words_within_desired_width(
+    count, side,
+):
     reference = "Former opening\nstable reference words\nformer closing.\n"
     fragment = " ".join(["substantial"] * count)
     current = (
@@ -592,10 +599,15 @@ def test_optional_break_uses_word_count_for_long_fragments(count, side):
         + ".\n"
     )
     (result,) = align_line_breaks(reference, current)
-    # Four words justify an optional break to preserve a complete old line.
-    # One to three long words must stay with the adjacent reference words.
+    # A fragment of 1-3 words rejoins the reference words it had in the
+    # edit when the joined line fits in desired_width (45); four words
+    # are not a short line.
+    joined = (
+        fragment + " stable reference words" if side == "before"
+        else "stable reference words " + fragment + "."
+    )
     assert ("\nstable reference words\n" in result["aligned"]) == (
-        count > 3
+        count > 3 or len(joined) > 45
     )
 
 
@@ -750,3 +762,40 @@ def test_wmatch_combines_changed_short_lines_after_matching(
     assert new.read_text() == (
         "X" + expected_separator + "Changed ending words continue here.\n"
     )
+
+
+def test_short_line_restored_from_reference_is_not_rejoined():
+    # from a manuscript: only the math changed, and the reference put
+    # "of" on the math line; joining "of $...$" back onto the restored
+    # line above would add that line to the diff
+    reference = (
+        "the experimentally observed rotational correlation time\n"
+        "of $\\tau_c=1.23\\;\\text{ns}$\n"
+        "reported in @fig:IsoTSO4TempCycle (blue).\n"
+    )
+    current = (
+        "the experimentally observed rotational correlation time of\n"
+        "$\\tau_c=10^{-9.046}\\;\\text{s}=900.\\;\\text{ps}$\n"
+        "reported in @fig:IsoTSO4TempCycle (blue).\n"
+    )
+    (result,) = align_line_breaks(
+        reference, current, width=79, desired_width=45, punctuation_slop=20,
+    )
+    assert result["aligned"] == (
+        "the experimentally observed rotational correlation time\n"
+        "of $\\tau_c=10^{-9.046}\\;\\text{s}=900.\\;\\text{ps}$\n"
+    )
+
+
+@pytest.mark.parametrize("preserve", [False, True])
+def test_inserted_word_stays_with_the_line_it_was_joined_to(preserve):
+    # restoring the reference line strands "and"; it was joined to that
+    # line in the edit, and the joined line fits, so it rejoins (cpb and
+    # wmatch alike)
+    reference = "this is a line\nthis is another line\n"
+    current = "this is a line\nand this is another line\n"
+    (result,) = align_line_breaks(
+        reference, current, width=79, desired_width=45,
+        preserve_reference_lines=preserve,
+    )
+    assert result["aligned"] == "and this is another line\n"

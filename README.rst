@@ -279,9 +279,13 @@ included are (listed in order of fun/utility):
     * ``cpb`` and ``wmatch`` share a matcher that finds changed hunks, aligns
       their words using Git's minimal diff, and restores reference whitespace.
       It finishes restoring whitespace and complete reference lines, then
-      computes a new line diff before checking short fragments and wrapping
-      rules. ``wmatch`` applies those checks only to lines in the new diff;
-      restored reference lines remain untouched.
+      computes a new line diff before checking short lines and wrapping
+      rules. A short line (three words or fewer) that is still in the diff
+      joins one neighbour when the joined line fits in the desired width
+      and that neighbour is still in the diff too, or matches Git but was
+      already joined to the short line in the edit (preferred, since it
+      keeps the edit's layout). ``wmatch`` never splits a restored
+      reference line.
       ``--desired-width`` (default 45) limits the width of
       lines created by removing existing breaks to match Git where the
       words still differ; such a break is retained when joining would exceed

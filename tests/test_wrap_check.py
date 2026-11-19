@@ -916,9 +916,12 @@ def test_rm_esr_restores_full_head_lines_in_rewritten_sentence(
 
     report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
 
+    # the restored ESR line rejoins "vibrations, the", as in the edit, and
+    # the short "employ a setup" joins the changed line before it; both
+    # joined lines fit in the desired width
     expected = edited.replace(
-        "the ESR measurements presented",
-        "the ESR measurements\npresented",
+        "the ESR measurements presented in the main text\nemploy",
+        "the ESR measurements\npresented in the main text employ",
     ).replace("tube (1.50", "tube\n(1.50")
     assert path.read_text() == expected
     assert report["fixes"] and report["layout"] == []
@@ -931,27 +934,21 @@ def test_rm_esr_restores_full_head_lines_in_rewritten_sentence(
     run([str(reference), str(matched)])
     # wmatch must retain the restored ESR line, which splits the new diff
     # into separate hunks; only CPB can join across that unchanged line.
-    assert matched.read_text() == expected.replace(
-        "vibrations, the ESR measurements",
-        "vibrations, the\nESR measurements",
-    ).replace(
-        "main text\nemploy a setup", "main text employ a setup",
-    )
-    # CPB avoids a new two-word row to preserve the ESR reference line.
-    assert numstat(path) == (8, 9)
+    assert matched.read_text() == expected
 
 
-def test_embedded_head_line_does_not_strand_short_changed_lines(tmp_path):
+def test_short_changed_lines_rejoin_an_embedded_head_line_once(tmp_path):
     path = committed_source(tmp_path, "Before\nESR measurements\nAfter.\n")
     edited = "Changed before ESR measurements changed after.\n"
     path.write_text(edited)
 
-    report = autofix_markdown_file(path, wrapnumber=79, git_head=True)
+    autofix_markdown_file(path, wrapnumber=79, git_head=True)
 
-    expected = edited.rstrip()
-    assert path.read_text() == expected + "\n"
-    assert report["layout"] == []
-    assert report["fixes"] == []
+    # both short lines were joined to the head line in the edit, but a
+    # line joins only once
+    assert path.read_text() == (
+        "Changed before ESR measurements\nchanged after.\n"
+    )
 
 
 @pytest.mark.parametrize("count", [1, 5, 30])
@@ -1090,7 +1087,10 @@ def test_rewritten_sentence_reuses_whitespace_between_matched_words(tmp_path):
         path, wrapnumber=79, desired_width=79, git_head=True,
     )
 
-    expected = rewrite.replace("dynamics\nof", "dynamics of")
+    # the short "in bulk water" joins the changed line before it
+    expected = rewrite.replace("dynamics\nof", "dynamics of").replace(
+        "probes\nin bulk", "probes in bulk",
+    )
     assert path.read_text() == expected
     assert expected.split() == rewrite.split()
     assert len(report["fixes"]) == 1 and report["layout"] == []

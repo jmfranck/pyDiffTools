@@ -586,21 +586,19 @@ def align_line_breaks(
                 for number, raw in original_gaps.items()
             ))
         rows = restored.splitlines(keepends=True)
+        lengths = [len(line.rstrip("\r\n")) for line in rows]
         edits = {}
         row_starts = [0]
         for line in rows:
             row_starts.append(row_starts[-1] + len(line))
         original_rows = {line.strip() for line in before.splitlines()}
         word_ends = [match.end() for match in re.finditer(r"\S+", restored)]
+        joins = []
         for number, raw in restored_gaps.items():
             if number not in original_gaps:
                 continue
             row, _, end = restored_tokens[number]
             next_row, begin, _ = restored_tokens[number + 1]
-            if preserve_reference_lines and (
-                row not in eligible or next_row not in eligible
-            ):
-                continue
             # Hidden source and display math retain their reference layout.
             if any(
                 region_at(regions, local_start + end - 1) is not None
@@ -611,17 +609,19 @@ def align_line_breaks(
             if "\n" in original_gaps[number] and "\n" not in raw:
                 # Restoration joined a break the user had.  Past the hard
                 # width the row must be split anyway, so the user's break
-                # is put back.  Above desired_width it is put back only if
+                # is put back (wmatch never splits a row that matches the
+                # reference).  Above desired_width it is put back only if
                 # it costs no anchor words: a break between two words that
                 # are neighbours on one reference line would leave both
                 # of them in the diff.
                 # (So a row identical to the reference, whose breaks all
                 # fall between anchor words, keeps the reference layout.)
                 old = matches[hunk].get(number)
-                length = len(rows[row].rstrip("\r\n"))
                 if (
-                    width is not None and length > width
-                    or length > desired_width and not (
+                    width is not None and lengths[row] > width and (
+                        row in eligible or not preserve_reference_lines
+                    )
+                    or lengths[row] > desired_width and not (
                         old is not None
                         and matches[hunk].get(number + 1) == old + 1
                         and "\n" not in pairs[hunk][0][2].get(old, "\n")
@@ -636,24 +636,34 @@ def align_line_breaks(
                     )
                 ):
                     edits[number] = original_gaps[number]
-            elif "\n" in raw and (
-                preserve_reference_lines or "\n" not in original_gaps[number]
-            ) and not (
+            elif "\n" in raw and not (
                 re.search(r" {2,}\r?\n", raw)
                 or restored[end - 1:end] == "\\"
             ):
+                # A short line (3 words or fewer) still in the diff may
+                # join a neighbour if the joined line fits in desired_width
+                # and the neighbour is in the diff too, or matches the
+                # reference but was joined to the short line in the edit.
+                pair = (row, next_row)
+                together = "\n" not in original_gaps[number]
                 if any(
-                    r in eligible and len(rows[r].split()) <= 3
-                    for r in (row, next_row)
-                ) and (
-                    "\n" not in original_gaps[number]
-                    or len(rows[row].rstrip("\r\n"))
-                    + len(rows[next_row].strip()) + 1 <= desired_width
-                ):
-                    edits[number] = (
-                        " " if "\n" in original_gaps[number]
-                        else original_gaps[number]
-                    )
+                    pair[k] in eligible and len(rows[pair[k]].split()) <= 3
+                    and (pair[1 - k] in eligible or together)
+                    for k in (0, 1)
+                ) and lengths[row] + 1 + len(
+                    rows[next_row].strip()
+                ) <= desired_width:
+                    joins.append((not together, number, pair))
+        # {{{ each row joins at most once, preferring the edit's own layout
+        used = set()
+        for _, number, pair in sorted(joins):
+            if used.isdisjoint(pair):
+                used.update(pair)
+                edits[number] = (
+                    " " if "\n" in original_gaps[number]
+                    else original_gaps[number]
+                )
+        # }}}
         output = []
         position = 0
         guarded_eligible = set()
