@@ -103,7 +103,7 @@ def align_line_breaks(
         markdown_blocks,
         check_prose,
         apply_markdown_issue_fix,
-        _markdown_spans,
+        structural_rows,
         _mask_html_comments,
     )
 
@@ -120,21 +120,11 @@ def align_line_breaks(
 
     def source_layout(text):
         # {{{ classify structural whitespace independently of prose lint
-        comments, equations = _markdown_spans(text)
+        comments, equations, structural, allowed = structural_rows(
+            text, filetype,
+        )
         regions = sorted(comments + equations)
-        masked = list(text)
-        for begin, end in regions:
-            masked[begin:end] = [
-                char if char in "\r\n" else " " for char in text[begin:end]
-            ]
-        structural = "".join(masked)
         rows = text.splitlines(keepends=True)
-        allowed = [
-            flag and bool(line.strip())
-            for (flag, _), line in zip(
-                classify_lines(structural, filetype, strict=False), rows,
-            )
-        ]
         margins = []
         if filetype == "markdown":
             for block in markdown_blocks(structural):
@@ -228,23 +218,6 @@ def align_line_breaks(
         return text, tokens, gaps, continuation
         # }}}
 
-    def may_change(row, line, changed):
-        """Whether guards may rewrap a row on its own.
-
-        A row that the fresh line diff found identical to the reference
-        (not in changed) keeps the reference layout, so it adds no diff;
-        The prose rules apply only where words differ, and there a user
-        break comes back above desired_width only if it costs no anchor
-        words.
-        The only exception, except when preserving reference lines
-        outright (wmatch), is a row wider than the hard width.  (Breaks
-        at the edge of a change are judged by the fragment rules.)
-        """
-        return row in changed or (
-            not preserve_reference_lines and width is not None
-            and len(line.rstrip("\r\n")) > width
-        )
-
     def lint(text, eligible):
         if width is None:
             return text
@@ -257,8 +230,15 @@ def align_line_breaks(
             masked = _mask_html_comments(full_source)
             classified = classify_lines(masked, filetype, strict=False)
             rows = text.splitlines(keepends=True)
+            # A row that the fresh line diff found identical to the
+            # reference keeps its layout (it adds no diff), unless it is
+            # wider than the hard width and reference lines aren't
+            # preserved outright (wmatch).
             flags = [
-                allowed and may_change(row, rows[row], eligible)
+                allowed and (row in eligible or (
+                    not preserve_reference_lines
+                    and len(rows[row].rstrip("\r\n")) > width
+                ))
                 for row, (allowed, _) in enumerate(
                     classified[context_row:context_row + len(rows)]
                 )
@@ -635,9 +615,11 @@ def align_line_breaks(
                 # it costs no anchor words: a break between two words that
                 # are neighbours on one reference line would leave both
                 # of them in the diff.
+                # (So a row identical to the reference, whose breaks all
+                # fall between anchor words, keeps the reference layout.)
                 old = matches[hunk].get(number)
                 length = len(rows[row].rstrip("\r\n"))
-                if may_change(row, rows[row], eligible) and (
+                if (
                     width is not None and length > width
                     or length > desired_width and not (
                         old is not None

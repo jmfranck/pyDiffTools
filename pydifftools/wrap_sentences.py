@@ -1072,8 +1072,8 @@ def _iter_block_spans(blocks, wrapnumber, line_start=1):
         line += span
 
 
-# also used by: line_alignment.align_line_breaks to separate source structure
-# from prose lint eligibility.
+# also used by: structural_rows, which separates source structure from
+# prose lint eligibility.
 def _markdown_spans(content, initially_open=False):
     """Find comments and closed math spans, excluding literal code markers."""
     spans = []
@@ -1140,6 +1140,31 @@ def _markdown_spans(content, initially_open=False):
     if start is not None:
         spans.append((start, len(content)))
     return spans, equations
+
+
+# also used by: line_alignment.align_line_breaks and word_merge.tokenize.
+def structural_rows(text, filetype):
+    """Comments, math, the text with both blanked out, and which rows are
+    rewrappable prose.
+
+    Comments and math are blanked (keeping their line breaks), so that
+    their contents cannot make classify_lines protect a row.
+    """
+    comments, equations = _markdown_spans(text)
+    masked = list(text)
+    for begin, end in comments + equations:
+        masked[begin:end] = [
+            char if char in "\r\n" else " " for char in text[begin:end]
+        ]
+    structural = "".join(masked)
+    allowed = [
+        flag and bool(line.strip())
+        for (flag, _), line in zip(
+            classify_lines(structural, filetype, strict=False),
+            text.splitlines(keepends=True),
+        )
+    ]
+    return comments, equations, structural, allowed
 
 
 # also used by: line_alignment.align_line_breaks for comment-aware alignment.

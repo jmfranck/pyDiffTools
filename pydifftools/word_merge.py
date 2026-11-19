@@ -16,7 +16,7 @@ import tempfile
 
 from .command_registry import register_command
 from .line_alignment import minimal_opcodes
-from .wrap_sentences import _markdown_spans, classify_lines
+from .wrap_sentences import structural_rows
 
 # keys of the tokens for line breaks that matter (blank line, other)
 BREAKS = ("¶", "↵")
@@ -37,21 +37,11 @@ def tokenize(text, filetype="markdown"):
     starts = [0]
     for row in rows:
         starts.append(starts[-1] + len(row))
-    structural = text
-    if filetype == "markdown":
-        comments, equations = _markdown_spans(text)
-        masked = list(text)
-        for begin, end in comments + equations:
-            masked[begin:end] = [
-                c if c in "\r\n" else " " for c in text[begin:end]
-            ]
-        structural = "".join(masked)
     free = [
-        flag and bool(row.strip())
-        and not re.match(r"[ \t]*(?:[-+*]|[0-9]+[.)])[ \t]|[ \t]*>", row)
-        for (flag, _), row in zip(
-            classify_lines(structural, filetype, strict=False), rows
+        flag and not re.match(
+            r"[ \t]*(?:[-+*]|[0-9]+[.)])[ \t]|[ \t]*>", row,
         )
+        for flag, row in zip(structural_rows(text, filetype)[3], rows)
     ]
     # }}}
     words = list(re.finditer(r"\S+", text))
@@ -221,6 +211,9 @@ def merge_texts(
             position = hunk["stop"]
         return result + tokens[0][position:stop]
 
+    def one_side(hunks, side):
+        return [h for h in hunks if h["side"] == side]
+
     def render(start, stop, chosen, show_all):
         """Tokens of base[start:stop] merged with the chosen hunks.
 
@@ -254,7 +247,7 @@ def merge_texts(
             )
             versions = [
                 [t[0] for t in apply(
-                    [h for h in cluster["hunks"] if h["side"] == side],
+                    one_side(cluster["hunks"], side),
                     cluster["start"], cluster["stop"],
                 )]
                 for side in (1, 2)
@@ -298,7 +291,7 @@ def merge_texts(
                 side = 1 if any(h["side"] == 1 for h in group["hunks"]) \
                     else 2
                 result = apply(
-                    [h for h in group["hunks"] if h["side"] == side],
+                    one_side(group["hunks"], side),
                     group["start"], group["stop"], result,
                 )
                 continue
@@ -312,7 +305,7 @@ def merge_texts(
             caps = [len(tokens[0])] * 2
             while True:
                 versions = [tokens[0][first:last]] + [
-                    apply([h for h in group["hunks"] if h["side"] == side],
+                    apply(one_side(group["hunks"], side),
                           first, last)
                     for side in sides
                 ]
@@ -389,7 +382,7 @@ def merge_texts(
             if labels == ["-", "L+", "R+"] and high - low >= 2 * anchor:
                 kept = {}
                 for side in (1, 2):
-                    mine = [h for h in group["hunks"] if h["side"] == side]
+                    mine = one_side(group["hunks"], side)
                     if all(low <= h["start"] and h["stop"] <= high
                            for h in mine):
                         kept[side] = 1 - sum(
@@ -401,8 +394,7 @@ def merge_texts(
                         parts = [
                             (tags[other] + "-", joined(render(
                                 low, high,
-                                [h for h in group["hunks"]
-                                 if h["side"] == side],
+                                one_side(group["hunks"], side),
                                 True,
                             )), tokens[0][high - 1]),
                             (tags[other] + "+", joined(core), core[-1]),
