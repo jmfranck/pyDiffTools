@@ -228,6 +228,21 @@ def align_line_breaks(
         return text, tokens, gaps, continuation
         # }}}
 
+    def may_change(row, line, changed):
+        """Whether guards may rewrap a row on its own.
+
+        A row that the fresh line diff found identical to the reference
+        (not in changed) keeps the reference layout, so it adds no diff;
+        desired_width and the prose rules apply only where words differ.
+        The only exception, except when preserving reference lines
+        outright (wmatch), is a row wider than the hard width.  (Breaks
+        at the edge of a change are judged by the fragment rules.)
+        """
+        return row in changed or (
+            not preserve_reference_lines and width is not None
+            and len(line.rstrip("\r\n")) > width
+        )
+
     def lint(text, eligible):
         if width is None:
             return text
@@ -241,9 +256,7 @@ def align_line_breaks(
             classified = classify_lines(masked, filetype, strict=False)
             rows = text.splitlines(keepends=True)
             flags = [
-                allowed and not (
-                    preserve_reference_lines and row not in eligible
-                )
+                allowed and may_change(row, rows[row], eligible)
                 for row, (allowed, _) in enumerate(
                     classified[context_row:context_row + len(rows)]
                 )
@@ -614,7 +627,14 @@ def align_line_breaks(
             ):
                 continue
             if "\n" in original_gaps[number] and "\n" not in raw:
-                if len(rows[row].rstrip("\r\n")) > desired_width and all(
+                # Restoration joined a break the user had.  Put it back if
+                # the joined row may change and is too wide: wider than
+                # desired_width where the row still differs, while a row
+                # matching the reference only qualifies past the hard
+                # width (see may_change).
+                if may_change(row, rows[row], eligible) and len(
+                    rows[row].rstrip("\r\n")
+                ) > (desired_width if row in eligible else width) and all(
                     bisect_right(word_ends, right)
                     - bisect_right(word_ends, left) > 3
                     or restored[left:right].strip() in original_rows
