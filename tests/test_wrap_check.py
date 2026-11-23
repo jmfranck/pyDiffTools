@@ -933,6 +933,28 @@ def test_short_changed_lines_rejoin_an_embedded_head_line_once(tmp_path):
     )
 
 
+@pytest.mark.parametrize("command", ["cpb", "wmatch"])
+def test_short_changed_line_joins_unchanged_neighbor_when_it_fits(
+    tmp_path, command,
+):
+    from pydifftools.match_spaces import run
+
+    head = "hellow world this is a\nanother unchanged\n"
+    path = committed_source(tmp_path, head)
+    path.write_text("hello world this is a\nshort line\nanother unchanged\n")
+    reference = tmp_path / "reference.md"
+    reference.write_text(head)
+
+    if command == "cpb":
+        autofix_markdown_file(path, wrapnumber=79, git_head=True)
+    else:
+        run([str(reference), str(path)], 79)
+
+    assert path.read_text() == (
+        "hello world this is a short line\nanother unchanged\n"
+    )
+
+
 @pytest.mark.parametrize("count", [1, 5, 30])
 def test_cpb_and_wmatch_restore_scattered_reference_lines(tmp_path, count):
     from pydifftools.match_spaces import run

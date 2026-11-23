@@ -642,13 +642,12 @@ def align_line_breaks(
             ):
                 # A short line (3 words or fewer) still in the diff may
                 # join a neighbour if the joined line fits in desired_width
-                # and the neighbour is in the diff too, or matches the
-                # reference but was joined to the short line in the edit.
+                # even when the neighbour is unchanged, provided the
+                # joined line fits in desired_width.
                 pair = (row, next_row)
                 together = "\n" not in original_gaps[number]
                 if any(
                     pair[k] in eligible and len(rows[pair[k]].split()) <= 3
-                    and (pair[1 - k] in eligible or together)
                     for k in (0, 1)
                 ) and lengths[row] + 1 + len(
                     rows[next_row].strip()

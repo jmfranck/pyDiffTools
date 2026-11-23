@@ -281,11 +281,10 @@ included are (listed in order of fun/utility):
       It finishes restoring whitespace and complete reference lines, then
       computes a new line diff before checking short lines and wrapping
       rules. A short line (three words or fewer) that is still in the diff
-      joins one neighbour when the joined line fits in the desired width
-      and that neighbour is still in the diff too, or matches Git but was
-      already joined to the short line in the edit (preferred, since it
-      keeps the edit's layout). ``wmatch`` never splits a restored
-      reference line.
+      joins one neighbour when the joined line fits in the desired width.
+      It can join an unchanged neighbour, and prefers a break already
+      joined in the edit since that keeps the edit's layout. ``wmatch`` never
+      splits a restored reference line.
       ``--desired-width`` (default 45) limits the width of
       lines created by removing existing breaks to match Git where the
       words still differ; such a break is retained when joining would exceed
