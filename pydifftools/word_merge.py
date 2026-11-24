@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 
 from .command_registry import register_command
-from .line_alignment import minimal_opcodes
+from .line_alignment import align_line_breaks, minimal_opcodes
 from .wrap_sentences import structural_rows
 
 # keys of the tokens for line breaks that matter (blank line, other)
@@ -734,11 +734,61 @@ def merge_texts(
                 part["before"] = None
         pieces += parts
     # }}}
-    return leads[0] + "".join(
+    proposal = leads[0] + "".join(
         word + gap for _, word, gap in render(
             0, len(tokens[0]), pieces, False
         )
     )
+    if merged is None:
+        return proposal
+    # {{{ align the completed merge against the left-pane draft. Keep merge
+    #     labels as boundary tokens so their words remain visible to Git's
+    #     word matcher, then restore each label after whitespace alignment.
+    placeholders = {}
+
+    def mask(text):
+        output = []
+        position = 0
+        while match := re.search(
+            r"\[(?:[LR]?[-+]|[LR] m[0-9a-f]+→ |[LR] →m[0-9a-f]+)",
+            text[position:],
+        ):
+            start = position + match.start()
+            label_stop = position + match.end()
+            depth = 1
+            end = label_stop
+            while depth and end < len(text):
+                depth += (text[end] == "[") - (text[end] == "]")
+                end += 1
+            if depth:
+                break
+            start_token = f"PydifftMergeStart{len(placeholders)}Token"
+            placeholders[start_token] = text[start:label_stop]
+            end_token = f"PydifftMergeEnd{len(placeholders)}Token"
+            placeholders[end_token] = "]"
+            output.extend((
+                text[position:start], start_token,
+                mask(text[label_stop:end - 1]), end_token,
+            ))
+            position = end
+        output.append(text[position:])
+        return "".join(output)
+
+    draft = conflict_views(merged)[0]
+    current = mask(proposal)
+    aligned = []
+    position = 0
+    for result in align_line_breaks(
+        draft, current, filetype, width=None, preserve_reference_lines=True,
+    ):
+        aligned.extend((current[position:result["start"]], result["aligned"]))
+        position = result["stop"]
+    aligned.append(current[position:])
+    current = "".join(aligned)
+    for placeholder, marker in placeholders.items():
+        current = current.replace(placeholder, marker)
+    return current
+    # }}}
 
 
 @register_command(

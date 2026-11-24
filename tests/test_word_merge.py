@@ -153,6 +153,41 @@ def test_clashing_insertions_at_line_end_stay_on_the_line():
     ) == "Low as 243 K. [L+More.][R+Less.]\nNext line.\n"
 
 
+def test_merge_restores_draft_whitespace_around_added_clause():
+    base = (
+        "to the cold-shedding process in order to\n"
+        "shrink from the larger size\n"
+        "that hosts more mobile water to the smaller size that\n"
+        "hosts only unfreezable,\n"
+        "relatively immobile water.\n"
+    )
+    local = base.replace(
+        "that hosts more mobile water",
+        "hosts more mobile water (and therefore SP)",
+    )
+    remote = base.replace("relatively immobile", "relatively immobilized")
+    draft = (
+        "to the cold-shedding process in order to\n"
+        "shrink from the larger size that\n"
+        "hosts more mobile water (and therefore SP)\n"
+        "to the smaller size that hosts only\n"
+        "unfreezable,\n"
+        "relatively immobile water.\n"
+    )
+    merged = (
+        "<<<<<<< local\nlocal text\n||||||| base\n"
+        + draft
+        + "=======\nremote text\n>>>>>>> remote\n"
+    )
+    assert merge_texts(base, local, remote, merged=merged) == (
+        "to the cold-shedding process in order to\n"
+        "shrink from the larger size\n"
+        "hosts more mobile water (and therefore SP)\n"
+        "to the smaller size that hosts only\n"
+        "unfreezable, relatively immobilized water.\n"
+    )
+
+
 def test_recorded_conflict():
     """A real manuscript conflict: local moved several (edited) passages
     into and out of conflicted regions while remote edited them in

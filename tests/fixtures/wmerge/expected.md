@@ -89,7 +89,8 @@ to anything here?
 
 @Fig:IsooctaneKinetics reveals that the onset
 of water shedding at 260&nbsp;K proceeds
-following first-order (or approximately first-order) kinetics,
+following first-order
+(or approximately first-order) kinetics,
 over a timescale of 42.2&nbsp;min.
 Specifically,
 the rate of conversion of RMs to RMs with a
@@ -236,11 +237,9 @@ that control the kinetics.
 [L m04→ Notably, difficult to control experimental
 parameters,
 such as initial preparation and equilibration
-of the RM,
-sample tube size,
+of the RM, sample tube size,
 [L-or mechanical vibrations,
-might also influence the
-nucleation kinetics,
+might also influence the nucleation kinetics,
 and][L+and mechanical vibrations,
 likely influence the
 nucleation kinetics and, thus,] the apparent cold-shedding temperature.]
