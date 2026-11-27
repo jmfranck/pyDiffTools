@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 import sys
+from urllib3.exceptions import HTTPError, MaxRetryError, NewConnectionError
 
 # Optional callbacks for callers that need to prepare for a dialog.
 dialog_callbacks = []
@@ -28,18 +29,40 @@ def start_browser():
     firefox_driver = shutil.which("geckodriver")
     chrome_error = None
     if chrome_driver or not firefox_driver:
+        browser_path = (
+            shutil.which("google-chrome")
+            or shutil.which("google-chrome-stable")
+            or shutil.which("chromium")
+            or shutil.which("chromium-browser")
+        )
+        # {{{ Try the local cache before allowing online driver discovery.
+        # Selenium Manager can reconcile the installed browser with its cache
+        # offline. If the cached driver is stale, use ordinary discovery.
+        if not chrome_driver and browser_path:
+            from selenium.webdriver.common.selenium_manager import (
+                SeleniumManager,
+            )
+
+            try:
+                driver = SeleniumManager().binary_paths([
+                    "--browser", "chrome", "--browser-path", browser_path,
+                    "--offline", "--avoid-stats",
+                ]).get("driver_path")
+                if driver and os.path.isfile(driver):
+                    options = webdriver.ChromeOptions()
+                    options.binary_location = browser_path
+                    return webdriver.Chrome(
+                        service=ChromeService(driver), options=options,
+                    )
+            except WebDriverException:
+                pass
+        # }}}
         # {{{ Use installed ChromeDriver without an online Manager lookup
         kwargs = {}
         if chrome_driver:
             options = webdriver.ChromeOptions()
             # Debian's driver defaults to Chromium even if Chrome is installed;
             # retain Selenium Manager's preference for Google Chrome.
-            browser_path = (
-                shutil.which("google-chrome")
-                or shutil.which("google-chrome-stable")
-                or shutil.which("chromium")
-                or shutil.which("chromium-browser")
-            )
             if browser_path:
                 options.binary_location = browser_path
             kwargs = {
@@ -102,6 +125,13 @@ def prepare_for_dialog():
         callback()
 
 
+def browser_driver_disconnected(error):
+    """Recognize Selenium transport errors from an unreachable driver."""
+    if isinstance(error, MaxRetryError):
+        error = error.reason
+    return isinstance(error, NewConnectionError)
+
+
 # also used by: continuous.py, notebook/fast_build.py, flowchart/watch_graph.py
 def browser_window_is_alive(browser):
     # Keep all browser liveness checks in one place so watch commands share
@@ -121,6 +151,10 @@ def browser_window_is_alive(browser):
         return True
     except (InvalidSessionIdException, NoSuchWindowException):
         return False
+    except HTTPError as error:
+        if browser_driver_disconnected(error):
+            return False
+        raise
     except WebDriverException:
         # A transient command failure is not evidence of a closed window.
         return True

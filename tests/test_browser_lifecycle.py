@@ -185,6 +185,43 @@ def test_start_browser_keeps_automatic_discovery_without_driver(monkeypatch):
     assert browser_lifecycle.start_browser() is browser
 
 
+@pytest.mark.parametrize("cached_driver_stale", [False, True])
+def test_chrome_tries_cached_driver_before_online_discovery(
+    monkeypatch, tmp_path, cached_driver_stale,
+):
+    driver = tmp_path / "chromedriver"
+    driver.touch()
+    browser_path = "/usr/bin/google-chrome"
+    monkeypatch.setattr(
+        browser_lifecycle.shutil, "which", {"google-chrome": browser_path}.get
+    )
+    calls = []
+    browser = FakeBrowser()
+
+    def offline_lookup(_self, args):
+        assert "--offline" in args
+        assert args[args.index("--browser-path") + 1] == browser_path
+        return {"driver_path": str(driver)}
+
+    def chrome(**options):
+        if options:
+            assert options["service"].path == str(driver)
+            assert options["options"].binary_location == browser_path
+            calls.append("cached")
+            if cached_driver_stale:
+                raise SessionNotCreatedException("cached driver is stale")
+        else:
+            calls.append("online")
+        return browser
+
+    monkeypatch.setattr(SeleniumManager, "binary_paths", offline_lookup)
+    monkeypatch.setattr(webdriver, "Chrome", chrome)
+    assert browser_lifecycle.start_browser() is browser
+    assert calls == (
+        ["cached", "online"] if cached_driver_stale else ["cached"]
+    )
+
+
 @pytest.mark.parametrize("chrome_installed", [False, True])
 @pytest.mark.parametrize("preview", ["shared", "flowchart", "notebook"])
 def test_start_browser_uses_installed_firefox_driver_without_manager(

@@ -245,6 +245,20 @@ def test_detached_crossref_marker_is_flagged_and_joined(tmp_path, detached):
     assert re.search(r"(\$\$|\))\{#(eq|fig):[^}\n]*\}", fixed)
 
 
+@pytest.mark.parametrize("source", [
+    "![Caption.](<diagram>)\n",
+    '![Caption.](diagram.png "Literal <tag> and $")\n',
+    "```md\n![Caption](diagram.png)\n{#fig:literal}\n```\n",
+])
+def test_formatter_and_checker_respect_protected_syntax(tmp_path, source):
+    path = tmp_path / "figure.md"
+    path.write_text(source)
+    wr(str(path), 79)
+    wrchk(str(path), 79)
+    assert not autofix_markdown_file(path, 79)["fixes"]
+    assert path.read_text() == source
+
+
 @pytest.mark.parametrize("prefix", ["", "> ", "- "])
 def test_image_caption_wraps_without_splitting_destination(tmp_path, prefix):
     path = tmp_path / "figure.md"

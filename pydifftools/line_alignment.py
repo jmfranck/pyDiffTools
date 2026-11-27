@@ -3,6 +3,7 @@
 from pathlib import Path
 from bisect import bisect_left, bisect_right
 import itertools
+from functools import lru_cache
 import re
 import subprocess
 import tempfile
@@ -88,6 +89,8 @@ def align_line_breaks(
     punctuation_slop=20,
     preserve_reference_lines=False,
     desired_width=DEFAULT_DESIRED_WIDTH,
+    *,
+    whole_document=False,
 ):
     """Return changed hunks with original, linted and proposed layouts.
 
@@ -101,16 +104,20 @@ def align_line_breaks(
         WORD,
         classify_lines,
         markdown_blocks,
+        markdown_syntax,
+        markdown_wrap_edits,
         check_prose,
         apply_markdown_issue_fix,
         structural_rows,
         _mask_html_comments,
+        _mask_spans,
     )
 
     prefix_pattern = re.compile(
         r"^(?P<quote>(?:[ \t]*>[ \t]?)*)(?P<indent>[ \t]*)"
         r"(?:(?P<marker>[-+*]|[0-9]+[.)])(?P<space>[ \t]+))?"
     )
+    parse_source = lru_cache(maxsize=None)(markdown_syntax)
 
     def region_at(regions, position):
         index = bisect_left(regions, (position + 1,)) - 1
@@ -118,16 +125,21 @@ def align_line_breaks(
             return regions[index]
         return None
 
+    @lru_cache(maxsize=None)
     def source_layout(text):
         # {{{ classify structural whitespace independently of prose lint
+        syntax = parse_source(text)
         comments, equations, structural, allowed = structural_rows(
-            text, filetype,
+            text, filetype, syntax,
+        )
+        targets = (
+            syntax.image_targets if filetype == "markdown" else []
         )
         regions = sorted(comments + equations)
         rows = text.splitlines(keepends=True)
         margins = []
         if filetype == "markdown":
-            for block in markdown_blocks(structural):
+            for block in markdown_blocks(structural, targets=targets):
                 margins.extend(
                     [block.kind == "prose"] * len(block.text.splitlines())
                 )
@@ -139,21 +151,24 @@ def align_line_breaks(
             indent = re.match(r"[ \t]*", line)[0]
             inside = region_at(regions, position) is not None
             prefixes.append(prefix_pattern.match(indent if inside else line))
-            margins[row] = allowed[row] and (
-                inside or (
-                    margins[row] and "\t" not in indent and len(indent) < 4
-                    and not (
-                        row and not rows[row - 1].strip() and len(indent) >= 2
+            margins[row] = (
+                allowed[row] and region_at(targets, position) is None and (
+                    inside or (
+                        margins[row] and "\t" not in indent and len(indent) < 4
+                        and not (
+                            row and not rows[row - 1].strip()
+                            and len(indent) >= 2
+                        )
                     )
                 )
             )
             position += len(line)
-        return comments, equations, allowed, margins, prefixes
+        return comments, equations, targets, allowed, margins, prefixes
         # }}}
 
     def tokenize(text, layout, base=0):
         # {{{ words plus editable whitespace, retaining original offsets
-        comments, equations, allowed, margins, prefixes = layout
+        comments, equations, targets, allowed, margins, prefixes = layout
         regions = sorted(comments + equations)
         rows = text.splitlines(keepends=True)
         cuts = set()
@@ -200,6 +215,8 @@ def align_line_breaks(
             raw = text[end:start]
             if not (allowed[row] and allowed[next_row]):
                 continue
+            if region_at(targets, base + end) is not None:
+                continue
             region = region_at(regions, base + left[1])
             free = region is not None and base + start < region[1]
             if row == next_row:
@@ -228,12 +245,9 @@ def align_line_breaks(
                 + current[stop:context_stop]
             )
             masked = _mask_html_comments(full_source)
-            classified = classify_lines(masked, filetype, strict=False)
             rows = text.splitlines(keepends=True)
-            # A row that the fresh line diff found identical to the
-            # reference keeps its layout (it adds no diff), unless it is
-            # wider than the hard width and reference lines aren't
-            # preserved outright (wmatch).
+            issues = {}
+            classified = classify_lines(masked, filetype, strict=False)
             flags = [
                 allowed and (row in eligible or (
                     not preserve_reference_lines
@@ -243,7 +257,6 @@ def align_line_breaks(
                     classified[context_row:context_row + len(rows)]
                 )
             ]
-            issues = {}
             offset = 1
             masked_lines = masked[
                 local_start:local_start + len(text)
@@ -290,8 +303,10 @@ def align_line_breaks(
     regions = sorted(current_comments + current_equations)
     region_starts = [begin for begin, _ in regions]
     boundaries = [0]
+    syntax = parse_source(current)
     for row, (allowed, line) in enumerate(classify_lines(
-        _mask_html_comments(current), filetype, strict=False,
+        _mask_spans(current, syntax.comments), filetype, strict=False,
+        targets=syntax.image_targets,
     )):
         region = bisect_left(region_starts, starts[row + 1]) - 1
         inside = region >= 0 and regions[region][1] > starts[row]
@@ -301,6 +316,8 @@ def align_line_breaks(
         boundaries.append(len(lines))
     # }}}
     results = []
+    markdown_hunks = []
+    plan_markdown = filetype == "markdown" and isinstance(width, int)
     restored_hunks = []
     requested_width = width
     hunks = [
@@ -314,14 +331,14 @@ def align_line_breaks(
     for hunk, (_, i1, i2, j1, j2) in enumerate(hunks):
         old = tokenize(
             "".join(reference_lines[i1:i2]),
-            (*reference_layout[:2], *(
-                flags[i1:i2] for flags in reference_layout[2:]
+            (*reference_layout[:3], *(
+                flags[i1:i2] for flags in reference_layout[3:]
             )), reference_starts[i1],
         )
         new = tokenize(
             current[starts[j1] : starts[j2]],
-            (*current_layout[:2], *(
-                flags[j1:j2] for flags in current_layout[2:]
+            (*current_layout[:3], *(
+                flags[j1:j2] for flags in current_layout[3:]
             )), starts[j1],
         )
         pairs.append((old, new))
@@ -424,8 +441,8 @@ def align_line_breaks(
             )[0]
             if (
                 prefix != old_prefix
-                and current_layout[3][j1 + row]
-                and reference_layout[3][i1 + old_row]
+                and current_layout[4][j1 + row]
+                and reference_layout[4][i1 + old_row]
             ):
                 leading.append((
                     line_start - start,
@@ -489,8 +506,8 @@ def align_line_breaks(
                         and start + tokens[number + 1][1] < region[1]
                     )
                     if inside_region or (
-                        current_layout[3][j1 + tokens[number][0]]
-                        and current_layout[3][j1 + tokens[number + 1][0]]
+                        current_layout[4][j1 + tokens[number][0]]
+                        and current_layout[4][j1 + tokens[number + 1][0]]
                     ):
                         whitespace[number] = re.sub(r"\r?\n", ending, raw)
                     else:
@@ -575,9 +592,9 @@ def align_line_breaks(
         )
         layout = source_layout(full_source)
         _, restored_tokens, restored_gaps, _ = tokenize(
-            restored, (*layout[:2], *(
+            restored, (*layout[:3], *(
                 flags[context_row:context_row + len(restored.splitlines())]
-                for flags in layout[2:]
+                for flags in layout[3:]
             )), local_start,
         )
         if callable(requested_width):
@@ -591,6 +608,21 @@ def align_line_breaks(
         row_starts = [0]
         for line in rows:
             row_starts.append(row_starts[-1] + len(line))
+        # Caption width excludes the attached destination and attributes,
+        # including when only part of that suffix is within this hunk.
+        for begin, end in layout[2]:
+            begin -= local_start
+            end -= local_start
+            for row in range(
+                max(0, bisect_right(row_starts, begin) - 1),
+                min(len(rows), bisect_left(row_starts, end)),
+            ):
+                lengths[row] -= max(
+                    0, min(
+                        end, row_starts[row] + len(rows[row].rstrip("\r\n")),
+                    )
+                    - max(begin, row_starts[row]),
+                )
         original_rows = {line.strip() for line in before.splitlines()}
         word_ends = [match.end() for match in re.finditer(r"\S+", restored)]
         joins = []
@@ -686,6 +718,11 @@ def align_line_breaks(
             output.extend((restored[position:left], replacement))
             position = right
         output.append(restored[position:])
+        if plan_markdown:
+            markdown_hunks.append((
+                j1, j2, i1, head, "".join(output), guarded_eligible,
+            ))
+            continue
         aligned = lint("".join(output), guarded_eligible)
         linted = aligned if restored == before else lint(
             before, set(range(len(before.splitlines()))),
@@ -699,9 +736,9 @@ def align_line_breaks(
                 + current[stop:context_stop]
             )
             layouts.append((
-                *layout[:2], *(
+                *layout[:3], *(
                     flags[context_row:context_row + len(text.splitlines())]
-                    for flags in layout[2:]
+                    for flags in layout[3:]
                 ),
             ))
         _, lint_tokens, lint_gaps, _ = tokenize(
@@ -745,4 +782,75 @@ def align_line_breaks(
                 "moves": moves,
             }
         )
+    if plan_markdown:
+        # {{{ Choose breaks in the assembled layout, with the full syntax.
+        # Reference preservation is eligibility for the same wrapping plan,
+        # including when a restored line spans parts of two original hunks.
+        candidate = []
+        hunk_spans = []
+        editable_rows = set()
+        position = 0
+        for j1, j2, i1, head, proposed, eligible in markdown_hunks:
+            candidate.extend(lines[position:j1])
+            row = len(candidate)
+            new_rows = proposed.splitlines(keepends=True)
+            editable_rows.update(row + item for item in eligible)
+            candidate.extend(new_rows)
+            hunk_spans.append((row, len(candidate), j1, j2, i1, head))
+            position = j2
+        candidate.extend(lines[position:])
+        hard_width_rows = (
+            range(len(candidate)) if whole_document else
+            set(i for a, b, *_ in hunk_spans for i in range(a, b))
+        ) if not preserve_reference_lines else ()
+        source = "".join(candidate)
+        replacements = {
+            row: (text, kind)
+            for row, text, kind in markdown_wrap_edits(
+                source, requested_width, punctuation_slop,
+                editable_rows, set(hard_width_rows) - editable_rows,
+                syntax=parse_source(source),
+            )
+        }
+        # Report original-to-final edits. A rejected restoration should not
+        # appear as an edit just because its candidate differed.
+        position = 0
+        row = 0
+        for a, b, j1, j2, i1, head in [
+            *hunk_spans, (len(candidate), len(candidate), len(lines),
+                          len(lines), len(reference_lines), ""),
+        ]:
+            for idx in range(row, a):
+                if idx in replacements:
+                    source_row = position + idx - row
+                    aligned, kind = replacements[idx]
+                    results.append({
+                        "line": source_row + 1,
+                        "start": starts[source_row],
+                        "stop": starts[source_row + 1],
+                        "before": lines[source_row],
+                        "aligned": aligned, "moves": 0,
+                        "linted": aligned, "reason": kind,
+                    })
+            before = "".join(lines[j1:j2])
+            proposed = "".join(candidate[a:b])
+            aligned = "".join(
+                replacements[i][0] if i in replacements else candidate[i]
+                for i in range(a, b)
+            )
+            if j1 < j2:
+                results.append({
+                    "line": j1 + 1, "reference_line": i1,
+                    "start": starts[j1], "stop": starts[j2], "head": head,
+                    "before": before, "aligned": aligned,
+                    "moves": int(proposed != before and aligned != before),
+                    "linted": aligned,
+                    "reason": next(
+                        (replacements[i][1] for i in range(a, b)
+                         if i in replacements), None,
+                    ),
+                })
+            position = j2
+            row = b
+        # }}}
     return results

@@ -15,5 +15,14 @@
 - When refactoring, check for functions that are only used once. Prefer to
   move that logic back in place rather than keeping a single-use helper.
 	Use vim fold markers, as described next.
+- Before reporting any change to `cpb` or its shared formatting, publishing,
+  or browser startup code as complete, run the real-browser smoke test
+  locally. A regular full-suite pass does not run this check. Do not add it
+  to CI.
+
+  ```sh
+  QT_QPA_PLATFORM=offscreen PYDIFFTOOLS_LOCAL_CPB_BROWSER=1 \
+    ~/base/bin/python -m pytest -q -k cpb_cli_loads_the_preview_in_chrome
+  ```
 - When inlining substantial one-off logic, surround it with vim fold markers
 	like `# {{{ description of code purpose` and `# }}}`.

@@ -21,8 +21,9 @@ def test_cpb_fixes_caption_before_multiline_image_destination(
     subprocess.run(["git", "add", "content.md"], check=True)
     markdown.write_text(figure + "\nA revised paragraph.\n")
 
+    reports = []
     monkeypatch.setattr(
-        "pydifftools.continuous.show_markdown_fix_dialog", lambda report: True
+        "pydifftools.continuous.show_markdown_fix_dialog", reports.append
     )
     monkeypatch.setattr(
         "pydifftools.continuous.shutil.which", lambda name: "/tool"
@@ -38,13 +39,18 @@ def test_cpb_fixes_caption_before_multiline_image_destination(
 
     monkeypatch.setattr("pydifftools.continuous.subprocess.run", run_command)
 
-    run_pandoc(str(markdown), str(html), wrapnumber=55)
+    run_pandoc(str(markdown), str(html), wrapnumber=50)
 
     assert html.is_file()
     assert markdown.read_text() == (
         "![The field changes near the sample on the cavity\n"
         "axis.]" + target + "\nA revised paragraph.\n"
     )
+    assert len(reports) == 1
+    timestamp = markdown.stat().st_mtime_ns
+    run_pandoc(str(markdown), str(html), wrapnumber=50)
+    assert len(reports) == 1
+    assert markdown.stat().st_mtime_ns == timestamp
 
 
 @pytest.mark.parametrize("declaration", [

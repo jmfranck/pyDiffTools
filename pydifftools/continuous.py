@@ -17,6 +17,7 @@ import tempfile
 from pathlib import Path
 import yaml
 from lxml import html
+from urllib3.exceptions import HTTPError
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
@@ -29,6 +30,7 @@ from .wrapping_options import (
 from .zotero import recover_bibliography, zotero_notice
 from .comment_migration import prepare_comment_source
 from .browser_lifecycle import (
+    browser_driver_disconnected,
     browser_window_is_alive,
     close_browser_window,
     forward_search_in_browser,
@@ -238,11 +240,11 @@ while True:
 
 # also used by: tests/test_wrap_check.py, which drives this window directly
 # (cpb calls it from run_pandoc)
-def show_markdown_fix_dialog(report):
+def show_markdown_fix_dialog(report, *, stop_event=None):
     """Show automatic fixes and any source edits that still need a user."""
     from html import escape
 
-    from PySide6.QtCore import Qt
+    from PySide6.QtCore import Qt, QTimer
     from PySide6.QtGui import QFontDatabase
     from PySide6.QtWidgets import (
         QApplication,
@@ -475,7 +477,20 @@ def show_markdown_fix_dialog(report):
 
     button.clicked.connect(advance)
     show_record()
+    if stop_event is not None:
+        if stop_event.is_set():
+            return False
+
+        # Let Python handle termination while Qt owns the modal event loop.
+        # Close the dialog from a Qt callback instead of raising in a slot.
+        timer = QTimer(dialog)
+        timer.timeout.connect(
+            lambda: dialog.reject() if stop_event.is_set() else None
+        )
+        timer.start(50)
     dialog.exec()
+    if stop_event is not None:
+        timer.stop()
     return user_says_fixed
 
 
@@ -489,6 +504,8 @@ def run_pandoc(
     trailing_dependent_phrase=DEFAULT_TRAILING_DEPENDENT_PHRASE,
     diff=None,
     desired_width=DEFAULT_DESIRED_WIDTH,
+    *,
+    stop_event=None,
 ):
     # {{{ automatically fix Markdown source and request edits for
     # unfinished spans
@@ -496,14 +513,23 @@ def run_pandoc(
 
     automatic_fixes_were_made = False
     while True:
+        if stop_event is not None and stop_event.is_set():
+            return
         report = autofix_markdown_file(
             filename, wrapnumber=wrapnumber, git_index=True, git_ref=diff,
             punctuation_slop=trailing_dependent_phrase,
             desired_width=desired_width,
         )
+        if stop_event is not None and stop_event.is_set():
+            return
         automatic_fixes_were_made |= bool(report["fixes"])
         if report["fixes"] or report["warnings"]:
-            user_says_fixed = show_markdown_fix_dialog(report)
+            user_says_fixed = (
+                show_markdown_fix_dialog(report) if stop_event is None
+                else show_markdown_fix_dialog(report, stop_event=stop_event)
+            )
+            if stop_event is not None and stop_event.is_set():
+                return
             if report["warnings"]:
                 if not user_says_fixed:
                     raise RuntimeError(
@@ -552,6 +578,7 @@ def run_pandoc(
     # even when started from a different working directory.
     source_dir = os.path.dirname(os.path.abspath(filename))
     with open(filename, encoding="utf-8") as fp:
+        source_stat = os.fstat(fp.fileno())
         markdown_text = fp.read()
     helper_names = [
         "comment_tags.lua", "comments.css", "comments_author_colors.css",
@@ -1031,7 +1058,7 @@ def run_pandoc(
         else:
             text = style_block + text
     extract_source_lines(html_file, nonce, filename, marked_html=text)
-    return
+    return source_stat.st_ino, source_stat.st_size, source_stat.st_mtime_ns
 
 
 def append_autorefresh(html_file, source_jump_url=None):
@@ -1206,12 +1233,15 @@ def cpb(
     observer_started = False
     socket_thread_started = False
     source_jump_server = None
-    previous_sigterm = None
+    previous_handlers = {}
     if threading.current_thread() is threading.main_thread():
         def stop_cpb(_signum, _frame):
-            raise KeyboardInterrupt
+            stop_event.set()
 
-        previous_sigterm = signal.signal(signal.SIGTERM, stop_cpb)
+        for stop_signal in (signal.SIGTERM, signal.SIGINT):
+            previous_handlers[stop_signal] = signal.signal(
+                stop_signal, stop_cpb,
+            )
 
     try:
         # Bind and serve before any build or browser work. This makes the fixed
@@ -1230,20 +1260,14 @@ def cpb(
                       "mfs discovery is unavailable.")
 
         # Build before opening the browser so a failed build cannot leave an
-        # orphaned browser session. Remember the source version from before
-        # the build so an edit during a slow Pandoc run remains pending.
+        # orphaned browser session. Track the source snapshot Pandoc actually
+        # received so our own fixes do not trigger another build.
         source_missing = object()
         # every dialog is dealt with (OK pressed) before Pandoc runs or
         # The browser opens
         zotero_notice()
         prepare_comment_source(filename)
-        initial_source_stat = os.stat(source_path)
-        handled_signature = (
-            initial_source_stat.st_ino,
-            initial_source_stat.st_size,
-            initial_source_stat.st_mtime_ns,
-        )
-        run_pandoc(
+        handled_signature = run_pandoc(
             filename,
             html_file,
             comments_to_margin=comments_to_margin,
@@ -1253,7 +1277,10 @@ def cpb(
             trailing_dependent_phrase=trailing_dependent_phrase,
             diff=diff,
             desired_width=desired_width,
+            stop_event=stop_event,
         )
+        if stop_event.is_set():
+            return
         source_jump_server = SourceJumpServer(source_path, line_only=True)
         source_jump_server.start()
         append_autorefresh(html_file, source_jump_server.url)
@@ -1312,7 +1339,7 @@ def cpb(
         stable_signature = None
         stable_since = None
         listener_warning_shown = False
-        while True:
+        while not stop_event.is_set():
             if not socket_thread.is_alive() and not listener_warning_shown:
                 print(
                     "pydifft cpb: forward-search listener stopped; "
@@ -1338,16 +1365,11 @@ def cpb(
             while not change_queue.empty():
                 change_queue.get_nowait()
                 saw_source_event = True
-            if saw_source_event:
-                rebuild_pending = True
-                stable_signature = None
-                stable_since = None
-
             # PollingEmitter establishes its first snapshot asynchronously.
             # Compare against the last handled source signature as a backstop
             # so an edit in that narrow startup window cannot disappear into
             # the initial snapshot without generating an event.
-            if not rebuild_pending:
+            if saw_source_event or not rebuild_pending:
                 try:
                     current_source_stat = os.stat(source_path)
                 except FileNotFoundError:
@@ -1358,10 +1380,9 @@ def cpb(
                         current_source_stat.st_size,
                         current_source_stat.st_mtime_ns,
                     )
-                if current_source_signature != handled_signature:
-                    rebuild_pending = True
-                    stable_signature = None
-                    stable_since = None
+                rebuild_pending = current_source_signature != handled_signature
+                stable_signature = None
+                stable_since = None
 
             # {{{ wait for an editor save to restore and settle the source
             if rebuild_pending:
@@ -1389,7 +1410,7 @@ def cpb(
                             break
                         try:
                             prepare_comment_source(filename)
-                            run_pandoc(
+                            built_signature = run_pandoc(
                                 filename,
                                 html_file,
                                 comments_to_margin=comments_to_margin,
@@ -1401,7 +1422,10 @@ def cpb(
                                 ),
                                 diff=diff,
                                 desired_width=desired_width,
+                                stop_event=stop_event,
                             )
+                            if stop_event.is_set():
+                                break
                             append_autorefresh(
                                 html_file, source_jump_server.url
                             )
@@ -1430,7 +1454,7 @@ def cpb(
                                 )
                                 traceback.print_exc()
                         else:
-                            handled_signature = attempted_signature
+                            handled_signature = built_signature
                             if not browser_window_is_alive(chrome):
                                 break
                             try:
@@ -1445,6 +1469,9 @@ def cpb(
             time.sleep(MAIN_LOOP_INTERVAL_SECONDS)
     except KeyboardInterrupt:
         pass
+    except HTTPError as error:
+        if chrome is None or not browser_driver_disconnected(error):
+            raise
     finally:
         if socket_thread_started and session_port != FORWARD_SEARCH_PORT:
             try:
@@ -1461,8 +1488,8 @@ def cpb(
         if socket_thread_started:
             socket_thread.join()
         close_browser_window(chrome)
-        if previous_sigterm is not None:
-            signal.signal(signal.SIGTERM, previous_sigterm)
+        for stop_signal, handler in previous_handlers.items():
+            signal.signal(stop_signal, handler)
 
 
 if __name__ == "__main__":

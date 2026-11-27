@@ -10,8 +10,28 @@ from pydifftools.match_spaces import run
 from pydifftools.wrap_sentences import (
     autofix_markdown_file,
     check_prose,
+    markdown_lint_issues_from_text,
     wrap_prose,
 )
+
+
+def test_alignment_restores_caption_breaks_without_editing_image_syntax():
+    reference = (
+        "![The field changes near the sample on the cavity axis.]"
+        '(media/field.png "Field amplitude"\n)'
+        '{#fig:field width="7in"}\n'
+    )
+    expected = reference.replace("Field amplitude", "Field  amplitude")
+    current = expected.replace("cavity axis", "cavity\naxis")
+
+    assert wrap_prose(current, 79) == expected
+    assert markdown_lint_issues_from_text(expected, 79) == []
+    for result in reversed(align_line_breaks(reference, current, width=79)):
+        current = (
+            current[:result["start"]] + result["aligned"]
+            + current[result["stop"]:]
+        )
+    assert current == expected
 
 
 def test_minimal_word_diff_with_ambiguous_matches(monkeypatch):
@@ -430,13 +450,13 @@ def test_many_hunks_do_not_reparse_the_whole_document(monkeypatch):
     )
     current = reference.replace("words\nand", "words and")
     scanned = []
-    original = wrap_sentences._markdown_spans
+    original = wrap_sentences.markdown_syntax
 
     def record_scans(text, *args, **kwargs):
         scanned.append(len(text))
         return original(text, *args, **kwargs)
 
-    monkeypatch.setattr(wrap_sentences, "_markdown_spans", record_scans)
+    monkeypatch.setattr(wrap_sentences, "markdown_syntax", record_scans)
     results = align_line_breaks(reference, current, width=79)
     assert len(results) == 40
     for result in reversed(results):

@@ -2,9 +2,39 @@
 
 import subprocess
 
+import pytest
+
 from pydifftools.line_alignment import align_line_breaks
 from pydifftools.match_spaces import run
 from pydifftools.wrap_sentences import autofix_markdown_file
+
+
+@pytest.mark.parametrize("reference", [
+    "The first sentence ends here. The second sentence starts.\n",
+    "xyz " * 19 + "end\n",   # 79 characters
+    "xyz " * 19 + "end.\n",  # 80 characters
+])
+def test_cpb_and_wmatch_share_matching_with_a_reference_width_policy(
+    tmp_path, reference,
+):
+    old, new = tmp_path / "old.md", tmp_path / "new.md"
+    edited = reference.replace(" ", "\n", 1)
+    old.write_text(reference)
+    new.write_text(edited)
+    run([str(old), str(new)])
+    assert new.read_text() == reference
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "add", new.name], check=True)
+    new.write_text(edited)
+    autofix_markdown_file(new, wrapnumber=79, git_index=True)
+    if len(reference.rstrip()) <= 79:
+        assert new.read_text() == reference
+    else:
+        assert len(new.read_text().splitlines()) == 2
+        assert max(map(len, new.read_text().splitlines())) <= 79
+        assert new.read_text().split() == reference.split()
+    assert not autofix_markdown_file(new, 79, git_index=True)["fixes"]
 
 
 def test_desired_width_keeps_breaks_that_cost_no_anchor_words():

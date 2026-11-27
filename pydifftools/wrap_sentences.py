@@ -3,7 +3,8 @@ import re
 import subprocess
 import sys
 import itertools
-from dataclasses import dataclass, field
+from bisect import bisect_left
+from dataclasses import dataclass, field, replace
 
 from .command_registry import register_command
 from .wrapping_options import (
@@ -26,6 +27,10 @@ SENTENCE_BOUNDARY = re.compile("(" + SENTENCE_END + r")([ \n])")
 # attached to a figure's closing ")" (or any "{#id ...}" block) stays inside
 # the word, so a break never lands inside a pandoc-crossref marker.
 WORD = re.compile(r"(?:(?<=\))\{[^}]*\}|\{#[^}]*\}|\S)+")
+# Image syntax stays attached when emitting source, but occupies no width
+# in the caption. The marked endpoints distinguish it from caption text.
+IMAGE_SYNTAX = re.compile(r"\U000f015d[^\U000f0129\U000f017d]*"
+                          r"[\U000f0129\U000f017d]")
 # A pandoc-crossref marker must directly follow the closing "$$" of its
 # equation or the closing ")" of its figure, and must stay on one line.
 DETACHED_CROSSREF = re.compile(
@@ -41,6 +46,24 @@ LATEX_MACRO_SPLIT = re.compile(
     r"(\\(?:begin|end|usepackage|newcommand|section"
     r"|subsection|subsubsection|paragraph|input){[^}]*})"
 )
+PROSE_FIX_REASONS = {
+    "line too long": (
+        "One or more lines were run-on lines, longer than the line "
+        "width. I moved the extra words onto new lines."
+    ),
+    "trailing dependent phrase": (
+        "One or more lines carry a short dependent phrase after "
+        "punctuation near the maximum width. I moved those phrases "
+        "onto new lines."
+    ),
+    "sentence": (
+        "One or more sentences started in the middle of a source line. "
+        "Since you can line-break the source wherever you want (only "
+        "double breaks give a new paragraph), you should <b>always "
+        "start sentences on new lines</b>. I started each one on a new "
+        "line."
+    ),
+}
 
 
 @dataclass
@@ -82,12 +105,14 @@ class MarkdownBlock:
         return "".join(output)
 
 
-def markdown_blocks(text):
+def markdown_blocks(text, *, targets=None):
     """Split Markdown containers recursively, keeping original source spans."""
     lines = text.splitlines(keepends=True)
     if not lines:
         return []
-    allowed = [flag for flag, _ in classify_lines(text, strict=False)]
+    allowed = [
+        flag for flag, _ in classify_lines(text, strict=False, targets=targets)
+    ]
     marker = re.compile(
         r"^( {0,3})(>|:|[-+*]|[0-9]+[.)])([ \t]+|(?<=>)|(?=\n?$))"
     )
@@ -337,29 +362,28 @@ def match_paren(thistext, pos, opener="{"):
     return pos
 
 
+def image_target_spans(text):
+    """Locate image destinations and attached attributes in source text."""
+    return markdown_syntax(text).image_targets if "![" in text else []
+
+
 def protect_image_targets(text, restore=False):
-    # {{{ Mask image destinations and attributes without changing their width.
-    # Private-use code points keep their whitespace and punctuation out of the
-    # prose tokenizer; the same mapping keeps lint offsets in the source.
+    # {{{ Protect image syntax while retaining source offsets.
+    # Mark the closing bracket and final delimiter in a separate range so
+    # the prose rules can exclude the whole syntax span from the width.
     if restore:
         return "".join(
-            chr(ord(c) - 0xF0000) if 0xF0000 <= ord(c) < 0xF0080 else c
+            chr(ord(c) & 0xFF)
+            if 0xF0000 <= ord(c) < 0xF0080
+            or c in "\U000f015d\U000f0129\U000f017d"
+            else c
             for c in text
         )
-    for match in reversed(list(re.finditer(r"!\[", text))):
-        try:
-            end = match_paren(text, match.end() - 1, "[") + 1
-            if text[end:end + 1] != "(":
-                continue
-            stop = match_paren(text, end, "(") + 1
-            if text[stop:stop + 1] == "{":
-                stop = match_paren(text, stop, "{") + 1
-        except RuntimeError:
-            continue
-        text = text[:end] + "".join(
+    for end, stop in reversed(image_target_spans(text)):
+        text = text[:end] + chr(ord(text[end]) + 0xF0100) + "".join(
             chr(ord(c) + 0xF0000) if ord(c) < 128 else c
-            for c in text[end:stop]
-        ) + text[stop:]
+            for c in text[end + 1:stop - 1]
+        ) + chr(ord(text[stop - 1]) + 0xF0100) + text[stop:]
     return text
     # }}}
 
@@ -369,9 +393,19 @@ def classify_lines(
     filetype="markdown",
     normalize_math=False,
     strict=True,
+    *,
+    targets=None,
 ):
     """Return (wrappable, line) pairs with original line endings and text."""
     lines = text.splitlines(keepends=True)
+    scan_lines = lines
+    if filetype == "markdown":
+        # Targets are syntax even when their contents resemble HTML or math.
+        targets = image_target_spans(text) if targets is None else targets
+        if targets:
+            scan_lines = _mask_spans(text, targets, "\0").splitlines(
+                keepends=True
+            )
     wrappable = [True] * len(lines)
     # {{{ exclude structural blocks before considering paragraphs or math
     idx = 0
@@ -562,7 +596,7 @@ def classify_lines(
             if not wrappable[idx] and not in_math:
                 idx += 1
                 continue
-            line = lines[idx]
+            line = scan_lines[idx]
             dollars = list(DISPLAY_MATH.finditer(line))
             match = re.search(r"<(\w+)(?:\s[^>]*)?>", line)
             if in_math or (
@@ -574,7 +608,7 @@ def classify_lines(
             elif match:
                 opener = "<" + match[1]
                 pos = match.start()
-                remaining = "".join(lines[idx:])
+                remaining = "".join(scan_lines[idx:])
                 try:
                     stop = match_paren(remaining, pos, opener)
                 except RuntimeError:
@@ -593,15 +627,16 @@ def classify_lines(
     # {{{ isolate display math only in otherwise wrappable content
     result = []
     for allowed, group in itertools.groupby(
-        zip(wrappable, lines), lambda x: x[0]
+        zip(wrappable, lines, scan_lines), lambda x: x[0]
     ):
-        content = "".join(line for _, line in group)
+        _, originals, scans = zip(*group)
+        content = "".join(originals)
         if not allowed:
             result.extend(
                 (False, line) for line in content.splitlines(keepends=True)
             )
             continue
-        delimiters = list(DISPLAY_MATH.finditer(content))
+        delimiters = list(DISPLAY_MATH.finditer("".join(scans)))
         offset = 0
         for number in range(0, len(delimiters), 2):
             opening = delimiters[number]
@@ -697,7 +732,9 @@ def _next_break(words, wrapnumber, punctuation_slop, boundaries, offset):
     (which replays the same choice to see if a source line agrees).
     """
     # counts[j] - 1 is the length of the line holding words[: j + 1]
-    counts = list(itertools.accumulate(len(word) + 1 for word in words))
+    counts = list(itertools.accumulate(
+        len(word) + bool(word) for word in words
+    ))
     # the last word that fits within the width (or the first word, if even
     # that is too long)
     upto = max(
@@ -711,11 +748,12 @@ def _next_break(words, wrapnumber, punctuation_slop, boundaries, offset):
         j
         for j, word in enumerate(words[: upto + 1])
         if (
-            word[-1] in ",;:)-–—"
+            word[-1:] and word[-1] in ",;:)-–—"
             or (j + 1 < len(words) and words[j + 1].startswith("("))
             or offset + j in boundaries
         )
         and j < len(words) - 1
+        and words[j + 1]
         and 0 <= wrapnumber - (counts[j] - 1) <= punctuation_slop
     ]
     return max(candidates) if candidates else upto
@@ -762,16 +800,18 @@ def wrap_prose(
             words = [
                 re.sub(r"\s+", " ", word) for word in WORD.findall(sentence)
             ]
-            boundaries = _math_boundaries(words)
+            prose = [IMAGE_SYNTAX.sub("", word) for word in words]
+            boundaries = _math_boundaries(prose)
             if filetype == "latex":
                 indentation = 0
             offset = 0
             while words:
                 upto = _next_break(
-                    words, wrapnumber, punctuation_slop, boundaries, offset
+                    prose, wrapnumber, punctuation_slop, boundaries, offset
                 )
                 lines.append(" " * indentation + " ".join(words[: upto + 1]))
                 words = words[upto + 1 :]
+                prose = prose[upto + 1 :]
                 offset += upto + 1
                 if indentation == 0:
                     indentation = indent_amount
@@ -880,15 +920,14 @@ def wr(
 ):
     alltext, filetype, indent_amount, _ = _prepare(filename, cleanoo, i)
     if filetype == "markdown":
-        # reattach detached pandoc-crossref markers before wrapping
-        alltext = DETACHED_CROSSREF.sub(
-            lambda found: (
-                re.sub(r"\s+", " ", found["marker"])
-                if found["marker"]
-                else found[0][: len(found[0]) - len(found["gap"])]
-            ),
-            alltext,
-        )
+        # Reattach markers only where the parser recognizes active source.
+        for found in reversed(list(_detached_crossrefs(alltext))):
+            group = "marker" if found["marker"] else "gap"
+            start, stop = found.span(group)
+            replacement = re.sub(r"\s+", " ", found[group]) if (
+                group == "marker"
+            ) else ""
+            alltext = alltext[:start] + replacement + alltext[stop:]
         result = wrap_blocks(
             markdown_blocks(alltext),
             wrapnumber,
@@ -921,8 +960,17 @@ def wr(
             fp.write(result)
 
 
-def check_prose(
+@dataclass(frozen=True)
+class ProseBreak:
+    line: int
+    column: int
+    kind: str
+    message: str
+
+
+def prose_breaks(
     content, wrapnumber, punctuation_slop, line_start=1, overflow_words=0,
+    *, all_breaks=False, editable_rows=None, hard_width_rows=(),
 ):
     """Report source lines in `content` that break wr's rules.
 
@@ -951,7 +999,24 @@ def check_prose(
         source = protect_image_targets(stripped, restore=True)
         leading_newlines = len(paragraph) - len(paragraph.lstrip("\n"))
         para_line = line + leading_newlines
-        parts = SENTENCE_BOUNDARY.split(stripped)
+        newlines = (
+            [match.start() for match in re.finditer("\n", source)]
+            if hard_width_rows or editable_rows is not None else []
+        )
+        if hard_width_rows:
+            parts = []
+            previous = 0
+            for match in SENTENCE_BOUNDARY.finditer(stripped):
+                row = para_line - 1 + bisect_left(newlines, match.start(2))
+                if match[2] == " " and row in hard_width_rows:
+                    continue
+                parts.extend((
+                    stripped[previous:match.start()], *match.groups(),
+                ))
+                previous = match.end()
+            parts.append(stripped[previous:])
+        else:
+            parts = SENTENCE_BOUNDARY.split(stripped)
         sentences, separators = [], []
         for j in range(0, len(parts), 3):
             if j + 2 < len(parts):
@@ -979,35 +1044,65 @@ def check_prose(
                             ]
                             for j in range(len(words))
                         ]
-                        boundaries = _math_boundaries(words)
+                        prose = [IMAGE_SYNTAX.sub("", word) for word in words]
+                        prose_ends = [
+                            position + len(word) - removed
+                            for position, word, removed in zip(
+                                positions, words, itertools.accumulate(
+                                    len(raw) - len(caption)
+                                    for raw, caption in zip(words, prose)
+                                ),
+                            )
+                        ]
+                        boundaries = _math_boundaries(prose)
                         fragment_offset = 0
                         while fragment_offset < len(words):
-                            upto = _next_break(
-                                words[fragment_offset:],
-                                wrapnumber,
-                                punctuation_slop,
-                                boundaries,
-                                fragment_offset,
-                            )
-                            wr_end = fragment_offset + upto
                             actual_end = fragment_offset
                             while (
                                 actual_end < len(words) - 1
                                 and not breaks_after[actual_end]
                             ):
                                 actual_end += 1
-                            line_length = (
-                                positions[actual_end]
-                                + len(words[actual_end])
-                                - positions[fragment_offset]
+                            line_start_pos = (
+                                prose_ends[fragment_offset]
+                                - len(prose[fragment_offset])
                             )
+                            line_length = (
+                                prose_ends[actual_end] - line_start_pos
+                            )
+                            row = para_line - 1 + bisect_left(
+                                newlines, positions[fragment_offset],
+                            )
+                            hard_width_only = row in hard_width_rows
+                            if (
+                                hard_width_only and line_length <= wrapnumber
+                                or not hard_width_only
+                                and editable_rows is not None
+                                and row not in editable_rows
+                            ):
+                                fragment_offset = actual_end + 1
+                                continue
+                            wr_end = fragment_offset + _next_break(
+                                prose[fragment_offset:], wrapnumber,
+                                punctuation_slop, boundaries, fragment_offset,
+                            )
+                            if line_length > wrapnumber:
+                                # Source gaps can be wider than the single
+                                # spaces assumed by the wrapping heuristic.
+                                wr_end = min(wr_end, max(
+                                    fragment_offset,
+                                    bisect_left(
+                                        prose_ends,
+                                        line_start_pos + wrapnumber + 1,
+                                        fragment_offset, actual_end + 1,
+                                    ) - 1,
+                                ))
                             # Diff alignment can keep a few extra words to
                             # avoid moving the sentence tail onto a new line.
                             # Count against the character limit, independently
                             # of an earlier preferred punctuation break.
                             excess = sum(
-                                positions[j] + len(words[j])
-                                - positions[fragment_offset] > wrapnumber
+                                prose_ends[j] - line_start_pos > wrapnumber
                                 for j in range(fragment_offset, actual_end + 1)
                             )
                             if actual_end > wr_end and not (
@@ -1036,8 +1131,8 @@ def check_prose(
                                     "\n", 0, split_at
                                 )
                                 issues.append(
-                                    (
-                                        issue_line,
+                                    ProseBreak(
+                                        issue_line, column, rule,
                                         f"{rule}: wr would break after "
                                         f"'{preceding}' (before "
                                         f"'{overflow}'); move '{overflow}' "
@@ -1045,6 +1140,9 @@ def check_prose(
                                         f"this sentence [column {column}]",
                                     )
                                 )
+                                if all_breaks:
+                                    fragment_offset = wr_end + 1
+                                    continue
                             fragment_offset = actual_end + 1
                     # }}}
                 frag_offset += len(fragment)
@@ -1061,8 +1159,10 @@ def check_prose(
                         "\n", 0, sentence_start + len(sentence) - 1
                     )
                     issues.append(
-                        (
+                        ProseBreak(
                             issue_line,
+                            offset - source.rfind("\n", 0, offset),
+                            "sentence",
                             "sentence ends mid-line here; add a line break "
                             "after the sentence, or write a backslash-"
                             r"space (\ ) instead of a plain space if this "
@@ -1070,7 +1170,17 @@ def check_prose(
                         )
                     )
         line += source.count("\n") + len(paragraph) - len(stripped)
-    return sorted(issues)
+    return issues
+
+
+def check_prose(
+    content, wrapnumber, punctuation_slop, line_start=1, overflow_words=0,
+):
+    return sorted(
+        (edit.line, edit.message) for edit in prose_breaks(
+            content, wrapnumber, punctuation_slop, line_start, overflow_words,
+        )
+    )
 
 
 def _iter_classified_spans(text, filetype, line_start=1):
@@ -1115,21 +1225,30 @@ def _iter_block_spans(blocks, wrapnumber, line_start=1):
         line += span
 
 
-# also used by: structural_rows, which separates source structure from
-# prose lint eligibility.
-def _markdown_spans(content, initially_open=False):
-    """Find comments and closed math spans, excluding literal code markers."""
-    spans = []
-    equations = []
+@dataclass
+class MarkdownSyntax:
+    comments: list = field(default_factory=list)
+    equations: list = field(default_factory=list)
+    image_targets: list = field(default_factory=list)
+    literal: list = field(default_factory=list)
+    unfinished_comment: int | None = None
+    unfinished_math: tuple | None = None
+
+
+def markdown_syntax(content, initially_open=False):
+    """Find original source spans before matching, wrapping or reporting."""
+    syntax = MarkdownSyntax()
     start = 0 if initially_open else None
     fence = None
+    fence_start = None
     inline_code = None
+    inline_start = None
     math = None
     math_start = None
     indented_code = False
     previous_blank = True
     offset = 0
-    tokens = re.compile(r"<!--|-->|`+|\$\$|\$")
+    tokens = re.compile(r"<!--|-->|`+|\$\$|\$|!\[")
     for line in content.splitlines(keepends=True):
         opening = re.match(r"^[ \t]*(`{3,}|~{3,})", line)
         if start is None and inline_code is None and math is None:
@@ -1139,6 +1258,7 @@ def _markdown_spans(content, initially_open=False):
                     indented_code = False
                 if (previous_blank and indented) or indented_code:
                     indented_code = True
+                    syntax.literal.append((offset, offset + len(line)))
                     previous_blank = not line.strip()
                     offset += len(line)
                     continue
@@ -1148,62 +1268,112 @@ def _markdown_spans(content, initially_open=False):
                     and len(opening[1]) >= len(fence)
                 ):
                     fence = None
+                    syntax.literal.append((fence_start, offset + len(line)))
                 offset += len(line)
                 continue
             if opening:
                 fence = opening[1]
+                fence_start = offset
                 offset += len(line)
                 continue
         for token in tokens.finditer(line):
             value = token[0]
-            if value in ("$", "$$"):
+            position = offset + token.start()
+            if (
+                syntax.image_targets and position < syntax.image_targets[-1][1]
+                and any(a <= position < b for a, b in syntax.image_targets)
+            ):
+                continue
+            if value in ("$", "$$", "!["):
                 preceding = line[:token.start()]
                 if (len(preceding) - len(preceding.rstrip("\\"))) % 2:
                     continue
             if start is not None:
                 if value == "-->":
-                    spans.append((start, offset + token.end()))
+                    syntax.comments.append((start, offset + token.end()))
                     start = None
             elif inline_code is not None:
                 if value == inline_code:
                     inline_code = None
+                    syntax.literal.append((inline_start, offset + token.end()))
             elif math is not None:
                 if value == math:
-                    equations.append((math_start, offset + token.end()))
+                    syntax.equations.append((math_start, offset + token.end()))
                     math = None
             elif value.startswith("`"):
                 inline_code = value
+                inline_start = position
             elif value in ("$", "$$"):
                 math = value
                 math_start = offset + token.start()
             elif value == "<!--":
                 start = offset + token.start()
+            elif value == "![":
+                try:
+                    end = match_paren(content, position + 1, "[") + 1
+                    if content[end:end + 1] != "(":
+                        continue
+                    stop = match_paren(content, end, "(") + 1
+                    if content[stop:stop + 1] == "{":
+                        stop = match_paren(content, stop, "{") + 1
+                except RuntimeError:
+                    continue
+                syntax.image_targets.append((end - 1, stop))
+                syntax.image_targets.sort()
         offset += len(line)
         previous_blank = not line.strip()
     if start is not None:
-        spans.append((start, len(content)))
-    return spans, equations
+        syntax.comments.append((start, len(content)))
+        syntax.unfinished_comment = start
+    if math is not None:
+        syntax.unfinished_math = (math_start, math)
+    if fence is not None:
+        syntax.literal.append((fence_start, len(content)))
+    return syntax
+
+
+def _mask_spans(text, spans, fill=" "):
+    if not spans:
+        return text
+    masked = list(text)
+    for begin, end in spans:
+        masked[begin:end] = [
+            char if char in "\r\n" else fill for char in text[begin:end]
+        ]
+    return "".join(masked)
+
+
+def _detached_crossrefs(content, syntax=None, start=0):
+    syntax = markdown_syntax(content) if syntax is None else syntax
+    excluded = sorted(syntax.literal + syntax.comments)
+    index = 0
+    for found in DETACHED_CROSSREF.finditer(content, start):
+        while index < len(excluded) and excluded[index][1] <= found.start():
+            index += 1
+        if found["gap"] != "" and (
+            index == len(excluded) or found.end() <= excluded[index][0]
+        ):
+            yield found
 
 
 # also used by: line_alignment.align_line_breaks and word_merge.tokenize.
-def structural_rows(text, filetype):
+def structural_rows(text, filetype, syntax=None):
     """Comments, math, the text with both blanked out, and which rows are
     rewrappable prose.
 
     Comments and math are blanked (keeping their line breaks), so that
     their contents cannot make classify_lines protect a row.
     """
-    comments, equations = _markdown_spans(text)
-    masked = list(text)
-    for begin, end in comments + equations:
-        masked[begin:end] = [
-            char if char in "\r\n" else " " for char in text[begin:end]
-        ]
-    structural = "".join(masked)
+    syntax = markdown_syntax(text) if syntax is None else syntax
+    comments, equations = syntax.comments, syntax.equations
+    structural = _mask_spans(text, comments + equations)
     allowed = [
         flag and bool(line.strip())
         for (flag, _), line in zip(
-            classify_lines(structural, filetype, strict=False),
+            classify_lines(
+                structural, filetype, strict=False,
+                targets=syntax.image_targets,
+            ),
             text.splitlines(keepends=True),
         )
     ]
@@ -1213,78 +1383,124 @@ def structural_rows(text, filetype):
 # also used by: line_alignment.align_line_breaks for comment-aware alignment.
 def _html_comment_spans(content, initially_open=False):
     """Find comment offsets, excluding literal delimiters in code or math."""
-    return _markdown_spans(content, initially_open)[0]
+    return markdown_syntax(content, initially_open).comments
 
 
 # also used by: line_alignment.align_line_breaks, which masks complete hunks.
 def _mask_html_comments(content, initially_open=False):
     """Hide comment characters while preserving offsets and line endings."""
-    masked = list(content)
-    for start, stop in _html_comment_spans(content, initially_open):
-        masked[start:stop] = [
-            char if char in "\r\n" else " " for char in content[start:stop]
-        ]
-    return "".join(masked)
+    return _mask_spans(content, _html_comment_spans(content, initially_open))
+
+
+def markdown_prose_spans(masked_content, wrapnumber):
+    """Yield prose with its source line and available container width."""
+    # trailing spaces are reported separately below, and a double space
+    # (a hard line break) must not look like a sentence ending mid-line
+    return _iter_block_spans(
+        markdown_blocks(re.sub(r"[ \t]+$", "", masked_content, flags=re.M)),
+        wrapnumber,
+    )
+
+
+def markdown_wrap_edits(
+    content, wrapnumber, punctuation_slop, editable_rows, hard_width_rows,
+    *, syntax=None,
+):
+    """Plan replacements of source lines using parsed Markdown and offsets.
+
+    Row indices are zero based. Edited prose uses the usual sentence and
+    clause rules; other selected rows are subject only to the hard width.
+    """
+    syntax = markdown_syntax(content) if syntax is None else syntax
+    masked = _mask_spans(content, syntax.comments)
+    source_rows = content.splitlines(keepends=True)
+    masked_rows = masked.splitlines(keepends=True)
+    plan = {}
+    # {{{ Map breaks in container bodies back to their original source rows.
+    for line, width, span in markdown_prose_spans(masked, wrapnumber):
+        rows = span.splitlines(keepends=True)
+        block_rows = range(line - 1, line - 1 + len(rows))
+        if not any(
+            row in editable_rows or row in hard_width_rows
+            and len(rows[row - line + 1].rstrip()) > width
+            for row in block_rows
+        ):
+            continue
+        for edit in prose_breaks(
+            span, width, punctuation_slop, line, all_breaks=True,
+            editable_rows=editable_rows, hard_width_rows=hard_width_rows,
+        ):
+            row = edit.line - 1
+            if row not in editable_rows and row not in hard_width_rows:
+                continue
+            prefix_width = (
+                len(masked_rows[row].rstrip())
+                - len(rows[row - line + 1].rstrip())
+            )
+            edit = replace(edit, column=edit.column + prefix_width)
+            plan.setdefault(row, {})[edit.column] = edit
+    # }}}
+    for row, edits in plan.items():
+        original = source_rows[row].rstrip("\r\n")
+        ending = source_rows[row][len(original):]
+        columns = [0, *(column - 1 for column in sorted(edits)), len(original)]
+        parts = [original[a:b] for a, b in zip(columns, columns[1:])]
+        if all(part.strip() for part in parts):
+            prefix = _continuation_prefix(original)
+            yield row, ((ending or "\n") + prefix).join(
+                part.lstrip() if index else part
+                for index, part in enumerate(
+                    [part.rstrip() for part in parts[:-1]] + parts[-1:]
+                )
+            ) + ending, min(edits.values(), key=lambda edit: edit.column).kind
 
 
 def markdown_lint_issues_from_text(
     content, wrapnumber=45, punctuation_slop=20, overflow_words=0,
+    *, check_wrapping=True, syntax=None,
 ):
     """Return Markdown writing issues, including unfinished source spans."""
-    masked_content = _mask_html_comments(content)
-    comment_spans = _html_comment_spans(content)
-    masked_lines = masked_content.splitlines()
-    prose_content = masked_content
-    # trailing spaces are reported separately below, and a double space
-    # (a hard line break) must not look like a sentence ending mid-line
-    prose_content = re.sub(r"[ \t]+$", "", prose_content, flags=re.M)
+    syntax = markdown_syntax(content) if syntax is None else syntax
     issues = [
         issue
-        for line, width, span in _iter_block_spans(
-            markdown_blocks(prose_content), wrapnumber
+        for line, width, span in markdown_prose_spans(
+            _mask_spans(content, syntax.comments), wrapnumber,
         )
         for issue in check_prose(
             span, width, punctuation_slop, line, overflow_words,
         )
-    ]
+    ] if check_wrapping else []
     issues.extend(
         (issue["line"], issue["message"])
-        for issue in unclosed_markdown_spans(content)
+        for issue in unclosed_markdown_spans(content, syntax=syntax)
     )
     # {{{ report single trailing spaces, misspelled comment tags and
     # detached crossref markers
-    fence = None
     offset = 0
+    protected = syntax.comments + syntax.image_targets + syntax.literal
+    tag_lines = _mask_spans(content, protected).splitlines()
     for number, raw_line in enumerate(content.splitlines(keepends=True), 1):
         line = raw_line.rstrip("\r\n")
         last_character = offset + len(line) - 1
         offset += len(raw_line)
-        opening = re.match(r"[ \t]*(\x60{3,}|~{3,})", line)
-        if opening and (fence is None or opening[1].startswith(fence)):
-            fence = None if fence else opening[1]
-            continue
-        if fence is not None:
-            continue
         if re.search(r"(?<! ) $", line) and not any(
-            start <= last_character < stop for start, stop in comment_spans
+            start <= last_character < stop for start, stop in protected
         ):
             issues.append((
                 number,
                 "trailing space: remove the single space at the end of this "
                 "line (two spaces are a deliberate hard line break)",
             ))
-        misspelled = MISSPELLED_COMMENT_TAG.search(masked_lines[number - 1])
+        misspelled = MISSPELLED_COMMENT_TAG.search(tag_lines[number - 1])
         if misspelled:
             issues.append((
                 number,
                 f"misspelled comment tag: {misspelled[0]} should be "
                 f"<{misspelled[1]}{misspelled[2]}com{misspelled[3] or ''}>",
             ))
-    for found in DETACHED_CROSSREF.finditer(prose_content):
-        if found["gap"] == "":
-            continue
+    for found in _detached_crossrefs(content, syntax):
         issues.append((
-            prose_content.count("\n", 0, found.start()) + 1,
+            content.count("\n", 0, found.start()) + 1,
             "detached crossref marker: keep the {#eq:...} or {#fig:...} "
             "marker on one line, directly after the closing $$ or )",
         ))
@@ -1292,98 +1508,49 @@ def markdown_lint_issues_from_text(
     return sorted(issues)
 
 
-def unclosed_markdown_spans(content, math_line_limit=50):
-    """Find unfinished math and HTML comments in Markdown source."""
-    lines = content.splitlines(keepends=True)
+def unclosed_markdown_spans(content, math_line_limit=50, *, syntax=None):
+    """Report unfinished constructs from the shared syntax scan."""
+    syntax = markdown_syntax(content) if syntax is None else syntax
     spans = []
-    fence_char = None
-    fence_size = 0
-    math_start = None
-    math_delimiter = None
-    math_content = []
-    comment_start = None
-    comment_content = []
-    inline_code_delimiter = None
-    token_pattern = re.compile(
-        r"<!--|-->|(?<!\\)\$\$|(?<!\\)\$|`+"
-    )
-
-    for line_number, line in enumerate(lines, 1):
-        fence = re.match(r"^[ \t]*(?P<marker>`{3,}|~{3,})", line)
-        if fence_char is not None:
-            if (
-                fence
-                and fence.group("marker")[0] == fence_char
-                and len(fence.group("marker")) >= fence_size
-            ):
-                fence_char = None
-            continue
-        if fence:
-            fence_char = fence.group("marker")[0]
-            fence_size = len(fence.group("marker"))
-            continue
-
-        for token in token_pattern.finditer(line):
-            value = token.group()
-            if comment_start is not None:
-                if value == "-->":
-                    comment_start = None
-                    comment_content = []
-                continue
-            if math_start is not None:
-                if value == math_delimiter:
-                    math_start = None
-                    math_delimiter = None
-                    math_content = []
-                continue
-            if inline_code_delimiter is not None:
-                if value.startswith("`") and value == inline_code_delimiter:
-                    inline_code_delimiter = None
-                continue
-            if value.startswith("`"):
-                inline_code_delimiter = value
-                continue
-            if value == "<!--":
-                comment_start = line_number
-                comment_content = [line[token.start() :]]
-            elif value in {"$", "$$"}:
-                math_start = line_number
-                math_delimiter = value
-                math_content = [line[token.start() :]]
-        if comment_start is not None and line_number > comment_start:
-            comment_content.append(line)
-        if math_start is not None and line_number > math_start:
-            math_content.append(line)
-
-    if comment_start is not None:
-        spans.append(
-            {
-                "kind": "comment",
-                "line": comment_start,
-                "message": "unclosed HTML comment: add '-->' to close it",
-                "offending": "".join(comment_content).rstrip("\r\n"),
-            }
-        )
-    if (
-        math_start is not None
-        and len(lines) - math_start + 1 >= math_line_limit
-    ):
-        spans.append(
-            {
+    if syntax.unfinished_comment is not None:
+        start = syntax.unfinished_comment
+        spans.append({
+            "kind": "comment",
+            "line": content.count("\n", 0, start) + 1,
+            "message": "unclosed HTML comment: add '-->' to close it",
+            "offending": content[start:].rstrip("\r\n"),
+        })
+    if syntax.unfinished_math is not None:
+        start, delimiter = syntax.unfinished_math
+        if len(content[start:].splitlines()) >= math_line_limit:
+            spans.append({
                 "kind": "math",
-                "line": math_start,
+                "line": content.count("\n", 0, start) + 1,
                 "message": (
                     "unclosed math: add the matching "
-                    f"'{math_delimiter}' to close it"
+                    f"'{delimiter}' to close it"
                 ),
-                "offending": "".join(math_content).rstrip("\r\n"),
-                "delimiter": math_delimiter,
-            }
-        )
+                "offending": content[start:].rstrip("\r\n"),
+                "delimiter": delimiter,
+            })
     return spans
 
 
+def _continuation_prefix(line):
+    container = re.match(
+        r"^((?:[ \t]*>[ \t]?)*)(?:(:|[-+*]|[0-9]+[.)])([ \t]+))?",
+        line,
+    )
+    quote, marker, space = container.groups()
+    if marker:
+        return quote + " " * max(
+            4 if marker == ":" else 1, len((marker + space).expandtabs(4)),
+        )
+    return quote or re.match(r"^[ \t]*", line)[0]
+
+
 # Kept public so the automatic source edits can be unit-tested directly.
+# also used by: line_alignment.py, when linting changed hunks.
 def apply_markdown_issue_fix(content, line_number, message):
     """Insert one source line break for a wrchk Markdown issue."""
     lines = content.splitlines(keepends=True)
@@ -1395,11 +1562,7 @@ def apply_markdown_issue_fix(content, line_number, message):
     if message.startswith("detached crossref marker"):
         # {{{ join the marker onto its "$$" or ")" (this can remove a line)
         start = sum(len(line) for line in lines[:index])
-        found = next(
-            found
-            for found in DETACHED_CROSSREF.finditer(content, start)
-            if found["gap"] != ""
-        )
+        found = next(_detached_crossrefs(content, start=start))
         if found["gap"] is None:
             span = found.span("marker")
             joined = re.sub(r"\s+", " ", found["marker"])
@@ -1433,19 +1596,7 @@ def apply_markdown_issue_fix(content, line_number, message):
     if not ending:
         ending = "\n"
 
-    # {{{ keep continuation lines inside their Markdown container
-    container = re.match(
-        r"^((?:[ \t]*>[ \t]?)*)(?:([-+*]|[0-9]+[.)])([ \t]+))?",
-        old_line,
-    )
-    quote_prefix, marker, marker_space = container.groups()
-    if marker:
-        prefix = quote_prefix + " " * (len(marker) + len(marker_space))
-    elif quote_prefix:
-        prefix = quote_prefix
-    else:
-        prefix = re.match(r"^[ \t]*", old_line).group()
-    # }}}
+    prefix = _continuation_prefix(old_line)
     if message.startswith("misspelled comment tag:"):
         fixed = MISSPELLED_COMMENT_TAG.sub(
             lambda found: f"<{found[1]}{found[2]}com{found[3] or ''}>",
@@ -1493,14 +1644,7 @@ def apply_markdown_issue_fix(content, line_number, message):
             split_at = position.start(1)
         first = old_line[:split_at].rstrip()
         second = old_line[split_at:].lstrip(" \t")
-        reason = (
-            "One or more lines carry a short dependent phrase after "
-            "punctuation near the maximum width. I moved those phrases "
-            "onto new lines."
-            if message.startswith("trailing dependent phrase:") else
-            "One or more lines were run-on lines, longer than the line "
-            "width. I moved the extra words onto new lines."
-        )
+        reason = PROSE_FIX_REASONS[message.split(":", 1)[0]]
     elif message.startswith("sentence ends mid-line"):
         boundary = SENTENCE_BOUNDARY.search(
             _mask_html_comments(content).splitlines()[index]
@@ -1512,13 +1656,7 @@ def apply_markdown_issue_fix(content, line_number, message):
             )
         first = old_line[: boundary.end(1)].rstrip()
         second = old_line[boundary.end(2) :].lstrip(" \t")
-        reason = (
-            "One or more sentences started in the middle of a source line. "
-            "Since you can line-break the source wherever you want (only "
-            "double breaks give a new paragraph), you should <b>always "
-            "start sentences on new lines</b>. I started each one on a new "
-            "line."
-        )
+        reason = PROSE_FIX_REASONS["sentence"]
     else:
         raise ValueError(f"No automatic fix is available for {message!r}")
 
@@ -1546,6 +1684,7 @@ def autofix_markdown_file(
     """
     with open(filename, encoding="utf-8", newline="") as fp:
         content = fp.read()
+    original = content
     fixes = []
     baseline = None
     if git_ref is not None or git_index or git_head:
@@ -1586,16 +1725,20 @@ def autofix_markdown_file(
         results = align_line_breaks(
             baseline, content, width=wrapnumber, desired_width=desired_width,
             punctuation_slop=punctuation_slop,
+            whole_document=True,
         )
         shift = 0
-        updates = []
+        output = []
+        position = 0
         for result in results:
             line = result["line"] + shift
             moves = result["moves"]
             chosen = result["aligned"]
             if chosen != result["before"]:
                 reasons = []
-                if not moves and result["linted"] != result["before"]:
+                if result.get("reason"):
+                    reasons.append(PROSE_FIX_REASONS[result["reason"]])
+                elif not moves and result["linted"] != result["before"]:
                     reasons.append(
                         "One or more lines broke the source wrapping rules. "
                         "I moved trailing phrases or extra words to new "
@@ -1613,17 +1756,32 @@ def autofix_markdown_file(
                     "before": result["before"].rstrip("\r\n"),
                     "after": chosen.rstrip("\r\n"),
                 })
-            updates.append((result["start"], result["stop"], chosen))
+                output.extend((content[position:result["start"]], chosen))
+                position = result["stop"]
             shift += chosen.count("\n") - result["before"].count("\n")
-        for start, stop, chosen in reversed(updates):
-            content = content[:start] + chosen + content[stop:]
+        output.append(content[position:])
+        content = "".join(output)
         # }}}
-    # Lint once, fix every flagged line, then lint again, since fixing one
-    # issue at a time re-lints the whole file for every single fix.
+    else:
+        # Without a reference, use the same planner with all prose editable.
+        rows = content.splitlines(keepends=True)
+        for row, replacement, kind in sorted(markdown_wrap_edits(
+            content, wrapnumber, punctuation_slop, range(len(rows)), (),
+        )):
+            fixes.append({
+                "line": row + 1, "reason": PROSE_FIX_REASONS[kind],
+                "before": rows[row].rstrip("\r\n"),
+                "after": replacement.rstrip("\r\n"),
+            })
+            rows[row] = replacement
+        content = "".join(rows)
+    # Syntax fixes can remove lines, so handle each batch from bottom to top.
+    # Prose breaks were already decided together with the source layout.
     for _ in range(100):
+        syntax = markdown_syntax(content)
         issues = markdown_lint_issues_from_text(
             content, wrapnumber=wrapnumber, punctuation_slop=punctuation_slop,
-            overflow_words=0,
+            check_wrapping=False, syntax=syntax,
         )
         fixable = {}
         for line_number, message in issues:
@@ -1660,12 +1818,15 @@ def autofix_markdown_file(
     else:
         raise RuntimeError("Too many automatic Markdown fixes were needed.")
 
-    if fixes:
+    # Keep the file timestamp stable when the final plan changes nothing.
+    if content != original:
         with open(filename, "w", encoding="utf-8", newline="") as fp:
             fp.write(content)
+    else:
+        fixes.clear()
     return {
         "fixes": fixes,
-        "warnings": unclosed_markdown_spans(content),
+        "warnings": unclosed_markdown_spans(content, syntax=syntax),
         "layout": [],
     }
 

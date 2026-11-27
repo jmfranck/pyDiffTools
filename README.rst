@@ -17,6 +17,15 @@ included are (listed in order of fun/utility):
   `filename.md`, build the result,
   and displays it in your browser. 
 
+  Before completing a change to ``cpb`` or its source formatting or browser
+  startup code, run the real Chrome smoke test locally::
+
+    QT_QPA_PLATFORM=offscreen PYDIFFTOOLS_LOCAL_CPB_BROWSER=1 \
+      python -m pytest -q -k cpb_cli_loads_the_preview_in_chrome
+
+  It checks that the command renders a file with Pandoc and loads the result
+  in Chrome. This check runs only when explicitly enabled.
+
   Source diff linting minimizes line-break changes against the Git index
   (staging area) by default, matching plain ``git diff``. Use
   ``pydifft cpb filename.md --diff-base @`` to compare against HEAD, or
@@ -28,7 +37,8 @@ included are (listed in order of fun/utility):
   their notice appears. Each page shows as many changed hunks as fit in the
   window, with a blank line separating hunks; larger changes are applied
   just like single-break changes.
-  Diff alignment has separate eligibility rules from prose linting.
+  The source parser identifies which whitespace can match the reference
+  and which source ranges can be wrapped.
   Equations and HTML comment contents participate in alignment, including
   hunks that begin inside them. Display equations and hidden text remain
   exempt from prose wrapping and sentence rules. Equation delimiters are
@@ -278,23 +288,22 @@ included are (listed in order of fun/utility):
 
     * ``cpb`` and ``wmatch`` share a matcher that finds changed hunks, aligns
       their words using Git's minimal diff, and restores reference whitespace.
-      It finishes restoring whitespace and complete reference lines, then
-      computes a new line diff before checking short lines and wrapping
-      rules. A short line (three words or fewer) that is still in the diff
+      The source parser identifies protected Markdown for the matcher and
+      wrapper. A short line (three words or fewer) that is still in the diff
       joins one neighbour when the joined line fits in the desired width.
       It can join an unchanged neighbour, and prefers a break already
-      joined in the edit since that keeps the edit's layout. ``wmatch`` never
-      splits a restored reference line.
+      joined in the edit since that keeps the edit's layout.
       ``--desired-width`` (default 45) limits the width of
       lines created by removing existing breaks to match Git where the
       words still differ; such a break is retained when joining would exceed
       that desired width, unless it falls between two words that share a
       line in Git (it would add those unchanged words to the diff). A line
       that becomes identical to Git's once its whitespace matches therefore
-      keeps Git's layout, unless it exceeds the maximum width.
+      keeps Git's layout subject to the command's width policy.
 
     * ``--wrapnumber`` independently sets the maximum width (79 for ``cpb``
-      and ``wmatch``). ``cpb`` also checks stable prose from the Git baseline.
+      and ``wmatch``). The same wrapping code enforces it in both commands.
+      ``cpb`` enforces the maximum on stable prose from the Git baseline too.
       For example, ``cpb --desired-width 50 --wrapnumber 85 manuscript.md``
       changes both limits.
       ``wmatch`` uses this maximum for edited prose, retaining unchanged

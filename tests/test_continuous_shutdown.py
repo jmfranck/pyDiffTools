@@ -1,6 +1,8 @@
 import errno
 import os
+import shutil
 import signal
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -8,9 +10,10 @@ from pathlib import Path
 import pytest
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
+from urllib3.exceptions import MaxRetryError, NewConnectionError
 from watchdog.observers.polling import PollingObserver
 
-from pydifftools import continuous
+from pydifftools import command_line, continuous
 from pydifftools.forward_search import (
     bind_forward_search_server,
     send_forward_search,
@@ -80,6 +83,7 @@ def install_cpb_runtime(monkeypatch, build_hook=None):
     port_reservation.close()
 
     def fake_run_pandoc(filename, html_file, **_kwargs):
+        stat = Path(filename).stat()
         source_text = Path(filename).read_text()
         builds.append(source_text)
         build_threads.append(threading.current_thread())
@@ -89,6 +93,7 @@ def install_cpb_runtime(monkeypatch, build_hook=None):
         Path(html_file).write_text(
             "<html><head></head><body>" + source_text + "</body></html>"
         )
+        return stat.st_ino, stat.st_size, stat.st_mtime_ns
 
     def fake_chrome(**_kwargs):
         chrome_calls.append(True)
@@ -222,6 +227,216 @@ def test_cpb_rebuilds_common_save_styles(
             for options in runtime["build_options"]] == [diff, diff]
     assert runtime["browser"].refresh_calls == 1
     assert_clean_polling_shutdown(runtime)
+
+
+def test_cpb_ignores_its_own_fixes_but_rebuilds_after_editor_save(
+    monkeypatch, tmp_path,
+):
+    source = tmp_path / "content.md"
+    source.write_text("Initial unwrapped text.\n")
+    runtime = install_cpb_runtime(monkeypatch)
+    build = continuous.run_pandoc
+
+    def build_after_autocorrect(filename, html_file, **options):
+        before = source.read_text()
+        after = before.replace("unwrapped", "wrapped")
+        if after != before:
+            source.write_text(after)
+        return build(filename, html_file, **options)
+
+    monkeypatch.setattr(continuous, "run_pandoc", build_after_autocorrect)
+    refreshed = runtime["browser"].refreshed
+    settle = (
+        continuous.SOURCE_SETTLE_SECONDS + 3 * continuous.POLL_INTERVAL_SECONDS
+    )
+
+    def editor():
+        assert not refreshed.wait(timeout=settle)
+        source.write_text("Edited unwrapped text.\n")
+        assert refreshed.wait(timeout=2)
+        refreshed.clear()
+        assert not refreshed.wait(timeout=settle)
+
+    run_cpb_with_editor(source, runtime["browser"], editor)
+
+    assert runtime["builds"] == [
+        "Initial wrapped text.\n", "Edited wrapped text.\n",
+    ]
+    assert runtime["browser"].refresh_calls == 1
+    assert_clean_polling_shutdown(runtime)
+
+
+def test_cpb_cli_builds_opens_and_reloads_a_real_pandoc_preview(
+    monkeypatch, tmp_path,
+):
+    for tool in ("pandoc", "pandoc-crossref"):
+        if not shutil.which(tool):
+            pytest.skip(f"{tool} is not available")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(
+        "PYDIFFTOOLS_UPDATE_CHECK_LAST_RAN_UTC_DATE",
+        time.strftime("%Y-%m-%d", time.gmtime()),
+    )
+    source = tmp_path / "content.md"
+    html = tmp_path / "content.html"
+    reference = (
+        "![The field changes along the cavity axis.]"
+        '(<diagram> "Literal <tag>")'
+        "{#fig:field}\n\n" + "xyz " * 19 + "end.\n"
+    )
+    source.write_text(reference)
+    subprocess.run(["git", "init", "-q"], check=True)
+    subprocess.run(["git", "add", source.name], check=True)
+    source.write_text(reference.replace("cavity axis", "cavity\naxis"))
+    with bind_forward_search_server(
+        (continuous.FORWARD_SEARCH_HOST, 0), "test reservation",
+    ) as reservation:
+        port = reservation.getsockname()[1]
+    monkeypatch.setattr(continuous, "FORWARD_SEARCH_PORT", port)
+    monkeypatch.setattr(continuous, "zotero_notice", lambda: None)
+    reports = []
+    monkeypatch.setattr(
+        continuous, "show_markdown_fix_dialog",
+        lambda report, **_options: reports.append(report),
+    )
+
+    class BrowserWithDriverDisconnect(FakeBrowser):
+        @property
+        def window_handles(self):
+            if self.closed:
+                raise MaxRetryError(
+                    None, "/session/preview/window/handles",
+                    NewConnectionError(None, "Connection refused"),
+                )
+            return super().window_handles
+
+    browser = BrowserWithDriverDisconnect()
+    monkeypatch.setattr(continuous, "start_browser", lambda: browser)
+    previews = []
+
+    def open_preview(url):
+        assert url == html.as_uri()
+        previews.append(html.read_text())
+        formatted = source.read_text()
+        assert "cavity axis." in formatted
+        assert max(map(len, formatted.split("\n\n")[1].splitlines())) <= 79
+        source.write_text(
+            formatted + "\nThe saved edit reached the preview.\n"
+        )
+
+    def reload_preview():
+        previews.append(html.read_text())
+        browser.close()
+
+    monkeypatch.setattr(browser, "get", open_preview)
+    monkeypatch.setattr(browser, "refresh", reload_preview)
+    deadline = threading.Timer(10, browser.close)
+    deadline.start()
+    try:
+        command_line.main(["cpb", source.name])
+    finally:
+        deadline.cancel()
+
+    first, second = previews
+    assert 'id="fig:field"' in first
+    assert 'id="pydifft-source-jump-config"' in first
+    assert "The saved edit reached the preview." in second
+    assert len(reports) == 1 and not reports[0]["warnings"]
+    assert browser.quit_calls == 1
+
+
+def test_cpb_sigterm_dismisses_source_fixes_before_opening_preview(
+    monkeypatch, tmp_path, capsys,
+):
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication
+
+    source = tmp_path / "content.md"
+    source.write_text("Many different words need to wrap. " * 5 + "\n")
+    monkeypatch.setattr(continuous, "zotero_notice", lambda: None)
+    with bind_forward_search_server(
+        (continuous.FORWARD_SEARCH_HOST, 0), "test reservation",
+    ) as reservation:
+        port = reservation.getsockname()[1]
+    monkeypatch.setattr(continuous, "FORWARD_SEARCH_PORT", port)
+    monkeypatch.setattr(
+        continuous, "start_browser",
+        lambda: pytest.fail("termination should stop before browser startup"),
+    )
+    application = QApplication.instance() or QApplication([])
+    sent = []
+
+    def terminate_from_dialog():
+        dialog = application.activeModalWidget()
+        if dialog is None:
+            return
+        timer.stop()
+        sent.append(dialog.windowTitle())
+        # Bound the wait even when the handler raises inside the Qt callback.
+        QTimer.singleShot(1000, dialog.reject)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    timer = QTimer()
+    timer.timeout.connect(terminate_from_dialog)
+    timer.start(10)
+    try:
+        continuous.cpb(str(source))
+    finally:
+        timer.stop()
+
+    assert sent == ["Markdown source fixes"]
+    assert "KeyboardInterrupt" not in capsys.readouterr().err
+    assert not source.with_suffix(".html").exists()
+
+
+@pytest.mark.skipif(
+    os.environ.get("PYDIFFTOOLS_LOCAL_CPB_BROWSER") != "1",
+    reason="opt in to the local Chrome smoke test",
+)
+def test_cpb_cli_loads_the_preview_in_chrome(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(
+        "PYDIFFTOOLS_UPDATE_CHECK_LAST_RAN_UTC_DATE",
+        time.strftime("%Y-%m-%d", time.gmtime()),
+    )
+    monkeypatch.setattr(continuous, "zotero_notice", lambda: None)
+    source = tmp_path / "content.md"
+    source.write_text(
+        '# Preview smoke test\n\n![Caption.](<diagram> "Literal <tag>")'
+        "{#fig:smoke}\n"
+    )
+    with bind_forward_search_server(
+        (continuous.FORWARD_SEARCH_HOST, 0), "test reservation",
+    ) as reservation:
+        port = reservation.getsockname()[1]
+    monkeypatch.setattr(continuous, "FORWARD_SEARCH_PORT", port)
+    chrome = webdriver.Chrome
+    visited = []
+
+    def headless_chrome(**kwargs):
+        options = kwargs.setdefault("options", webdriver.ChromeOptions())
+        options.add_argument("--headless=new")
+        options.add_argument("--disable-background-networking")
+        options.page_load_strategy = "eager"
+        preview = chrome(**kwargs)
+        navigate = preview.get
+
+        def verify(url):
+            navigate(url)
+            assert preview.current_url == url
+            assert preview.execute_script(
+                "return !!document.getElementById('fig:smoke')"
+                " && !!document.getElementById('pydifft-source-jump-config');"
+            )
+            visited.append(url)
+            preview.close()
+
+        preview.get = verify
+        return preview
+
+    monkeypatch.setattr(webdriver, "Chrome", headless_chrome)
+    command_line.main(["cpb", source.name])
+    assert visited == [source.with_suffix(".html").as_uri()]
 
 
 def test_cpb_does_not_rebuild_or_reopen_after_browser_closes(
