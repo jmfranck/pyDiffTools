@@ -237,12 +237,35 @@ def test_detached_crossref_marker_is_flagged_and_joined(tmp_path, detached):
     report = autofix_markdown_file(path)
 
     fixed = path.read_text()
-    assert [message.split(":")[0] for _, message in issues] == [
-        "detached crossref marker"
+    assert "detached crossref marker" in [
+        message.split(":")[0] for _, message in issues
     ]
     assert report["fixes"]
     assert markdown_lint_issues_from_text(fixed, wrapnumber=55) == []
     assert re.search(r"(\$\$|\))\{#(eq|fig):[^}\n]*\}", fixed)
+
+
+@pytest.mark.parametrize("prefix", ["", "> ", "- "])
+def test_image_caption_wraps_without_splitting_destination(tmp_path, prefix):
+    path = tmp_path / "figure.md"
+    source = (prefix + "![A long caption with several words. Another sentence "
+              'follows here.](images/a(b).png "a title. With spaces")'
+              '{#fig:example width="6 in"}\n')
+    path.write_text(source)
+    assert markdown_lint_issues_from_text(source, wrapnumber=30)
+    wr(str(path), 30)
+    wrapped = path.read_text()
+    assert "words.\n" in wrapped
+    assert (
+        '(images/a(b).png "a title. With spaces")'
+        '{#fig:example width="6 in"}'
+    ) in wrapped
+    assert markdown_lint_issues_from_text(wrapped, wrapnumber=30) == []
+    wr(str(path), 30)
+    assert path.read_text() == wrapped
+    path.write_text(source)
+    autofix_markdown_file(path, wrapnumber=30)
+    assert not markdown_lint_issues_from_text(path.read_text(), wrapnumber=30)
 
 
 def test_figure_crossref_marker_is_never_split_from_its_figure(tmp_path):

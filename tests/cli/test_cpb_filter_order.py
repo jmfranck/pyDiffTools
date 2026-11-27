@@ -1,8 +1,50 @@
 from pathlib import Path
+import subprocess
 
 import pytest
 
 from pydifftools.continuous import run_pandoc
+
+
+def test_cpb_fixes_caption_before_multiline_image_destination(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.chdir(tmp_path)
+    markdown = tmp_path / "content.md"
+    html = tmp_path / "content.html"
+    target = '(media/field.png\n){#fig:field width="7in"}\n'
+    figure = (
+        "![The field changes near the sample on the cavity axis.]" + target
+    )
+    markdown.write_text(figure + "\nA separate paragraph.\n")
+    subprocess.run(["git", "init", "-q"], check=True)
+    subprocess.run(["git", "add", "content.md"], check=True)
+    markdown.write_text(figure + "\nA revised paragraph.\n")
+
+    monkeypatch.setattr(
+        "pydifftools.continuous.show_markdown_fix_dialog", lambda report: True
+    )
+    monkeypatch.setattr(
+        "pydifftools.continuous.shutil.which", lambda name: "/tool"
+    )
+    real_run = subprocess.run
+
+    def run_command(command, **kwargs):
+        if command[0] == "git":
+            return real_run(command, **kwargs)
+        Path(command[command.index("-o") + 1]).write_text(
+            "<html><head></head><body>ok</body></html>"
+        )
+
+    monkeypatch.setattr("pydifftools.continuous.subprocess.run", run_command)
+
+    run_pandoc(str(markdown), str(html), wrapnumber=55)
+
+    assert html.is_file()
+    assert markdown.read_text() == (
+        "![The field changes near the sample on the cavity\n"
+        "axis.]" + target + "\nA revised paragraph.\n"
+    )
 
 
 @pytest.mark.parametrize("declaration", [

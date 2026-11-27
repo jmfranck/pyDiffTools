@@ -43,7 +43,6 @@ from pydifftools.wrap_sentences import (
             "custom: value\n"
             "---\n"
         ),
-        "![a very long figure description](image.png)\n",
         "<div>\nlong content with $$ symbols\n\nmore content\n</div>\n",
     ],
 )

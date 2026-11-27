@@ -337,6 +337,33 @@ def match_paren(thistext, pos, opener="{"):
     return pos
 
 
+def protect_image_targets(text, restore=False):
+    # {{{ Mask image destinations and attributes without changing their width.
+    # Private-use code points keep their whitespace and punctuation out of the
+    # prose tokenizer; the same mapping keeps lint offsets in the source.
+    if restore:
+        return "".join(
+            chr(ord(c) - 0xF0000) if 0xF0000 <= ord(c) < 0xF0080 else c
+            for c in text
+        )
+    for match in reversed(list(re.finditer(r"!\[", text))):
+        try:
+            end = match_paren(text, match.end() - 1, "[") + 1
+            if text[end:end + 1] != "(":
+                continue
+            stop = match_paren(text, end, "(") + 1
+            if text[stop:stop + 1] == "{":
+                stop = match_paren(text, stop, "{") + 1
+        except RuntimeError:
+            continue
+        text = text[:end] + "".join(
+            chr(ord(c) + 0xF0000) if ord(c) < 128 else c
+            for c in text[end:stop]
+        ) + text[stop:]
+    return text
+    # }}}
+
+
 def classify_lines(
     text,
     filetype="markdown",
@@ -528,7 +555,7 @@ def classify_lines(
                 if re.fullmatch(r" {0,3}(?:=+|-+)[ \t]*\n?", lines[idx + 1]):
                     wrappable[idx : idx + 2] = [False, False]
         # }}}
-        # {{{ preserve figures and HTML outside tables and math
+        # {{{ preserve HTML outside tables and math
         idx = 0
         in_math = False
         while idx < len(lines):
@@ -537,7 +564,7 @@ def classify_lines(
                 continue
             line = lines[idx]
             dollars = list(DISPLAY_MATH.finditer(line))
-            match = re.search(r"!\[.*?\]\(|<(\w+)(?:\s[^>]*)?>", line)
+            match = re.search(r"<(\w+)(?:\s[^>]*)?>", line)
             if in_math or (
                 dollars and (not match or dollars[0].start() < match.start())
             ):
@@ -545,8 +572,8 @@ def classify_lines(
                 if len(dollars) % 2:
                     in_math = not in_math
             elif match:
-                opener = "<" + match[1] if match[1] else "("
-                pos = match.start() if match[1] else match.end() - 1
+                opener = "<" + match[1]
+                pos = match.start()
                 remaining = "".join(lines[idx:])
                 try:
                     stop = match_paren(remaining, pos, opener)
@@ -702,6 +729,8 @@ def wrap_prose(
     indent_amount=0,
 ):
     """Wrap prose with sentence and punctuation rules for both commands."""
+    if filetype == "markdown":
+        text = protect_image_targets(text)
     output = []
     # Keep paragraph separators and the boundary newlines next to exclusions.
     paragraphs = PARAGRAPH_SPLIT.split(text)
@@ -747,7 +776,11 @@ def wrap_prose(
                 if indentation == 0:
                     indentation = indent_amount
         output.append(leading + "\n".join(lines) + trailing)
-    return "".join(output)
+    result = "".join(output)
+    return (
+        protect_image_targets(result, restore=True)
+        if filetype == "markdown" else result
+    )
 
 
 def _prepare(filename, cleanoo=False, i=-1):
@@ -907,6 +940,7 @@ def check_prose(
     character right after the punctuation to be a plain space or
     newline; no extra escape handling is needed for that case.
     """
+    content = protect_image_targets(content)
     issues = []
     line = line_start
     for paragraph in PARAGRAPH_SPLIT.split(content):
@@ -914,6 +948,7 @@ def check_prose(
             line += paragraph.count("\n")
             continue
         stripped = paragraph.strip("\n")
+        source = protect_image_targets(stripped, restore=True)
         leading_newlines = len(paragraph) - len(paragraph.lstrip("\n"))
         para_line = line + leading_newlines
         parts = SENTENCE_BOUNDARY.split(stripped)
@@ -978,25 +1013,33 @@ def check_prose(
                             if actual_end > wr_end and not (
                                 overflow_words and 0 < excess <= overflow_words
                             ):
-                                overflow = words[wr_end + 1]
+                                # A protected image target may span lines.
+                                # Report the physical words at the break so
+                                # the line-based fixer can find them.
+                                split_at = positions[wr_end + 1]
+                                overflow = source[
+                                    split_at:split_at + len(words[wr_end + 1])
+                                ].split("\n", 1)[0].rstrip("\r")
+                                preceding = source[
+                                    positions[wr_end]:
+                                    positions[wr_end] + len(words[wr_end])
+                                ].rsplit("\n", 1)[-1]
                                 rule = (
                                     "line too long"
                                     if line_length > wrapnumber
                                     else "trailing dependent phrase"
                                 )
-                                issue_line = para_line + stripped.count(
-                                    "\n", 0, positions[actual_end]
+                                issue_line = para_line + source.count(
+                                    "\n", 0, split_at
                                 )
-                                column = (
-                                    positions[wr_end + 1] - stripped.rfind(
-                                        "\n", 0, positions[wr_end + 1]
-                                    )
+                                column = split_at - source.rfind(
+                                    "\n", 0, split_at
                                 )
                                 issues.append(
                                     (
                                         issue_line,
                                         f"{rule}: wr would break after "
-                                        f"'{words[wr_end]}' (before "
+                                        f"'{preceding}' (before "
                                         f"'{overflow}'); move '{overflow}' "
                                         "onward to the next line, or shorten "
                                         f"this sentence [column {column}]",
@@ -1014,7 +1057,7 @@ def check_prose(
                 ) and (
                     k + 1 >= len(sentences) or sentences[k + 1].strip()
                 ):
-                    issue_line = para_line + stripped.count(
+                    issue_line = para_line + source.count(
                         "\n", 0, sentence_start + len(sentence) - 1
                     )
                     issues.append(
@@ -1026,7 +1069,7 @@ def check_prose(
                             "is an abbreviation, not a sentence end",
                         )
                     )
-        line += paragraph.count("\n")
+        line += source.count("\n") + len(paragraph) - len(stripped)
     return sorted(issues)
 
 
@@ -1446,6 +1489,8 @@ def apply_markdown_issue_fix(content, line_number, message):
             )
         column = re.search(r"\[column (\d+)\]$", message)
         split_at = int(column[1]) - 1 if column else position.start(1)
+        if not old_line.startswith(match.group(2), split_at):
+            split_at = position.start(1)
         first = old_line[:split_at].rstrip()
         second = old_line[split_at:].lstrip(" \t")
         reason = (
